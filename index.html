@@ -1,1 +1,287 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover">
+    <title>Hệ Thống Quản Lý Kho - Phân Quyền</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<div id="login-screen" class="login-wrapper" style="display: none;">
+    <div class="login-card" style="position: relative;">
+        <button class="btn-close" style="position: absolute; top: 16px; right: 16px;" onclick="hideLoginScreen()">✕</button>
+        <h2>Đăng Nhập Hệ Thống</h2>
+        <p class="text-muted" style="margin-bottom: 24px;">Vui lòng nhập tài khoản để tiếp tục</p>
+        
+        <div class="form-group">
+            <label>Tên đăng nhập</label>
+            <input type="text" id="login-username" placeholder="Nhập tài khoản...">
+        </div>
+        <div class="form-group" style="margin-top: 16px;">
+            <label>Mật khẩu</label>
+            <input type="password" id="login-password" placeholder="Nhập mật khẩu..." onkeypress="if(event.key === 'Enter') handleLogin()">
+        </div>
+
+        <button class="btn btn-primary w-100" style="padding: 10px; font-size: 15px; margin-top: 20px;" onclick="handleLogin()">Đăng nhập</button>
+    </div>
+</div>
+
+<div id="app-screen" class="app-wrapper" style="display: flex;">
+    <div class="top-toolbar no-print">
+        <div class="toolbar-left">
+            <h1 class="app-title">Kho Hàng</h1>
+            <div class="compact-stats-inline">
+                <span class="stat-text">Mặt hàng: <strong id="stat-total-items">0</strong></span>
+                <span class="stat-divider">|</span>
+                <span class="stat-text">Tồn kho: <strong id="stat-total-qty">0</strong></span>
+                <span class="stat-divider">|</span>
+                <span class="stat-text text-danger">Sắp hết: <strong id="stat-low-stock">0</strong></span>
+            </div>
+        </div>
+        
+        <div class="toolbar-right">
+            <div class="search-box">
+                <span class="search-icon">🔍</span>
+                <input type="text" id="search-input" placeholder="Tìm tên, thuộc tính..." oninput="renderTable()">
+            </div>
+            
+            <button class="btn btn-secondary" onclick="openModal('filterModal')">Lọc</button>
+            <button id="btn-add-product" class="btn btn-primary permission-check" data-permission="them_sp" onclick="openAddProductModal()">+ Thêm sản phẩm</button>
+            
+            <div class="dropdown-wrapper">
+                <button class="btn btn-secondary" onclick="toggleDropdown(event, 'main-menu')">⋮ Menu</button>
+                <div id="main-menu" class="dropdown-content dropdown-right">
+                    <a href="#" class="permission-check" data-permission="quan_tri" onclick="openUserManagerModal()">👥 Quản lý Nhân sự</a>
+                    <a href="#" class="permission-check" data-permission="thuoc_tinh" onclick="openAttributeManagerModal()">🎛️ Quản lý Thuộc tính</a>
+                    <a href="#" class="permission-check" data-permission="bao_cao" onclick="openHistoryModal()">🕒 Lịch sử Nhập/Xuất</a>
+                    <div class="dropdown-divider permission-check" data-permission="bao_cao"></div>
+                    <a href="#" class="permission-check" data-permission="bao_cao" onclick="document.getElementById('import-excel-input').click()">📥 Nhập từ Excel (CSV)</a>
+                    <a href="#" class="permission-check" data-permission="bao_cao" onclick="exportExcel()">📤 Tải xuống Excel (CSV)</a>
+                    <a href="#" class="permission-check" data-permission="bao_cao" onclick="openModal('exportPdfModal')">📄 Xuất báo cáo PDF</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" id="menu-btn-login" onclick="showLoginScreen()">🔑 Đăng nhập</a>
+                    <a href="#" id="menu-btn-logout" class="text-danger" style="display: none;" onclick="handleLogout()">🚪 Đăng xuất</a>
+                </div>
+            </div>
+            
+            <input type="file" id="import-excel-input" accept=".csv" style="display: none;" onchange="importExcel(event)">
+        </div>
+    </div>
+
+    <div class="toolbar-bottom no-print">
+        <div id="active-filter-tags" class="filter-tags-container"></div>
+        <button id="btn-clear-filters" class="btn-clear" style="display: none;" onclick="clearAllFilters()">✕ Xóa bộ lọc</button>
+    </div>
+
+    <div class="table-container">
+        <table>
+            <thead><tr id="table-header"></tr></thead>
+            <tbody id="table-body"></tbody>
+        </table>
+    </div>
+</div>
+
+<div id="floating-batch-bar" class="floating-bar no-print permission-check" data-permission="sua_xoa">
+    <span id="batch-count-text">Đã chọn 0 SP</span>
+    <div class="floating-actions">
+        <button class="btn btn-secondary btn-sm permission-check" data-permission="bao_cao" onclick="exportSelectedPDF()" style="border-color: rgba(255,255,255,0.3);">📄 In PDF</button>
+        <button class="btn btn-secondary btn-sm" onclick="openBatchEditModal()">Đổi thuộc tính</button>
+        <button class="btn btn-danger btn-sm" onclick="batchDelete()">Xóa</button>
+    </div>
+    <button class="btn-icon close-float" onclick="clearSelection()">✕</button>
+</div>
+
+<div id="exportPdfModal" class="modal no-print">
+    <div class="modal-content">
+        <div class="modal-header">
+            <span>Chọn Loại Báo Cáo Để In</span>
+            <button class="btn-close" onclick="closeModal('exportPdfModal')">✕</button>
+        </div>
+        <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px;">
+            <button class="btn btn-secondary" style="justify-content: flex-start; padding: 12px; font-size: 14px;" onclick="exportFullInventoryPDF()">📦 In Tồn kho tổng hợp</button>
+            <button class="btn btn-secondary" style="justify-content: flex-start; padding: 12px; font-size: 14px; color: var(--danger); border-color: #fecaca; background: #fef2f2;" onclick="exportLowStockPDF()">⚠️ In Hàng sắp hết (Tồn &lt; 10)</button>
+            <button class="btn btn-secondary" style="justify-content: flex-start; padding: 12px; font-size: 14px;" onclick="exportHistoryPDF()">🕒 In Lịch sử Nhập/Xuất (Tháng này)</button>
+        </div>
+    </div>
+</div>
+
+<div id="addProductModal" class="modal no-print"><div class="modal-content"><div class="modal-header"><span>Thêm Sản Phẩm</span><button class="btn-close" onclick="closeModal('addProductModal')">✕</button></div><div class="modal-body"><div class="form-group"><label>Tên sản phẩm *</label><input type="text" id="add-p-name"></div><div class="form-group"><label>Số lượng ban đầu</label><input type="number" id="add-p-qty" value="0" min="0"></div><div id="add-attributes-container"></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('addProductModal')">Hủy</button><button class="btn btn-primary" onclick="submitAddProduct()">Lưu</button></div></div></div>
+
+<div id="editProductModal" class="modal no-print"><div class="modal-content"><div class="modal-header"><span>Chỉnh Sửa Sản Phẩm</span><button class="btn-close" onclick="closeModal('editProductModal')">✕</button></div><div class="modal-body"><input type="hidden" id="edit-p-id"><div class="form-group"><label>Tên sản phẩm *</label><input type="text" id="edit-p-name"></div><div id="edit-attributes-container"></div><div class="mt-3 text-right permission-check" data-permission="sua_xoa"><button class="btn btn-danger-text btn-sm" onclick="handleDeleteProductFromEdit()">🗑️ Xóa sản phẩm này</button></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('editProductModal')">Hủy</button><button class="btn btn-primary" onclick="submitEditProduct()">Cập nhật</button></div></div></div>
+
+<div id="filterModal" class="modal no-print"><div class="modal-content"><div class="modal-header"><span>Lọc Nâng Cao</span><button class="btn-close" onclick="closeModal('filterModal')">✕</button></div><div class="modal-body"><div class="form-group"><label>Tình trạng Tồn</label><select id="modal-filter-stock" class="modal-select"><option value="all">Tất cả</option><option value="in_stock">Còn hàng (> 0)</option><option value="low_stock">Sắp hết (&lt; 10)</option><option value="out_of_stock">Hết hàng (0)</option></select></div><div id="modal-filters-container"></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="resetFilterModal()">Đặt lại</button><button class="btn btn-primary" onclick="applyFilters()">Áp dụng</button></div></div></div>
+
+<div id="historyModal" class="modal no-print">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <span>Lịch Sử Giao Dịch</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button class="btn btn-danger-text btn-sm permission-check" data-permission="quan_tri" onclick="clearHistoryLog()" style="font-size: 13px; padding: 4px 8px; border: 1px solid #fecaca; background: #fef2f2; border-radius: 6px;">🗑️ Dọn dẹp</button>
+                <input type="month" id="history-month-filter" class="modal-select modal-select-sm" onchange="renderHistory()">
+                <button class="btn-close" onclick="closeModal('historyModal')">✕</button>
+            </div>
+        </div>
+        <div class="history-summary">
+            <span>↓ Nhập: <strong id="hist-total-in" class="text-success">0</strong></span>
+            <span>↑ Xuất: <strong id="hist-total-out" class="text-danger">0</strong></span>
+        </div>
+        <div class="history-table-wrapper table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Sản phẩm</th>
+                        <th style="text-align: center; width: 100px;">Tổng Nhập</th>
+                        <th style="text-align: center; width: 100px;">Tổng Xuất</th>
+                    </tr>
+                </thead>
+                <tbody id="history-table-body">
+                    </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div id="batchEditModal" class="modal no-print"><div class="modal-content"><div class="modal-header"><span>Đổi Thuộc Tính Nhóm</span><button class="btn-close" onclick="closeModal('batchEditModal')">✕</button></div><div class="modal-body"><div class="form-group"><label>Thuộc tính</label><select id="batch-attr-select" class="modal-select" onchange="renderBatchOptionSelect()"></select></div><div class="form-group"><label>Giá trị mới</label><select id="batch-option-select" class="modal-select"></select></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('batchEditModal')">Hủy</button><button class="btn btn-primary" onclick="applyBatchEdit()">Lưu</button></div></div></div>
+
+<div id="attributeManagerModal" class="modal no-print"><div class="modal-content modal-lg split-view-modal"><div class="modal-header"><span>Quản Lý Thuộc Tính</span><button class="btn-close" onclick="closeAttributeManager()">✕</button></div><div class="split-view-container"><div class="split-left"><div class="split-list-header"><strong>Thuộc tính mẹ</strong><button class="btn-icon" onclick="addNewAttribute()">+</button></div><ul id="attr-master-list" class="ios-list"></ul></div><div class="split-right"><div id="attr-detail-empty" class="empty-state"><p>Chọn một thuộc tính ở cột bên trái</p></div><div id="attr-detail-view" style="display: none; flex-direction: column; height: 100%;"><div class="detail-header"><strong id="current-attr-name-display" style="font-size: 16px;"></strong><div class="dropdown-wrapper"><button class="btn-icon" onclick="toggleDropdown(event, 'attr-settings-menu')">⋮</button><div id="attr-settings-menu" class="dropdown-content dropdown-right"><a href="#" onclick="renameCurrentAttribute()">Đổi tên</a><a href="#" class="text-danger" onclick="deleteCurrentAttribute()">Xóa cột này</a></div></div></div><div class="detail-body"><div class="form-group mt-0"><label>Thuộc tính con (Options)</label><div class="input-group" style="display: flex; gap: 8px;"><input type="text" id="new-option-input" onkeypress="handleOptionKeyPress(event)" style="flex: 1;"><button class="btn btn-primary" onclick="addOptionToCurrentAttr()">Thêm</button></div><ul id="options-detail-list" class="ios-list" style="margin-top: 12px;"></ul></div></div></div></div></div></div></div>
+
+<div id="userManagerModal" class="modal no-print">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <span>Quản Lý Nhân Sự & Phân Quyền</span>
+            <button class="btn-close" onclick="closeModal('userManagerModal')">✕</button>
+        </div>
+        <div class="modal-body" style="display: flex; gap: 20px; flex-direction: column;">
+            
+            <div style="background: var(--bg-color); padding: 16px; border-radius: var(--radius-md); border: 1px solid var(--border);">
+                <h4 style="margin-bottom: 12px; font-size: 14px;">Tạo tài khoản mới</h4>
+                <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                    <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+                        <input type="text" id="new-username" placeholder="Tên đăng nhập *">
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 150px; margin-bottom: 0;">
+                        <input type="text" id="new-password" placeholder="Mật khẩu *">
+                    </div>
+                </div>
+                
+                <div style="margin-top: 16px;">
+                    <label style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 8px;">Giao các quyền cho tài khoản này (Tích chọn):</label>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px;">
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" class="role-checkbox-input" value="nhap_xuat" checked> Nhập / Xuất kho
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" class="role-checkbox-input" value="them_sp"> Thêm mặt hàng mới
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" class="role-checkbox-input" value="sua_xoa"> Sửa / Xóa mặt hàng
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" class="role-checkbox-input" value="thuoc_tinh"> Quản lý thuộc tính
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" class="role-checkbox-input" value="bao_cao"> Báo cáo & File Excel
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; color: var(--danger);">
+                            <input type="checkbox" class="role-checkbox-input" value="quan_tri"> Quản trị nhân sự
+                        </label>
+                    </div>
+                </div>
+                <button class="btn btn-primary" style="margin-top: 16px;" onclick="handleAddUser()">+ Tạo tài khoản</button>
+            </div>
+
+            <div class="table-container" style="max-height: 250px; overflow-y: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tài khoản</th>
+                            <th>Mật khẩu</th>
+                            <th>Quyền hạn</th>
+                        </tr>
+                    </thead>
+                    <tbody id="user-table-body">
+                        </tbody>
+                </table>
+            </div>
+            
+        </div>
+    </div>
+</div>
+
+<div id="editUserModal" class="modal no-print">
+    <div class="modal-content">
+        <div class="modal-header">
+            <span>Chỉnh Sửa Tài Khoản</span>
+            <button class="btn-close" onclick="closeModal('editUserModal')">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Tên đăng nhập (Bị khóa - Không thể đổi)</label>
+                <input type="text" id="edit-u-username" readonly style="background-color: #e5e7eb; cursor: not-allowed; color: #6b7280; font-weight: bold;">
+            </div>
+            <div class="form-group">
+                <label>Mật khẩu</label>
+                <input type="text" id="edit-u-password">
+            </div>
+            
+            <div style="margin-top: 16px;">
+                <label style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 8px;">Quyền hạn:</label>
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" class="edit-role-checkbox" value="nhap_xuat"> Nhập / Xuất kho
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" class="edit-role-checkbox" value="them_sp"> Thêm mặt hàng
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" class="edit-role-checkbox" value="sua_xoa"> Sửa / Xóa mặt hàng
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" class="edit-role-checkbox" value="thuoc_tinh"> Quản lý thuộc tính
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" class="edit-role-checkbox" value="bao_cao"> Báo cáo & Excel
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; color: var(--danger);">
+                        <input type="checkbox" class="edit-role-checkbox" value="quan_tri"> Quản trị nhân sự
+                    </label>
+                </div>
+            </div>
+
+            <div class="mt-3 text-right">
+                <button class="btn btn-danger-text btn-sm" id="btn-delete-user" onclick="handleDeleteUserFromEdit()">🗑️ Xóa tài khoản này</button>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('editUserModal')">Hủy</button>
+            <button class="btn btn-primary" onclick="submitEditUser()">Cập nhật</button>
+        </div>
+    </div>
+</div>
+
+<div id="action-sheet-overlay" class="action-sheet-overlay no-print" onclick="closeActionSheet(event)">
+    <div class="action-sheet" onclick="event.stopPropagation()">
+        <div class="action-sheet-header">
+            <button class="action-sheet-close" onclick="closeActionSheet()">✕</button>
+            <div id="action-sheet-title" class="action-sheet-title">Tên sản phẩm</div>
+            <div id="action-sheet-qty" class="action-sheet-qty">Tồn kho: 0</div>
+        </div>
+        <div class="action-sheet-body">
+            <input type="hidden" id="action-sheet-id">
+            <button class="btn-sheet btn-sheet-import permission-check" data-permission="nhap_xuat" onclick="actionSheetImport()">+ Nhập kho</button>
+            <button class="btn-sheet btn-sheet-export permission-check" data-permission="nhap_xuat" onclick="actionSheetExport()">- Xuất kho</button>
+            <button class="btn-sheet btn-sheet-edit permission-check" data-permission="sua_xoa" onclick="actionSheetEdit()">✏️ Chỉnh sửa</button>
+        </div>
+    </div>
+</div>
+
+<script src="db.js"></script>
+<script src="auth.js"></script>
+<script src="products.js"></script>
+<script src="reports.js"></script>
+
+</body>
+</html>
 
