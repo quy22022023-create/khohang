@@ -13,7 +13,10 @@ window.appState = {
     selectedProductIds: new Set(),
     userPermissions: [], 
     activeAttributeIndex: null,
-    currentUsername: null
+    currentUsername: null,
+    // BIẾN QUẢN LÝ REALTIME
+    realtimeChannel: null,
+    refreshTimeout: null
 };
 
 // =========================================================================
@@ -247,12 +250,69 @@ async function db_deleteCustomColumn(name) {
 }
 
 // =========================================================================
+// CHỨC NĂNG: XỬ LÝ REALTIME TỪ SUPABASE
+// =========================================================================
+window.debouncedRefreshData = function() {
+    // Chống "bão" sự kiện: Chờ 500ms sau khi ngừng nhận tín hiệu mới tải lại UI
+    if (window.appState.refreshTimeout) {
+        clearTimeout(window.appState.refreshTimeout);
+    }
+    window.appState.refreshTimeout = setTimeout(async () => {
+        console.log("🔄 Realtime: Có dữ liệu mới, đang tải lại giao diện...");
+        await refreshData();
+    }, 500);
+};
+
+function initRealtime() {
+    if (!window.appState.supabaseClient) return;
+
+    // Xóa kết nối cũ nếu có để tránh bị nhân đôi sự kiện
+    if (window.appState.realtimeChannel) {
+        window.appState.supabaseClient.removeChannel(window.appState.realtimeChannel);
+    }
+
+    // Đăng ký kênh lắng nghe
+    window.appState.realtimeChannel = window.appState.supabaseClient.channel('warehouse-realtime')
+        // Lắng nghe bảng Sản phẩm
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, (payload) => {
+            window.debouncedRefreshData();
+        })
+        // Lắng nghe bảng Lịch sử
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'logs' }, (payload) => {
+            // Nếu người dùng đang mở Modal lịch sử thì render lại ngay
+            if (document.getElementById('historyModal').classList.contains('show')) {
+                setTimeout(() => window.renderHistory(), 500);
+            }
+        })
+        // Lắng nghe bảng Thuộc tính
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'custom_columns' }, (payload) => {
+            setTimeout(async () => {
+                window.appState.customColumns = await db_getCustomColumns();
+                window.debouncedRefreshData();
+                // Nếu đang mở quản lý thuộc tính thì tải lại
+                if (document.getElementById('attributeManagerModal').classList.contains('show')) {
+                    renderAttributeMasterList();
+                    renderAttributeDetailView();
+                }
+            }, 500);
+        })
+        .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log("🟢 Realtime channel đã kết nối thành công!");
+            }
+        });
+}
+
+// =========================================================================
 // CHỨC NĂNG: RENDER VÀ KHỞI TẠO APP
 // =========================================================================
 async function initApp() {
     window.appState.customColumns = await db_getCustomColumns();
     document.getElementById('history-month-filter').value = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
     await refreshData();
+    
+    // Kích hoạt Realtime sau khi đã tải xong dữ liệu ban đầu
+    initRealtime();
 }
 
 async function refreshData() {
@@ -1098,7 +1158,7 @@ window.exportHistoryPDF = async function() {
             document.body.classList.remove('printing-history');
             restoreAfterPrint();
         }, 500);
-    }, 800); // Bản lịch sử phức tạp, cho chờ thêm chút để nét căng
+    }, 800); 
 };
 
 
@@ -1252,4 +1312,3 @@ window.handleDeleteUserFromEdit = async function() {
         window.renderUserTable();
     }
 };
-
