@@ -285,6 +285,15 @@
         }));
       },
 
+      async purgeInventoryHistory({ before = null, reason = "", confirmation = "", acknowledged = false } = {}) {
+        return rpc("kb2_purge_inventory_history_v1", authenticatedArgs({
+          p_before: before ? localDayBoundary(before, 1) : null,
+          p_reason: String(reason || "").trim(),
+          p_confirmation: String(confirmation || "").trim(),
+          p_acknowledged: Boolean(acknowledged),
+        }));
+      },
+
       exportBackup() { throw new Error("Bản Supabase không xuất toàn bộ database từ trình duyệt. Hãy dùng backup của Supabase."); },
       async importBackup() { throw new Error("Không hỗ trợ ghi đè database cloud từ file JSON trên trình duyệt."); },
       async resetDemo() { throw new Error("Không có chức năng đặt lại dữ liệu trên Supabase."); },

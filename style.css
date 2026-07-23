@@ -1817,3 +1817,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     width: 100%;
   }
 }
+
+/* Permanent history purge — 2.0.4 */
+.check-row-danger {
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  background: var(--danger-soft);
+  color: var(--text);
+}
+.check-row-danger input {
+  accent-color: var(--danger);
+}

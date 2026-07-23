@@ -1,12 +1,12 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.3
+ * Kho Khuôn Bế 2.0.4
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 5;
 
@@ -1997,6 +1997,46 @@ const localDataService = {
     return { deletedCount, before: before || null };
   },
 
+  async purgeInventoryHistory({ before = null, reason = "", confirmation = "", acknowledged = false } = {}) {
+    await delay(180);
+    const store = this.readStore();
+    const actor = assertStorePermission(store, PERMISSIONS.manageData);
+    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa vĩnh viễn lịch sử kho.");
+    if (!acknowledged) throw new Error("Bạn cần xác nhận đã hiểu dữ liệu không thể khôi phục.");
+    if (String(confirmation || "").trim().toUpperCase() !== "XOA VINH VIEN") throw new Error("Vui lòng nhập đúng XOA VINH VIEN để xác nhận.");
+    if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
+    const cutoff = before ? new Date(`${before}T23:59:59.999`) : null;
+    if (cutoff && Number.isNaN(cutoff.getTime())) throw new Error("Ngày xóa vĩnh viễn không hợp lệ.");
+
+    const selectedIds = new Set(store.transactions
+      .filter((transaction) => transaction.hiddenAt && (!cutoff || new Date(transaction.hiddenAt) <= cutoff))
+      .map((transaction) => transaction.id));
+    const safeIds = new Set([...selectedIds].filter((transactionId) => {
+      const transaction = store.transactions.find((item) => item.id === transactionId);
+      if (!transaction) return false;
+      const linkedIds = [transaction.reversalOf, transaction.reversalTransactionId].filter(Boolean);
+      return linkedIds.every((linkedId) => selectedIds.has(linkedId));
+    }));
+    const skippedLinkedCount = selectedIds.size - safeIds.size;
+    const purgedCount = safeIds.size;
+    store.transactions = store.transactions.filter((transaction) => !safeIds.has(transaction.id));
+    const now = new Date().toISOString();
+    store.accountAudit = Array.isArray(store.accountAudit) ? store.accountAudit : [];
+    store.accountAudit.unshift({
+      id: makeId("audit"),
+      action: "purge_inventory_history",
+      targetId: before || "all-hidden",
+      targetUsername: "Lịch sử kho đã ẩn",
+      actorId: actor.id,
+      actorName: actor.displayName,
+      actorRole: actor.role,
+      detail: `${String(reason || "").trim()} · xóa vĩnh viễn ${purgedCount} giao dịch · bỏ qua ${skippedLinkedCount} giao dịch liên kết`,
+      createdAt: now,
+    });
+    this.writeStore(store);
+    return { purgedCount, skippedLinkedCount, before: before || null };
+  },
+
   exportBackup() {
     const store = this.readStore();
     assertStorePermission(store, PERMISSIONS.manageData);
@@ -2704,7 +2744,10 @@ function renderDataPanel() {
           <div class="row-main"><div class="row-title">Tầng dữ liệu</div><div class="row-sub">${escapeHTML(dataService.label)} · RLS và RPC kiểm tra quyền phía server.</div></div><div class="row-actions">${icon("cloud")}</div>
         </div>
         ${normalizeRoleCode(appState.currentUser.role) === "superadmin" ? `<button class="list-row list-row-button" type="button" data-action="open-history-cleanup">
-          <div class="row-main"><div class="row-title" style="color:var(--danger)">Xóa lịch sử kho</div><div class="row-sub">Xóa khỏi màn hình theo ngày hoặc toàn bộ. Tồn kho hiện tại không thay đổi và thao tác vẫn được ghi nhật ký quản trị.</div></div><div class="row-actions" style="color:var(--danger)">${icon("trash")}</div>
+          <div class="row-main"><div class="row-title" style="color:var(--danger)">Ẩn lịch sử kho</div><div class="row-sub">Ẩn khỏi màn hình theo ngày hoặc toàn bộ. Tồn kho hiện tại không thay đổi và dữ liệu vẫn còn trong database.</div></div><div class="row-actions" style="color:var(--danger)">${icon("trash")}</div>
+        </button>
+        <button class="list-row list-row-button" type="button" data-action="open-history-purge">
+          <div class="row-main"><div class="row-title" style="color:var(--danger)">Xóa vĩnh viễn lịch sử đã ẩn</div><div class="row-sub">Xóa vật lý khỏi database các giao dịch đã ẩn. Không thể khôi phục và không làm thay đổi tồn kho hiện tại.</div></div><div class="row-actions" style="color:var(--danger)">${icon("warning")}</div>
         </button>` : ""}
       </div>
       <div class="helper-block">File <strong>database.sql</strong> là file cài đặt database cho ứng dụng này.</div>
@@ -2820,6 +2863,38 @@ function updateHistoryCleanupFields() {
   const deleteAll = $("#history-cleanup-scope", form)?.value === "all";
   const dateField = $("#history-cleanup-date-field", form);
   const dateInput = $("#history-cleanup-before", form);
+  if (dateField) dateField.hidden = deleteAll;
+  if (dateInput) dateInput.required = !deleteAll;
+}
+
+function openHistoryPurgeModal() {
+  if (normalizeRoleCode(appState.currentUser?.role) !== "superadmin" || !hasPermission(PERMISSIONS.manageData)) {
+    showToast("error", "Không có quyền", "Chỉ Super Admin được xóa vĩnh viễn lịch sử kho.");
+    return;
+  }
+  const today = formatISODate(new Date());
+  openModal({
+    name: "history-purge",
+    title: "Xóa vĩnh viễn lịch sử đã ẩn",
+    subtitle: "Chỉ xóa các giao dịch đã được ẩn trước đó; tồn kho hiện tại không thay đổi.",
+    body: `<form id="history-purge-form" class="field-grid" novalidate>
+      <div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không thể khôi phục</div><div class="notice-text">Dữ liệu giao dịch sẽ bị xóa vật lý khỏi database. Nhật ký quản trị chỉ giữ số lượng, lý do và người thực hiện.</div></div></div>
+      <label class="field" for="history-purge-scope"><span class="field-label">Phạm vi xóa</span><select id="history-purge-scope" name="scope" class="select"><option value="before">Đã ẩn đến hết một ngày</option><option value="all">Toàn bộ lịch sử đã ẩn</option></select></label>
+      <label class="field" id="history-purge-date-field" for="history-purge-before"><span class="field-label">Ngày đã ẩn đến hết</span><input id="history-purge-before" name="before" class="input" type="date" value="${escapeHTML(today)}"></label>
+      <label class="field" for="history-purge-reason"><span class="field-label">Lý do *</span><textarea id="history-purge-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Xóa dữ liệu thử nghiệm đã được kiểm tra"></textarea></label>
+      <label class="checkbox-row check-row-danger" for="history-purge-acknowledged"><input id="history-purge-acknowledged" name="acknowledged" type="checkbox" value="true" required><span>Tôi hiểu dữ liệu đã xóa sẽ không thể khôi phục.</span></label>
+      <label class="field" for="history-purge-confirmation"><span class="field-label">Nhập XOA VINH VIEN để xác nhận</span><input id="history-purge-confirmation" name="confirmation" class="input" type="text" autocapitalize="characters" autocomplete="off" required></label>
+    </form>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="history-purge-form">Xóa vĩnh viễn</button>`,
+  });
+}
+
+function updateHistoryPurgeFields() {
+  const form = $("#history-purge-form");
+  if (!form) return;
+  const deleteAll = $("#history-purge-scope", form)?.value === "all";
+  const dateField = $("#history-purge-date-field", form);
+  const dateInput = $("#history-purge-before", form);
   if (dateField) dateField.hidden = deleteAll;
   if (dateInput) dateInput.required = !deleteAll;
 }
@@ -3554,6 +3629,32 @@ async function handleHistoryCleanupSubmit(event, form) {
   });
 }
 
+async function handleHistoryPurgeSubmit(event, form) {
+  event.preventDefault();
+  const data = new FormData(form);
+  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
+  await withActionLock("purge-inventory-history", submitButton, async () => {
+    try {
+      const scope = data.get("scope") === "all" ? "all" : "before";
+      const before = scope === "all" ? null : String(data.get("before") || "");
+      if (scope === "before" && !before) throw new Error("Vui lòng chọn ngày kết thúc.");
+      const result = await dataService.purgeInventoryHistory({
+        before,
+        reason: data.get("reason"),
+        confirmation: data.get("confirmation"),
+        acknowledged: data.get("acknowledged") === "true",
+      });
+      closeModal(true);
+      renderApp();
+      const skipped = toNumber(result?.skippedLinkedCount, 0);
+      const suffix = skipped > 0 ? ` Bỏ qua ${skipped} giao dịch còn liên kết với lịch sử chưa ẩn.` : "";
+      showToast("success", "Đã xóa vĩnh viễn", `${toNumber(result?.purgedCount, 0)} giao dịch đã bị xóa khỏi database.${suffix}`);
+    } catch (error) {
+      showToast("error", "Không thể xóa vĩnh viễn", error.message);
+    }
+  });
+}
+
 async function handleAccountSubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
@@ -3679,6 +3780,7 @@ function bindEvents() {
   on(document, "click", "[data-action='edit-category']", (event, button) => openCategoryForm(button.dataset.categoryId));
   on(document, "click", "[data-action='open-delete-category']", (event, button) => openDeleteCategoryModal(button.dataset.categoryId));
   on(document, "click", "[data-action='open-history-cleanup']", openHistoryCleanupModal);
+  on(document, "click", "[data-action='open-history-purge']", openHistoryPurgeModal);
 
   on(document, "click", "[data-action='archive-product']", (event, button) => {
     const product = productById(button.dataset.productId);
@@ -3820,12 +3922,13 @@ function bindEvents() {
   });
 
   on(document, "change", "#history-cleanup-scope", updateHistoryCleanupFields);
+  on(document, "change", "#history-purge-scope", updateHistoryPurgeFields);
 
   document.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     const formId = form.getAttribute("id") || "";
-    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "account-form", "password-reset-form", "category-form", "delete-category-form"]);
+    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "history-purge-form", "account-form", "password-reset-form", "category-form", "delete-category-form"]);
     if (!handledForms.has(formId)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -3835,6 +3938,7 @@ function bindEvents() {
     if (formId === "transaction-form") handleTransactionSubmit(event, form);
     if (formId === "reverse-transaction-form") handleReverseTransactionSubmit(event, form);
     if (formId === "history-cleanup-form") handleHistoryCleanupSubmit(event, form);
+    if (formId === "history-purge-form") handleHistoryPurgeSubmit(event, form);
     if (formId === "account-form") handleAccountSubmit(event, form);
     if (formId === "password-reset-form") handlePasswordResetSubmit(event, form);
     if (formId === "category-form") handleCategorySubmit(event, form);
