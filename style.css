@@ -1797,3 +1797,19 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     width: min(100%, 460px);
   }
 }
+/* History cleanup actions — 2.0.2 */
+@media (max-width: 430px) {
+  .history-section-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-section-head .inline-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-section-head .btn {
+    width: 100%;
+  }
+}

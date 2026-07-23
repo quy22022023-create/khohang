@@ -1,12 +1,12 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.0
+ * Kho Khuôn Bế 2.0.2
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.1";
+const APP_VERSION = "2.0.2";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 5;
 
@@ -169,7 +169,7 @@ const PERMISSION_META = Object.freeze({
   [PERMISSIONS.manageAccounts]: ["Quản lý tài khoản", "Tạo, sửa vai trò và phạm vi nhóm vật liệu."],
   [PERMISSIONS.lockAccounts]: ["Khóa tài khoản", "Khóa hoặc ngừng sử dụng tài khoản theo cấp quản trị."],
   [PERMISSIONS.resetAccountPassword]: ["Đặt lại mật khẩu", "Super Admin đặt mật khẩu mới cho tài khoản; không bắt buộc đổi ở lần đăng nhập đầu."],
-  [PERMISSIONS.manageData]: ["Quản lý dữ liệu", "Sao lưu, phục hồi và đặt lại dữ liệu."],
+  [PERMISSIONS.manageData]: ["Quản lý dữ liệu", "Quản lý sao lưu và dọn lịch sử kho."],
 });
 
 const CATEGORY_SCOPED_PERMISSIONS = Object.freeze([
@@ -1143,6 +1143,9 @@ function migrateStoreData(data) {
     transaction.reversalTransactionId = transaction.reversalTransactionId || null;
     transaction.reversalOf = transaction.reversalOf || null;
     transaction.originalType = transaction.originalType || null;
+    transaction.hiddenAt = transaction.hiddenAt || null;
+    transaction.hiddenBy = transaction.hiddenBy || null;
+    transaction.hiddenReason = String(transaction.hiddenReason || "");
     if (!transaction.productSnapshot) {
       transaction.productSnapshot = createProductSnapshot(product, store.schema, transaction);
       transaction.productSnapshot.migrated = true;
@@ -1371,7 +1374,7 @@ const localDataService = {
     const store = this.readStore();
     const actor = storeActor(store);
     if (!actor) throw new Error("Phiên đăng nhập không hợp lệ.");
-    const visible = store.transactions.filter((transaction) => accountHasPermission(actor, PERMISSIONS.viewHistory, transaction.categoryId, store.schema));
+    const visible = store.transactions.filter((transaction) => !transaction.hiddenAt && accountHasPermission(actor, PERMISSIONS.viewHistory, transaction.categoryId, store.schema));
     return clone(visible.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(1, limit)));
   },
 
@@ -1405,6 +1408,7 @@ const localDataService = {
       product = {
         ...store.products[index],
         ...normalized,
+        attributes: { ...(store.products[index].attributes || {}), ...(normalized.attributes || {}) },
         id: store.products[index].id,
         quantity: store.products[index].quantity,
         archived: false,
@@ -1785,26 +1789,41 @@ const localDataService = {
     if (duplicateName) throw new Error("Tên nhóm đã tồn tại.");
 
     if (existingCategory) {
-      const categoryProducts = store.products.filter((product) => product.categoryId === payload.id && !product.archived);
+      const categoryAllProducts = store.products.filter((product) => product.categoryId === payload.id);
+      const categoryProducts = categoryAllProducts.filter((product) => !product.archived);
       const hasActiveProducts = categoryProducts.length > 0;
       if (payload.active === false && hasActiveProducts) {
         throw new Error("Nhóm vẫn còn vật liệu đang hoạt động nên chưa thể ngừng sử dụng.");
       }
-      if (hasActiveProducts) {
-        const oldAttributesById = new Map(existingCategory.attributes.map((attribute) => [attribute.id, attribute]));
-        const newAttributesById = new Map(attributes.map((attribute) => [attribute.id, attribute]));
-        for (const [attributeId, oldAttribute] of oldAttributesById) {
-          const nextAttribute = newAttributesById.get(attributeId);
-          if (!nextAttribute) throw new Error(`Không thể xóa thuộc tính “${oldAttribute.name}” khi nhóm đã có vật liệu.`);
-          if (nextAttribute.type !== oldAttribute.type) throw new Error(`Không thể đổi kiểu dữ liệu của thuộc tính “${oldAttribute.name}” khi đã có vật liệu.`);
-          if (!oldAttribute.required && nextAttribute.required) {
-            const hasMissingValue = categoryProducts.some((product) => {
-              const value = product.attributes?.[attributeId];
-              return value === "" || value === null || value === undefined;
-            });
-            if (hasMissingValue) throw new Error(`Chưa thể bắt buộc thuộc tính “${oldAttribute.name}” vì dữ liệu cũ còn thiếu giá trị.`);
+      const oldAttributesById = new Map(existingCategory.attributes.map((attribute) => [attribute.id, attribute]));
+      const newAttributesById = new Map(attributes.map((attribute) => [attribute.id, attribute]));
+      for (const [attributeId, oldAttribute] of oldAttributesById) {
+        const nextAttribute = newAttributesById.get(attributeId);
+        const productsUsingAttribute = categoryAllProducts.filter((product) => {
+          const value = product.attributes?.[attributeId];
+          return value !== "" && value !== null && value !== undefined;
+        });
+        if (!nextAttribute) {
+          if (oldAttribute.identity && hasActiveProducts) {
+            throw new Error(`Không thể xóa thuộc tính nhận diện “${oldAttribute.name}” khi nhóm đang có vật liệu hoạt động.`);
           }
+          if (productsUsingAttribute.length) {
+            attributes.push({ ...oldAttribute, active: false, required: false, identity: false, list: false, sortOrder: attributes.length });
+          }
+          continue;
         }
+        if (productsUsingAttribute.length && nextAttribute.type !== oldAttribute.type) {
+          throw new Error(`Không thể đổi kiểu dữ liệu của thuộc tính “${oldAttribute.name}” khi đã có dữ liệu.`);
+        }
+        if (hasActiveProducts && !oldAttribute.required && nextAttribute.required) {
+          const hasMissingValue = categoryProducts.some((product) => {
+            const value = product.attributes?.[attributeId];
+            return value === "" || value === null || value === undefined;
+          });
+          if (hasMissingValue) throw new Error(`Chưa thể bắt buộc thuộc tính “${oldAttribute.name}” vì dữ liệu cũ còn thiếu giá trị.`);
+        }
+      }
+      if (hasActiveProducts) {
         const unitsInUse = new Set(categoryProducts.map((product) => product.unit));
         for (const usedUnit of unitsInUse) {
           if (!units.includes(usedUnit)) throw new Error(`Đơn vị “${usedUnit}” đang được vật liệu sử dụng nên chưa thể xóa.`);
@@ -1881,6 +1900,44 @@ const localDataService = {
     store.schema.version = toNumber(store.schema.version, 1) + 1;
     this.writeStore(store);
     return true;
+  },
+
+  async deleteInventoryHistory({ before = null, reason = "", confirmation = "" } = {}) {
+    await delay(180);
+    const store = this.readStore();
+    const actor = assertStorePermission(store, PERMISSIONS.manageData);
+    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa lịch sử kho.");
+    if (String(confirmation || "").trim().toUpperCase() !== "XOA LICH SU") throw new Error("Vui lòng nhập đúng XOA LICH SU để xác nhận.");
+    if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
+    const cutoff = before ? new Date(`${before}T23:59:59.999`) : null;
+    if (cutoff && Number.isNaN(cutoff.getTime())) throw new Error("Ngày xóa lịch sử không hợp lệ.");
+    const now = new Date().toISOString();
+    let deletedCount = 0;
+    store.transactions = store.transactions.map((transaction) => {
+      const shouldHide = !transaction.hiddenAt && (!cutoff || new Date(transaction.createdAt) <= cutoff);
+      if (!shouldHide) return transaction;
+      deletedCount += 1;
+      return {
+        ...transaction,
+        hiddenAt: now,
+        hiddenBy: actor.id,
+        hiddenReason: String(reason || "").trim(),
+      };
+    });
+    store.accountAudit = Array.isArray(store.accountAudit) ? store.accountAudit : [];
+    store.accountAudit.unshift({
+      id: makeId("audit"),
+      action: "hide_inventory_history",
+      targetId: before || "all",
+      targetUsername: "Lịch sử kho",
+      actorId: actor.id,
+      actorName: actor.displayName,
+      actorRole: actor.role,
+      detail: `${String(reason || "").trim()} · ${deletedCount} giao dịch`,
+      createdAt: now,
+    });
+    this.writeStore(store);
+    return { deletedCount, before: before || null };
   },
 
   exportBackup() {
@@ -2427,9 +2484,12 @@ function renderHistoryScreen() {
       </div>
     </div>
 
-    <div class="section-head">
+    <div class="section-head history-section-head">
       <div class="section-copy"><h2 class="section-title">Các thay đổi trong kho</h2><p id="history-result-count" class="section-subtitle">${transactions.length} giao dịch</p></div>
-      <button class="btn btn-compact btn-secondary" type="button" data-action="clear-history-filters">Xóa lọc</button>
+      <div class="inline-actions">
+        <button class="btn btn-compact btn-secondary" type="button" data-action="clear-history-filters">Xóa lọc</button>
+        ${normalizeRoleCode(appState.currentUser.role) === "superadmin" && hasPermission(PERMISSIONS.manageData) ? `<button class="btn btn-compact btn-danger-soft" type="button" data-action="open-history-cleanup">${icon("trash")} Xóa lịch sử</button>` : ""}
+      </div>
     </div>
 
     <div id="history-list" class="card list-card">
@@ -2586,6 +2646,9 @@ function renderDataPanel() {
         <div class="list-row">
           <div class="row-main"><div class="row-title">Tầng dữ liệu</div><div class="row-sub">${escapeHTML(dataService.label)} · RLS và RPC kiểm tra quyền phía server.</div></div><div class="row-actions">${icon("cloud")}</div>
         </div>
+        ${normalizeRoleCode(appState.currentUser.role) === "superadmin" ? `<button class="list-row list-row-button" type="button" data-action="open-history-cleanup">
+          <div class="row-main"><div class="row-title" style="color:var(--danger)">Xóa lịch sử kho</div><div class="row-sub">Xóa khỏi màn hình theo ngày hoặc toàn bộ. Tồn kho hiện tại không thay đổi và thao tác vẫn được ghi nhật ký quản trị.</div></div><div class="row-actions" style="color:var(--danger)">${icon("trash")}</div>
+        </button>` : ""}
       </div>
       <div class="helper-block">File <strong>database.sql</strong> là file cài đặt database cho ứng dụng này.</div>
     </div>`;
@@ -2672,6 +2735,37 @@ function openConfirm({ title, message, confirmLabel = "Xác nhận", danger = fa
 }
 
 const confirmCallbacks = new Map();
+
+function openHistoryCleanupModal() {
+  if (normalizeRoleCode(appState.currentUser?.role) !== "superadmin" || !hasPermission(PERMISSIONS.manageData)) {
+    showToast("error", "Không có quyền", "Chỉ Super Admin được xóa lịch sử kho.");
+    return;
+  }
+  const today = formatISODate(new Date());
+  openModal({
+    name: "history-cleanup",
+    title: "Xóa lịch sử kho",
+    subtitle: "Lịch sử sẽ biến mất khỏi ứng dụng; tồn kho hiện tại và nhật ký quản trị vẫn được giữ.",
+    body: `<form id="history-cleanup-form" class="field-grid" novalidate>
+      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không dùng để sửa tồn kho</div><div class="notice-text">Giao dịch sai nên dùng Đảo giao dịch. Xóa lịch sử chỉ dùng để dọn dữ liệu hiển thị.</div></div></div>
+      <label class="field" for="history-cleanup-scope"><span class="field-label">Phạm vi xóa</span><select id="history-cleanup-scope" name="scope" class="select"><option value="before">Đến hết một ngày</option><option value="all">Toàn bộ lịch sử</option></select></label>
+      <label class="field" id="history-cleanup-date-field" for="history-cleanup-before"><span class="field-label">Xóa đến hết ngày</span><input id="history-cleanup-before" name="before" class="input" type="date" value="${escapeHTML(today)}"></label>
+      <label class="field" for="history-cleanup-reason"><span class="field-label">Lý do</span><textarea id="history-cleanup-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Dọn dữ liệu thử nghiệm trước khi sử dụng chính thức"></textarea></label>
+      <label class="field" for="history-cleanup-confirmation"><span class="field-label">Nhập XOA LICH SU để xác nhận</span><input id="history-cleanup-confirmation" name="confirmation" class="input" type="text" autocapitalize="characters" autocomplete="off" required></label>
+    </form>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="history-cleanup-form">Xóa lịch sử</button>`,
+  });
+}
+
+function updateHistoryCleanupFields() {
+  const form = $("#history-cleanup-form");
+  if (!form) return;
+  const deleteAll = $("#history-cleanup-scope", form)?.value === "all";
+  const dateField = $("#history-cleanup-date-field", form);
+  const dateInput = $("#history-cleanup-before", form);
+  if (dateField) dateField.hidden = deleteAll;
+  if (dateInput) dateInput.required = !deleteAll;
+}
 
 function openProfileModal() {
   const permissions = rolePermissions(appState.currentUser.role);
@@ -3049,6 +3143,7 @@ function categoryFormBody(category = null, draft = null) {
   };
   const attributes = model.attributes?.length
     ? model.attributes
+      .filter((attribute) => attribute.active !== false)
       .map((attribute, index) => ({ ...attribute, sortOrder: Number.isFinite(Number(attribute.sortOrder)) ? Number(attribute.sortOrder) : index }))
       .sort((left, right) => left.sortOrder - right.sortOrder)
     : [];
@@ -3354,6 +3449,30 @@ async function handleReverseTransactionSubmit(event, form) {
   });
 }
 
+async function handleHistoryCleanupSubmit(event, form) {
+  event.preventDefault();
+  const data = new FormData(form);
+  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
+  await withActionLock("delete-inventory-history", submitButton, async () => {
+    try {
+      const scope = data.get("scope") === "all" ? "all" : "before";
+      const before = scope === "all" ? null : String(data.get("before") || "");
+      if (scope === "before" && !before) throw new Error("Vui lòng chọn ngày kết thúc.");
+      const result = await dataService.deleteInventoryHistory({
+        before,
+        reason: data.get("reason"),
+        confirmation: data.get("confirmation"),
+      });
+      await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50, useFilters: appState.screen === SCREENS.history });
+      closeModal(true);
+      renderApp();
+      showToast("success", "Đã xóa lịch sử", `${toNumber(result?.deletedCount, 0)} giao dịch đã được xóa khỏi ứng dụng.`);
+    } catch (error) {
+      showToast("error", "Không thể xóa lịch sử", error.message);
+    }
+  });
+}
+
 async function handleAccountSubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
@@ -3451,6 +3570,7 @@ function bindEvents() {
   on(document, "click", "[data-action='open-password-reset']", (event, button) => openPasswordResetForm(button.dataset.accountId));
   on(document, "click", "[data-action='add-category']", () => openCategoryForm());
   on(document, "click", "[data-action='edit-category']", (event, button) => openCategoryForm(button.dataset.categoryId));
+  on(document, "click", "[data-action='open-history-cleanup']", openHistoryCleanupModal);
 
   on(document, "click", "[data-action='archive-product']", (event, button) => {
     const product = productById(button.dataset.productId);
@@ -3526,8 +3646,13 @@ function bindEvents() {
     const index = rows.indexOf(button.closest("[data-attribute-row]"));
     if (index < 0) return;
     if (appState.ui.categoryDraft.attributes.length <= 1) return showToast("error", "Nhóm cần ít nhất một thuộc tính");
+    const attribute = appState.ui.categoryDraft.attributes[index];
+    if (attribute?.id) {
+      const accepted = window.confirm(`Xóa thuộc tính “${attribute.name || `Thuộc tính ${index + 1}`}”?\n\n• Chưa có dữ liệu: xóa hoàn toàn.\n• Đã có dữ liệu và không phải nhận diện: ngừng sử dụng, dữ liệu cũ vẫn được giữ.\n• Thuộc tính nhận diện đang dùng: hệ thống sẽ chặn để tránh trùng vật liệu.`);
+      if (!accepted) return;
+    }
     appState.ui.categoryDraft.attributes.splice(index, 1);
-    appState.ui.categoryDraft.attributes.forEach((attribute, attributeIndex) => { attribute.sortOrder = attributeIndex; });
+    appState.ui.categoryDraft.attributes.forEach((item, attributeIndex) => { item.sortOrder = attributeIndex; });
     rerenderCategoryAttributes();
   });
 
@@ -3586,11 +3711,13 @@ function bindEvents() {
     });
   });
 
+  on(document, "change", "#history-cleanup-scope", updateHistoryCleanupFields);
+
   document.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     const formId = form.getAttribute("id") || "";
-    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "account-form", "password-reset-form", "category-form"]);
+    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "account-form", "password-reset-form", "category-form"]);
     if (!handledForms.has(formId)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -3599,6 +3726,7 @@ function bindEvents() {
     if (formId === "product-form") handleProductSubmit(event, form);
     if (formId === "transaction-form") handleTransactionSubmit(event, form);
     if (formId === "reverse-transaction-form") handleReverseTransactionSubmit(event, form);
+    if (formId === "history-cleanup-form") handleHistoryCleanupSubmit(event, form);
     if (formId === "account-form") handleAccountSubmit(event, form);
     if (formId === "password-reset-form") handlePasswordResetSubmit(event, form);
     if (formId === "category-form") handleCategorySubmit(event, form);
