@@ -1,13 +1,9 @@
 name: Keep Supabase active
 
 on:
-  schedule:
-    # Khoảng 09:17, 17:17 và 01:17 hôm sau theo giờ Việt Nam
-    - cron: "17 2,10,18 * * *"
   workflow_dispatch:
-
-permissions:
-  contents: read
+  schedule:
+    - cron: "17 2,10,18 * * *"
 
 jobs:
   ping-supabase:
@@ -15,29 +11,16 @@ jobs:
     timeout-minutes: 2
 
     steps:
-      - name: Ping Kho Khuon Be database
+      - name: Ping Supabase
         shell: bash
         run: |
-          set -euo pipefail
+          curl --fail --silent --show-error \
+            --request POST \
+            "https://khoztrzdfadovsgmfggi.supabase.co/rest/v1/rpc/kb2_get_initialization_status_v1" \
+            --header "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtob3p0cnpkZmFkb3ZzZ21mZ2dpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4NDU0MTgsImV4cCI6MjA5NTQyMTQxOH0.72V5ZbvzHOk6k5XViVaEEB3Aoz9AjyLt3AGx5L3gqCY" \
+            --header "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtob3p0cnpkZmFkb3ZzZ21mZ2dpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4NDU0MTgsImV4cCI6MjA5NTQyMTQxOH0.72V5ZbvzHOk6k5XViVaEEB3Aoz9AjyLt3AGx5L3gqCY" \
+            --header "Content-Type: application/json" \
+            --data "{}"
 
-          SUPABASE_URL="https://khoztrzdfadovsgmfggi.supabase.co"
-          SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtob3p0cnpkZmFkb3ZzZ21mZ2dpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4NDU0MTgsImV4cCI6MjA5NTQyMTQxOH0.72V5ZbvzHOk6k5XViVaEEB3Aoz9AjyLt3AGx5L3gqCY"
-
-          response="$(
-            curl --fail --silent --show-error \
-              --request POST \
-              "${SUPABASE_URL}/rest/v1/rpc/kb2_get_initialization_status_v1" \
-              --header "apikey: ${SUPABASE_ANON_KEY}" \
-              --header "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
-              --header "Content-Type: application/json" \
-              --data '{}'
-          )"
-
-          echo "Supabase response: ${response}"
-
-          if ! echo "${response}" | grep -q '"initialized"'; then
-            echo "ERROR: Phan hoi khong dung dinh dang mong doi."
-            exit 1
-          fi
-
-          echo "OK: Supabase dang hoat dong."
+          echo ""
+          echo "Supabase dang hoat dong."
