@@ -6,7 +6,7 @@
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.0.1";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 5;
 
@@ -688,8 +688,14 @@ function applyTheme(theme) {
   $("meta[name='theme-color']")?.setAttribute("content", themeColor);
 }
 
+function normalizeRoleCode(role) {
+  const normalized = String(role || "").trim().toLowerCase().replace(/\s+/g, "_");
+  if (["super_admin", "super-admin", "spadmin"].includes(normalized)) return "superadmin";
+  return normalized;
+}
+
 function rolePermissions(role) {
-  return ROLE_PRESETS[role] || [];
+  return ROLE_PRESETS[normalizeRoleCode(role)] || [];
 }
 
 function hasBasePermission(account, permission) {
@@ -746,7 +752,9 @@ function validateCategoryPermissionDependencies(categoryPermissions, schema) {
 }
 
 function accountHasPermission(account, permission, categoryId = null, schema = appState.cache.schema) {
-  if (!account || accountStatus(account) !== ACCOUNT_STATUSES.active || !hasBasePermission(account, permission)) return false;
+  if (!account || accountStatus(account) !== ACCOUNT_STATUSES.active) return false;
+  if (normalizeRoleCode(account.role) === "superadmin") return true;
+  if (!hasBasePermission(account, permission)) return false;
   if (!isCategoryScopedPermission(permission)) return true;
   if (account.scopeMode !== "custom") return true;
   const categoryPermissions = normalizeCategoryPermissions(account, schema);
@@ -791,11 +799,11 @@ function accountStatusLabel(account) {
 }
 
 function roleLevel(role) {
-  return ROLE_LEVELS[role] || 0;
+  return ROLE_LEVELS[normalizeRoleCode(role)] || 0;
 }
 
 function canAccountManageTarget(actor, targetAccount = null) {
-  if (!actor || actor.role !== "superadmin" || !accountHasPermission(actor, PERMISSIONS.manageAccounts, null, appState.cache.schema)) return false;
+  if (!actor || normalizeRoleCode(actor.role) !== "superadmin" || !accountHasPermission(actor, PERMISSIONS.manageAccounts, null, appState.cache.schema)) return false;
   if (!targetAccount) return true;
   return true;
 }
@@ -805,7 +813,7 @@ function canManageAccount(targetAccount = null) {
 }
 
 function assignableRolesForAccount(actor) {
-  return actor?.role === "superadmin" ? Object.keys(ROLE_PRESETS) : [];
+  return normalizeRoleCode(actor?.role) === "superadmin" ? Object.keys(ROLE_PRESETS) : [];
 }
 
 function assignableRoles(targetAccount = null) {
@@ -813,8 +821,19 @@ function assignableRoles(targetAccount = null) {
 }
 
 function setAuthenticatedAccount(account) {
-  appState.currentUser = account ? clone(account) : null;
-  appState.auth.status = account ? "signedIn" : "signedOut";
+  if (!account) {
+    appState.currentUser = null;
+    appState.auth.status = "signedOut";
+    return;
+  }
+  const normalizedAccount = clone(account);
+  normalizedAccount.role = normalizeRoleCode(normalizedAccount.role);
+  if (normalizedAccount.role === "superadmin") {
+    normalizedAccount.scopeMode = "all";
+    normalizedAccount.categoryPermissions = {};
+  }
+  appState.currentUser = normalizedAccount;
+  appState.auth.status = "signedIn";
 }
 
 function syncCurrentUserFromAccounts() {
@@ -829,7 +848,7 @@ function syncCurrentUserFromAccounts() {
 }
 
 function roleLabel(role) {
-  return ROLE_LABELS[role] || role;
+  return ROLE_LABELS[normalizeRoleCode(role)] || role;
 }
 
 function categoryById(categoryId) {
@@ -1170,8 +1189,8 @@ function migrateStoreData(data) {
     }
   }
 
-  if (!store.accounts.some((account) => account.role === 'superadmin')) {
-    store.accounts.unshift(clone(DEFAULT_ACCOUNTS.find((account) => account.role === 'superadmin')));
+  if (!store.accounts.some((account) => normalizeRoleCode(account.role) === 'superadmin')) {
+    store.accounts.unshift(clone(DEFAULT_ACCOUNTS.find((account) => normalizeRoleCode(account.role) === 'superadmin')));
     changed = true;
   }
 
@@ -1608,7 +1627,7 @@ const localDataService = {
     await delay(160);
     const store = this.readStore();
     const actor = assertStorePermission(store, PERMISSIONS.manageAccounts);
-    if (actor.role !== "superadmin") throw new Error("Chỉ Super Admin được quản lý tài khoản.");
+    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được quản lý tài khoản.");
     const existing = payload.id ? store.accounts.find((item) => item.id === payload.id) : null;
     if (payload.id && !existing) throw new Error("Không tìm thấy tài khoản cần sửa.");
     if (!canAccountManageTarget(actor, existing)) throw new Error("Bạn không có quyền quản lý tài khoản này.");
@@ -1625,16 +1644,16 @@ const localDataService = {
     const duplicate = store.accounts.find((account) => account.id !== payload.id && normalizeText(account.username).replace(/\s+/g, "") === username);
     if (duplicate) throw new Error("Tên đăng nhập đã tồn tại.");
 
-    if (existing?.role === "superadmin" && role !== "superadmin" && accountStatus(existing) === ACCOUNT_STATUSES.active) {
-      const remaining = store.accounts.filter((account) => account.id !== existing.id && account.role === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
+    if (normalizeRoleCode(existing?.role) === "superadmin" && normalizeRoleCode(role) !== "superadmin" && accountStatus(existing) === ACCOUNT_STATUSES.active) {
+      const remaining = store.accounts.filter((account) => account.id !== existing.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
       if (!remaining.length) throw new Error("Phải giữ ít nhất một Super Admin đang hoạt động.");
     }
 
     if (existing && status !== accountStatus(existing)) {
       if (!accountHasPermission(actor, PERMISSIONS.lockAccounts, null, store.schema)) throw new Error("Bạn không có quyền thay đổi trạng thái tài khoản.");
       if (existing.id === actor.id && status !== ACCOUNT_STATUSES.active) throw new Error("Không thể tự khóa hoặc ngừng tài khoản đang đăng nhập.");
-      if (existing.role === "superadmin" && accountStatus(existing) === ACCOUNT_STATUSES.active && status !== ACCOUNT_STATUSES.active) {
-        const remaining = store.accounts.filter((account) => account.id !== existing.id && account.role === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
+      if (normalizeRoleCode(existing.role) === "superadmin" && accountStatus(existing) === ACCOUNT_STATUSES.active && status !== ACCOUNT_STATUSES.active) {
+        const remaining = store.accounts.filter((account) => account.id !== existing.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
         if (!remaining.length) throw new Error("Phải giữ ít nhất một Super Admin đang hoạt động.");
       }
     }
@@ -1677,7 +1696,7 @@ const localDataService = {
     await delay(160);
     const store = this.readStore();
     const actor = assertStorePermission(store, PERMISSIONS.resetAccountPassword);
-    if (actor.role !== "superadmin") throw new Error("Chỉ Super Admin được đặt lại mật khẩu.");
+    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được đặt lại mật khẩu.");
     const index = store.accounts.findIndex((account) => account.id === accountId);
     if (index < 0) throw new Error("Không tìm thấy tài khoản.");
     const target = store.accounts[index];
@@ -1698,8 +1717,8 @@ const localDataService = {
     if (!target) throw new Error("Không tìm thấy tài khoản.");
     if (!canAccountManageTarget(actor, target)) throw new Error("Bạn không có quyền thao tác với tài khoản này.");
     if (target.id === actor.id) throw new Error("Không thể tự ngừng tài khoản đang đăng nhập.");
-    if (target.role === "superadmin" && accountStatus(target) === ACCOUNT_STATUSES.active) {
-      const remaining = store.accounts.filter((account) => account.id !== target.id && account.role === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
+    if (normalizeRoleCode(target.role) === "superadmin" && accountStatus(target) === ACCOUNT_STATUSES.active) {
+      const remaining = store.accounts.filter((account) => account.id !== target.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
       if (!remaining.length) throw new Error("Phải giữ ít nhất một Super Admin đang hoạt động.");
     }
     const index = store.accounts.findIndex((account) => account.id === accountId);
@@ -2396,12 +2415,12 @@ function renderHistoryScreen() {
         <span class="search-icon">${icon("search")}</span>
         <input id="history-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Tìm vật liệu, ghi chú, người tạo" value="${escapeHTML(appState.filters.history.search)}">
       </label>
-      <div class="filter-grid">
+      <div class="filter-grid history-filter-grid">
         <label class="field" for="history-type"><span class="field-label">Loại giao dịch</span><select id="history-type" class="select">
           <option value="all">Tất cả</option>
           ${Object.entries(TRANSACTION_LABELS).map(([value, label]) => `<option value="${value}" ${value === appState.filters.history.type ? "selected" : ""}>${escapeHTML(label)}</option>`).join("")}
         </select></label>
-        <div class="field-grid two">
+        <div class="field-grid two history-date-grid">
           <label class="field" for="history-from"><span class="field-label">Từ ngày</span><input id="history-from" class="input" type="date" value="${escapeHTML(appState.filters.history.from)}"></label>
           <label class="field" for="history-to"><span class="field-label">Đến ngày</span><input id="history-to" class="input" type="date" value="${escapeHTML(appState.filters.history.to)}"></label>
         </div>
@@ -3683,6 +3702,29 @@ async function refreshAfterDataReplacement() {
   renderApp();
 }
 
+function bindZoomPrevention() {
+  let lastTouchEnd = 0;
+
+  ["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
+    document.addEventListener(eventName, (event) => event.preventDefault(), { passive: false });
+  });
+
+  document.addEventListener("touchmove", (event) => {
+    if (event.touches?.length > 1) event.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener("touchend", (event) => {
+    const now = Date.now();
+    if (now - lastTouchEnd <= 300) event.preventDefault();
+    lastTouchEnd = now;
+  }, { passive: false });
+
+  document.addEventListener("dblclick", (event) => event.preventDefault(), { passive: false });
+  document.addEventListener("wheel", (event) => {
+    if (event.ctrlKey || event.metaKey) event.preventDefault();
+  }, { passive: false });
+}
+
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
   try {
@@ -3695,6 +3737,7 @@ async function registerServiceWorker() {
 
 async function init() {
   applyTheme(appState.theme);
+  bindZoomPrevention();
   bindEvents();
   renderApp();
   await checkInitializationStatus();

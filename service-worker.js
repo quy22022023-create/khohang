@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.0.1";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const APP_SHELL = [
   "./",
