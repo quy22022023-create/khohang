@@ -268,6 +268,15 @@
         return true;
       },
 
+      async deleteCategory({ categoryId, expectedRevision = null, reason = "", confirmation = "" } = {}) {
+        return rpc("kb2_delete_category_v1", authenticatedArgs({
+          p_category_code: categoryId,
+          p_expected_revision: expectedRevision,
+          p_reason: String(reason || "").trim(),
+          p_confirmation: String(confirmation || "").trim(),
+        }));
+      },
+
       async deleteInventoryHistory({ before = null, reason = "", confirmation = "" } = {}) {
         return rpc("kb2_delete_inventory_history_v1", authenticatedArgs({
           p_before: before ? localDayBoundary(before, 1) : null,

@@ -1,12 +1,12 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.2
+ * Kho Khuôn Bế 2.0.3
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.2";
+const APP_VERSION = "2.0.3";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 5;
 
@@ -1902,6 +1902,63 @@ const localDataService = {
     return true;
   },
 
+  async deleteCategory({ categoryId, expectedRevision = null, reason = "", confirmation = "" } = {}) {
+    await delay(180);
+    const store = this.readStore();
+    const actor = assertStorePermission(store, PERMISSIONS.manageSchema);
+    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa hoặc ngừng nhóm.");
+    if (String(confirmation || "").trim().toUpperCase() !== "XOA NHOM") throw new Error("Vui lòng nhập đúng XOA NHOM để xác nhận.");
+    if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
+
+    const index = store.schema.categories.findIndex((category) => category.id === categoryId);
+    if (index < 0) throw new Error("Không tìm thấy nhóm.");
+    const category = store.schema.categories[index];
+    const revision = toOptionalNumber(category.revision);
+    if (expectedRevision !== null && revision !== null && Number(expectedRevision) !== revision) {
+      throw new Error("Danh mục đã được cập nhật ở nơi khác. Hãy tải lại trước khi thao tác.");
+    }
+    if (category.active !== false) {
+      const otherActiveCategories = store.schema.categories.filter((item) => item.id !== categoryId && item.active !== false);
+      if (!otherActiveCategories.length) throw new Error("Phải giữ ít nhất một nhóm vật liệu đang hoạt động.");
+    }
+
+    const productCount = store.products.filter((product) => product.categoryId === categoryId).length;
+    const transactionCount = store.transactions.filter((transaction) => transaction.categoryId === categoryId).length;
+    const now = new Date().toISOString();
+    let action = "deactivated";
+
+    if (productCount === 0 && transactionCount === 0) {
+      store.schema.categories.splice(index, 1);
+      for (const account of store.accounts) {
+        if (!account.categoryPermissions || typeof account.categoryPermissions !== "object") continue;
+        const nextPermissions = { ...account.categoryPermissions };
+        delete nextPermissions[categoryId];
+        account.categoryPermissions = nextPermissions;
+        account.updatedAt = now;
+      }
+      action = "deleted";
+    } else {
+      store.schema.categories[index] = { ...category, active: false, revision: toNumber(category.revision, 1) + 1, updatedAt: now };
+    }
+
+    store.schema.version = toNumber(store.schema.version, 1) + 1;
+    store.accountAudit = Array.isArray(store.accountAudit) ? store.accountAudit : [];
+    store.accountAudit.unshift({
+      id: makeId("audit"),
+      action: action === "deleted" ? "delete_category" : "deactivate_category",
+      targetId: category.id,
+      targetUsername: category.name,
+      actorId: actor.id,
+      actorName: actor.displayName,
+      actorRole: actor.role,
+      detail: `${String(reason || "").trim()} · ${productCount} vật liệu · ${transactionCount} giao dịch`,
+      createdAt: now,
+    });
+    store.accountAudit = store.accountAudit.slice(0, 500);
+    this.writeStore(store);
+    return { action, categoryId, categoryName: category.name, productCount, transactionCount };
+  },
+
   async deleteInventoryHistory({ before = null, reason = "", confirmation = "" } = {}) {
     await delay(180);
     const store = this.readStore();
@@ -3234,12 +3291,36 @@ function openCategoryForm(categoryId = null) {
     active: true,
     attributes: [{ id: "", name: "Tên vật liệu", type: "text", options: [], unit: "", required: true, identity: true, list: true, identityOrder: 0 }],
   });
+  const deleteButton = category && normalizeRoleCode(appState.currentUser?.role) === "superadmin"
+    ? `<button class="btn btn-danger sheet-footer-wide" type="button" data-action="open-delete-category" data-category-id="${escapeHTML(category.id)}">${icon("trash")} Xóa nhóm</button>`
+    : "";
   openModal({
     name: "category-form",
     title: category ? "Sửa nhóm vật liệu" : "Thêm nhóm vật liệu",
     subtitle: "Không đổi ID nhóm khi đã có dữ liệu lịch sử.",
     body: categoryFormBody(category, appState.ui.categoryDraft),
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="category-form">${category ? "Lưu thay đổi" : "Tạo nhóm"}</button>`,
+    footer: `${deleteButton}<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="category-form">${category ? "Lưu thay đổi" : "Tạo nhóm"}</button>`,
+  });
+}
+
+function openDeleteCategoryModal(categoryId) {
+  if (normalizeRoleCode(appState.currentUser?.role) !== "superadmin") return showToast("error", "Chỉ Super Admin được xóa hoặc ngừng nhóm");
+  const category = categoryById(categoryId);
+  if (!category) return showToast("error", "Không tìm thấy nhóm");
+  const visibleProductCount = appState.cache.products.filter((product) => product.categoryId === categoryId).length;
+  openModal({
+    name: "delete-category-form",
+    title: "Xóa hoặc ngừng nhóm",
+    subtitle: `${category.icon || "◇"} ${category.name}`,
+    body: `<form id="delete-category-form" class="field-grid" novalidate>
+      <input type="hidden" name="categoryId" value="${escapeHTML(category.id)}">
+      <input type="hidden" name="expectedRevision" value="${escapeHTML(category.revision ?? "")}">
+      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Database sẽ tự chọn cách xử lý an toàn</div><div class="notice-text">Nhóm hoàn toàn trống sẽ bị xóa hẳn. Nếu đã có vật liệu hoặc lịch sử, nhóm chỉ chuyển sang ngừng sử dụng; vật liệu và lịch sử cũ vẫn được giữ.</div></div></div>
+      <div class="detail-grid"><div class="detail-row"><div class="detail-key">Vật liệu đang tải</div><div class="detail-value">${visibleProductCount}</div></div><div class="detail-row"><div class="detail-key">Lưu ý</div><div class="detail-value">Database sẽ kiểm tra lại toàn bộ dữ liệu, không dựa vào số đang hiển thị.</div></div></div>
+      <label class="field" for="delete-category-reason"><span class="field-label">Lý do *</span><textarea id="delete-category-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Tạo nhầm nhóm hoặc không còn sử dụng"></textarea><span class="field-help">Tối thiểu 5 ký tự.</span></label>
+      <label class="field" for="delete-category-confirmation"><span class="field-label">Nhập XOA NHOM để xác nhận</span><input id="delete-category-confirmation" name="confirmation" class="input" type="text" autocomplete="off" autocapitalize="characters" required placeholder="XOA NHOM"></label>
+    </form>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="delete-category-form">Xác nhận</button>`,
   });
 }
 
@@ -3522,6 +3603,32 @@ async function handleCategorySubmit(event, form) {
   });
 }
 
+async function handleDeleteCategorySubmit(event, form) {
+  event.preventDefault();
+  const data = new FormData(form);
+  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
+  await withActionLock("delete-category", submitButton, async () => {
+    try {
+      const result = await dataService.deleteCategory({
+        categoryId: data.get("categoryId"),
+        expectedRevision: toOptionalNumber(data.get("expectedRevision")),
+        reason: data.get("reason"),
+        confirmation: data.get("confirmation"),
+      });
+      await refreshInventoryAndHistory({ render: false });
+      if (appState.cache.loaded.accounts) await loadAccountData({ render: false });
+      closeModal(true);
+      renderApp();
+      const deleted = result?.action === "deleted";
+      showToast("success", deleted ? "Đã xóa nhóm" : "Đã ngừng sử dụng nhóm", deleted
+        ? "Nhóm trống đã được xóa hoàn toàn."
+        : `Nhóm có ${toNumber(result?.productCount, 0)} vật liệu hoặc lịch sử nên chỉ được ngừng sử dụng.`);
+    } catch (error) {
+      showToast("error", "Không thể xử lý nhóm", error.message);
+    }
+  });
+}
+
 function bindEvents() {
   on(document, "click", "[data-nav]", async (event, button) => {
     event.preventDefault();
@@ -3570,6 +3677,7 @@ function bindEvents() {
   on(document, "click", "[data-action='open-password-reset']", (event, button) => openPasswordResetForm(button.dataset.accountId));
   on(document, "click", "[data-action='add-category']", () => openCategoryForm());
   on(document, "click", "[data-action='edit-category']", (event, button) => openCategoryForm(button.dataset.categoryId));
+  on(document, "click", "[data-action='open-delete-category']", (event, button) => openDeleteCategoryModal(button.dataset.categoryId));
   on(document, "click", "[data-action='open-history-cleanup']", openHistoryCleanupModal);
 
   on(document, "click", "[data-action='archive-product']", (event, button) => {
@@ -3717,7 +3825,7 @@ function bindEvents() {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     const formId = form.getAttribute("id") || "";
-    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "account-form", "password-reset-form", "category-form"]);
+    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "account-form", "password-reset-form", "category-form", "delete-category-form"]);
     if (!handledForms.has(formId)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -3730,6 +3838,7 @@ function bindEvents() {
     if (formId === "account-form") handleAccountSubmit(event, form);
     if (formId === "password-reset-form") handlePasswordResetSubmit(event, form);
     if (formId === "category-form") handleCategorySubmit(event, form);
+    if (formId === "delete-category-form") handleDeleteCategorySubmit(event, form);
   }, true);
 
   document.addEventListener("input", (event) => {

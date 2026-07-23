@@ -1178,6 +1178,10 @@ html[data-theme="dark"] .nav-primary {
   background: var(--card);
 }
 
+.sheet-footer-wide {
+  grid-column: 1 / -1;
+}
+
 .dialog-card {
   width: min(calc(100% - 28px), 460px);
   margin: auto;
