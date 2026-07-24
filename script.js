@@ -1,12 +1,12 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.7
+ * Kho Khuôn Bế 2.0.8
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.7";
+const APP_VERSION = "2.0.8";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 5;
 const EXPORT_REASON_THRESHOLD = 3;
@@ -1961,12 +1961,11 @@ const localDataService = {
     return true;
   },
 
-  async deleteCategory({ categoryId, expectedRevision = null, reason = "", confirmation = "" } = {}) {
+  async deleteCategory({ categoryId, expectedRevision = null, reason = "" } = {}) {
     await delay(180);
     const store = this.readStore();
     const actor = assertStorePermission(store, PERMISSIONS.manageSchema);
     if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa hoặc ngừng nhóm.");
-    if (String(confirmation || "").trim().toUpperCase() !== "XOA NHOM") throw new Error("Vui lòng nhập đúng XOA NHOM để xác nhận.");
     if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
 
     const index = store.schema.categories.findIndex((category) => category.id === categoryId);
@@ -2018,12 +2017,11 @@ const localDataService = {
     return { action, categoryId, categoryName: category.name, productCount, transactionCount };
   },
 
-  async deleteInventoryHistory({ before = null, reason = "", confirmation = "" } = {}) {
+  async deleteInventoryHistory({ before = null, reason = "" } = {}) {
     await delay(180);
     const store = this.readStore();
     const actor = assertStorePermission(store, PERMISSIONS.manageData);
     if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa lịch sử kho.");
-    if (String(confirmation || "").trim().toUpperCase() !== "XOA LICH SU") throw new Error("Vui lòng nhập đúng XOA LICH SU để xác nhận.");
     if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
     const cutoff = before ? new Date(`${before}T23:59:59.999`) : null;
     if (cutoff && Number.isNaN(cutoff.getTime())) throw new Error("Ngày xóa lịch sử không hợp lệ.");
@@ -2056,13 +2054,11 @@ const localDataService = {
     return { deletedCount, before: before || null };
   },
 
-  async purgeInventoryHistory({ before = null, reason = "", confirmation = "", acknowledged = false } = {}) {
+  async purgeInventoryHistory({ before = null, reason = "" } = {}) {
     await delay(180);
     const store = this.readStore();
     const actor = assertStorePermission(store, PERMISSIONS.manageData);
     if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa vĩnh viễn lịch sử kho.");
-    if (!acknowledged) throw new Error("Bạn cần xác nhận đã hiểu dữ liệu không thể khôi phục.");
-    if (String(confirmation || "").trim().toUpperCase() !== "XOA VINH VIEN") throw new Error("Vui lòng nhập đúng XOA VINH VIEN để xác nhận.");
     if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
     const cutoff = before ? new Date(`${before}T23:59:59.999`) : null;
     if (cutoff && Number.isNaN(cutoff.getTime())) throw new Error("Ngày xóa vĩnh viễn không hợp lệ.");
@@ -3415,8 +3411,7 @@ function openHistoryCleanupModal() {
       <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không dùng để sửa tồn kho</div><div class="notice-text">Giao dịch sai nên dùng Đảo giao dịch. Xóa lịch sử chỉ dùng để dọn dữ liệu hiển thị.</div></div></div>
       <label class="field" for="history-cleanup-scope"><span class="field-label">Phạm vi xóa</span><select id="history-cleanup-scope" name="scope" class="select"><option value="before">Đến hết một ngày</option><option value="all">Toàn bộ lịch sử</option></select></label>
       <label class="field" id="history-cleanup-date-field" for="history-cleanup-before"><span class="field-label">Xóa đến hết ngày</span><input id="history-cleanup-before" name="before" class="input" type="date" value="${escapeHTML(today)}"></label>
-      <label class="field" for="history-cleanup-reason"><span class="field-label">Lý do</span><textarea id="history-cleanup-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Dọn dữ liệu thử nghiệm trước khi sử dụng chính thức"></textarea></label>
-      <label class="field" for="history-cleanup-confirmation"><span class="field-label">Nhập XOA LICH SU để xác nhận</span><input id="history-cleanup-confirmation" name="confirmation" class="input" type="text" autocapitalize="characters" autocomplete="off" required></label>
+      <label class="field" for="history-cleanup-reason"><span class="field-label">Lý do</span><textarea id="history-cleanup-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Dọn dữ liệu thử nghiệm trước khi sử dụng chính thức"></textarea><span class="field-help">Sau khi bấm Xóa lịch sử, ứng dụng sẽ hỏi xác nhận lần cuối.</span></label>
     </form>`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="history-cleanup-form">Xóa lịch sử</button>`,
   });
@@ -3446,9 +3441,7 @@ function openHistoryPurgeModal() {
       <div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không thể khôi phục</div><div class="notice-text">Dữ liệu giao dịch sẽ bị xóa vật lý khỏi database. Nhật ký quản trị chỉ giữ số lượng, lý do và người thực hiện.</div></div></div>
       <label class="field" for="history-purge-scope"><span class="field-label">Phạm vi xóa</span><select id="history-purge-scope" name="scope" class="select"><option value="before">Đã ẩn đến hết một ngày</option><option value="all">Toàn bộ lịch sử đã ẩn</option></select></label>
       <label class="field" id="history-purge-date-field" for="history-purge-before"><span class="field-label">Ngày đã ẩn đến hết</span><input id="history-purge-before" name="before" class="input" type="date" value="${escapeHTML(today)}"></label>
-      <label class="field" for="history-purge-reason"><span class="field-label">Lý do *</span><textarea id="history-purge-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Xóa dữ liệu thử nghiệm đã được kiểm tra"></textarea></label>
-      <label class="checkbox-row check-row-danger" for="history-purge-acknowledged"><input id="history-purge-acknowledged" name="acknowledged" type="checkbox" value="true" required><span>Tôi hiểu dữ liệu đã xóa sẽ không thể khôi phục.</span></label>
-      <label class="field" for="history-purge-confirmation"><span class="field-label">Nhập XOA VINH VIEN để xác nhận</span><input id="history-purge-confirmation" name="confirmation" class="input" type="text" autocapitalize="characters" autocomplete="off" required></label>
+      <label class="field" for="history-purge-reason"><span class="field-label">Lý do *</span><textarea id="history-purge-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Xóa dữ liệu thử nghiệm đã được kiểm tra"></textarea><span class="field-help">Ứng dụng sẽ hỏi xác nhận lần cuối trước khi xóa vĩnh viễn.</span></label>
     </form>`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="history-purge-form">Xóa vĩnh viễn</button>`,
   });
@@ -4079,8 +4072,7 @@ function openDeleteCategoryModal(categoryId) {
       <input type="hidden" name="expectedRevision" value="${escapeHTML(category.revision ?? "")}">
       <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Database sẽ tự chọn cách xử lý an toàn</div><div class="notice-text">Nhóm hoàn toàn trống sẽ bị xóa hẳn. Nếu đã có vật liệu hoặc lịch sử, nhóm chỉ chuyển sang ngừng sử dụng; vật liệu và lịch sử cũ vẫn được giữ.</div></div></div>
       <div class="detail-grid"><div class="detail-row"><div class="detail-key">Vật liệu đang tải</div><div class="detail-value">${visibleProductCount}</div></div><div class="detail-row"><div class="detail-key">Lưu ý</div><div class="detail-value">Database sẽ kiểm tra lại toàn bộ dữ liệu, không dựa vào số đang hiển thị.</div></div></div>
-      <label class="field" for="delete-category-reason"><span class="field-label">Lý do *</span><textarea id="delete-category-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Tạo nhầm nhóm hoặc không còn sử dụng"></textarea><span class="field-help">Tối thiểu 5 ký tự.</span></label>
-      <label class="field" for="delete-category-confirmation"><span class="field-label">Nhập XOA NHOM để xác nhận</span><input id="delete-category-confirmation" name="confirmation" class="input" type="text" autocomplete="off" autocapitalize="characters" required placeholder="XOA NHOM"></label>
+      <label class="field" for="delete-category-reason"><span class="field-label">Lý do *</span><textarea id="delete-category-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Tạo nhầm nhóm hoặc không còn sử dụng"></textarea><span class="field-help">Tối thiểu 5 ký tự. Ứng dụng sẽ hỏi xác nhận lần cuối.</span></label>
     </form>`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="delete-category-form">Xác nhận</button>`,
   });
@@ -4300,50 +4292,65 @@ async function handleReverseTransactionSubmit(event, form) {
 async function handleHistoryCleanupSubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock("delete-inventory-history", submitButton, async () => {
-    try {
-      const scope = data.get("scope") === "all" ? "all" : "before";
-      const before = scope === "all" ? null : String(data.get("before") || "");
-      if (scope === "before" && !before) throw new Error("Vui lòng chọn ngày kết thúc.");
-      const result = await dataService.deleteInventoryHistory({
-        before,
-        reason: data.get("reason"),
-        confirmation: data.get("confirmation"),
+  const scope = data.get("scope") === "all" ? "all" : "before";
+  const before = scope === "all" ? null : String(data.get("before") || "");
+  const reason = String(data.get("reason") || "").trim();
+  if (scope === "before" && !before) return showToast("error", "Thiếu ngày kết thúc", "Vui lòng chọn ngày kết thúc.");
+  if (reason.length < 5) return showToast("error", "Lý do chưa hợp lệ", "Lý do cần có ít nhất 5 ký tự.");
+
+  const scopeText = scope === "all" ? "toàn bộ lịch sử đang hiển thị" : `lịch sử đến hết ngày ${before.split("-").reverse().join("/")}`;
+  openConfirm({
+    title: "Xác nhận xóa lịch sử?",
+    message: `Bạn có chắc muốn ẩn ${scopeText} khỏi ứng dụng? Tồn kho hiện tại không thay đổi.`,
+    confirmLabel: "Xóa lịch sử",
+    danger: true,
+    onConfirm: async (confirmButton) => {
+      await withActionLock("delete-inventory-history", confirmButton, async () => {
+        try {
+          const result = await dataService.deleteInventoryHistory({ before, reason });
+          await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50, useFilters: appState.screen === SCREENS.history });
+          closeModal(true);
+          renderApp();
+          showToast("success", "Đã xóa lịch sử", `${toNumber(result?.deletedCount, 0)} giao dịch đã được xóa khỏi ứng dụng.`);
+        } catch (error) {
+          closeModal(true);
+          showToast("error", "Không thể xóa lịch sử", error.message);
+        }
       });
-      await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50, useFilters: appState.screen === SCREENS.history });
-      closeModal(true);
-      renderApp();
-      showToast("success", "Đã xóa lịch sử", `${toNumber(result?.deletedCount, 0)} giao dịch đã được xóa khỏi ứng dụng.`);
-    } catch (error) {
-      showToast("error", "Không thể xóa lịch sử", error.message);
-    }
+    },
   });
 }
 
 async function handleHistoryPurgeSubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock("purge-inventory-history", submitButton, async () => {
-    try {
-      const scope = data.get("scope") === "all" ? "all" : "before";
-      const before = scope === "all" ? null : String(data.get("before") || "");
-      if (scope === "before" && !before) throw new Error("Vui lòng chọn ngày kết thúc.");
-      const result = await dataService.purgeInventoryHistory({
-        before,
-        reason: data.get("reason"),
-        confirmation: data.get("confirmation"),
-        acknowledged: data.get("acknowledged") === "true",
+  const scope = data.get("scope") === "all" ? "all" : "before";
+  const before = scope === "all" ? null : String(data.get("before") || "");
+  const reason = String(data.get("reason") || "").trim();
+  if (scope === "before" && !before) return showToast("error", "Thiếu ngày kết thúc", "Vui lòng chọn ngày kết thúc.");
+  if (reason.length < 5) return showToast("error", "Lý do chưa hợp lệ", "Lý do cần có ít nhất 5 ký tự.");
+
+  const scopeText = scope === "all" ? "toàn bộ lịch sử đã ẩn" : `lịch sử đã ẩn đến hết ngày ${before.split("-").reverse().join("/")}`;
+  openConfirm({
+    title: "Xóa vĩnh viễn?",
+    message: `Bạn có chắc muốn xóa vĩnh viễn ${scopeText}? Dữ liệu này không thể khôi phục và tồn kho hiện tại không thay đổi.`,
+    confirmLabel: "Xóa vĩnh viễn",
+    danger: true,
+    onConfirm: async (confirmButton) => {
+      await withActionLock("purge-inventory-history", confirmButton, async () => {
+        try {
+          const result = await dataService.purgeInventoryHistory({ before, reason });
+          closeModal(true);
+          renderApp();
+          const skipped = toNumber(result?.skippedLinkedCount, 0);
+          const suffix = skipped > 0 ? ` Bỏ qua ${skipped} giao dịch còn liên kết với lịch sử chưa ẩn.` : "";
+          showToast("success", "Đã xóa vĩnh viễn", `${toNumber(result?.purgedCount, 0)} giao dịch đã bị xóa khỏi database.${suffix}`);
+        } catch (error) {
+          closeModal(true);
+          showToast("error", "Không thể xóa vĩnh viễn", error.message);
+        }
       });
-      closeModal(true);
-      renderApp();
-      const skipped = toNumber(result?.skippedLinkedCount, 0);
-      const suffix = skipped > 0 ? ` Bỏ qua ${skipped} giao dịch còn liên kết với lịch sử chưa ẩn.` : "";
-      showToast("success", "Đã xóa vĩnh viễn", `${toNumber(result?.purgedCount, 0)} giao dịch đã bị xóa khỏi database.${suffix}`);
-    } catch (error) {
-      showToast("error", "Không thể xóa vĩnh viễn", error.message);
-    }
+    },
   });
 }
 
@@ -4399,26 +4406,35 @@ async function handleCategorySubmit(event, form) {
 async function handleDeleteCategorySubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock("delete-category", submitButton, async () => {
-    try {
-      const result = await dataService.deleteCategory({
-        categoryId: data.get("categoryId"),
-        expectedRevision: toOptionalNumber(data.get("expectedRevision")),
-        reason: data.get("reason"),
-        confirmation: data.get("confirmation"),
+  const categoryId = String(data.get("categoryId") || "");
+  const expectedRevision = toOptionalNumber(data.get("expectedRevision"));
+  const reason = String(data.get("reason") || "").trim();
+  const category = categoryById(categoryId);
+  if (reason.length < 5) return showToast("error", "Lý do chưa hợp lệ", "Lý do cần có ít nhất 5 ký tự.");
+
+  openConfirm({
+    title: "Xác nhận xử lý nhóm?",
+    message: `Bạn có chắc muốn xử lý nhóm “${category?.name || categoryId}”? Nhóm trống sẽ bị xóa; nhóm đã có dữ liệu sẽ chuyển sang ngừng sử dụng.`,
+    confirmLabel: "Xác nhận",
+    danger: true,
+    onConfirm: async (confirmButton) => {
+      await withActionLock("delete-category", confirmButton, async () => {
+        try {
+          const result = await dataService.deleteCategory({ categoryId, expectedRevision, reason });
+          await refreshInventoryAndHistory({ render: false });
+          if (appState.cache.loaded.accounts) await loadAccountData({ render: false });
+          closeModal(true);
+          renderApp();
+          const deleted = result?.action === "deleted";
+          showToast("success", deleted ? "Đã xóa nhóm" : "Đã ngừng sử dụng nhóm", deleted
+            ? "Nhóm trống đã được xóa hoàn toàn."
+            : `Nhóm có ${toNumber(result?.productCount, 0)} vật liệu hoặc lịch sử nên chỉ được ngừng sử dụng.`);
+        } catch (error) {
+          closeModal(true);
+          showToast("error", "Không thể xử lý nhóm", error.message);
+        }
       });
-      await refreshInventoryAndHistory({ render: false });
-      if (appState.cache.loaded.accounts) await loadAccountData({ render: false });
-      closeModal(true);
-      renderApp();
-      const deleted = result?.action === "deleted";
-      showToast("success", deleted ? "Đã xóa nhóm" : "Đã ngừng sử dụng nhóm", deleted
-        ? "Nhóm trống đã được xóa hoàn toàn."
-        : `Nhóm có ${toNumber(result?.productCount, 0)} vật liệu hoặc lịch sử nên chỉ được ngừng sử dụng.`);
-    } catch (error) {
-      showToast("error", "Không thể xử lý nhóm", error.message);
-    }
+    },
   });
 }
 

@@ -268,29 +268,29 @@
         return true;
       },
 
-      async deleteCategory({ categoryId, expectedRevision = null, reason = "", confirmation = "" } = {}) {
+      async deleteCategory({ categoryId, expectedRevision = null, reason = "" } = {}) {
         return rpc("kb2_delete_category_v1", authenticatedArgs({
           p_category_code: categoryId,
           p_expected_revision: expectedRevision,
           p_reason: String(reason || "").trim(),
-          p_confirmation: String(confirmation || "").trim(),
+          p_confirmation: "XOA NHOM",
         }));
       },
 
-      async deleteInventoryHistory({ before = null, reason = "", confirmation = "" } = {}) {
+      async deleteInventoryHistory({ before = null, reason = "" } = {}) {
         return rpc("kb2_delete_inventory_history_v1", authenticatedArgs({
           p_before: before ? localDayBoundary(before, 1) : null,
           p_reason: String(reason || "").trim(),
-          p_confirmation: String(confirmation || "").trim(),
+          p_confirmation: "XOA LICH SU",
         }));
       },
 
-      async purgeInventoryHistory({ before = null, reason = "", confirmation = "", acknowledged = false } = {}) {
+      async purgeInventoryHistory({ before = null, reason = "" } = {}) {
         return rpc("kb2_purge_inventory_history_v1", authenticatedArgs({
           p_before: before ? localDayBoundary(before, 1) : null,
           p_reason: String(reason || "").trim(),
-          p_confirmation: String(confirmation || "").trim(),
-          p_acknowledged: Boolean(acknowledged),
+          p_confirmation: "XOA VINH VIEN",
+          p_acknowledged: true,
         }));
       },
 
