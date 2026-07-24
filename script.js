@@ -1,12 +1,12 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.6
+ * Kho Khuôn Bế 2.0.7
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.6";
+const APP_VERSION = "2.0.7";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 5;
 const EXPORT_REASON_THRESHOLD = 3;
@@ -2710,10 +2710,10 @@ function openInventoryPdfOptions() {
     title: "Chọn cột xuất PDF",
     subtitle: `${products.length} vật liệu đã chọn`,
     body: `<form id="inventory-pdf-form" class="field-grid" novalidate>
-      <div class="notice"><div class="notice-icon">${icon("download")}</div><div><div class="notice-title">PDF chỉ gồm bảng dữ liệu</div><div class="notice-text">STT và tên vật liệu luôn được giữ. Không có tiêu đề, ngày xuất, người xuất hoặc tổng số vật liệu trên PDF.</div></div></div>
+      <div class="notice"><div class="notice-icon">${icon("download")}</div><div><div class="notice-title">PDF được căn cột tự động</div><div class="notice-text">STT và tên vật liệu luôn được giữ. Chữ sẽ xuống dòng theo từ, không bị tràn cột; PDF không có tiêu đề hoặc thông tin phụ.</div></div></div>
       <div class="pdf-column-grid">${columnItems}</div>
     </form>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="inventory-pdf-form">${icon("download")} In / Lưu PDF</button>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="inventory-pdf-form">${icon("download")} Tạo PDF</button>`,
   });
 }
 
@@ -2731,55 +2731,385 @@ function inventoryPdfCell(product, key) {
   return "—";
 }
 
-function buildInventoryPrintDocument(products, columnKeys) {
-  const columns = INVENTORY_PDF_COLUMNS.filter((column) => columnKeys.includes(column.key));
-  const allColumns = [{ key: "index", label: "STT" }, { key: "name", label: "Vật liệu" }, ...columns];
-  const landscape = allColumns.length > 6;
-  const headers = allColumns.map((column) => `<th>${escapeHTML(column.label)}</th>`).join("");
-  const rows = products.map((product, index) => `<tr>${allColumns.map((column) => {
-    const value = column.key === "index" ? String(index + 1) : column.key === "name" ? product.name : inventoryPdfCell(product, column.key);
-    const className = ["index", "quantity", "warning"].includes(column.key) ? "numeric" : "";
-    return `<td class="${className}">${escapeHTML(value)}</td>`;
-  }).join("")}</tr>`).join("");
-  const fileDate = formatISODate(new Date()) || "bao-cao";
-  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>vat-lieu-${fileDate}</title><style>
-    @page { size: A4 ${landscape ? "landscape" : "portrait"}; margin: 10mm; }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; color: #111; background: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 10.5pt; }
-    table { width: 100%; border-collapse: collapse; table-layout: auto; }
-    thead { display: table-header-group; }
-    tr { break-inside: avoid; page-break-inside: avoid; }
-    th, td { padding: 6px 7px; border: 1px solid #444; vertical-align: top; text-align: left; overflow-wrap: anywhere; }
-    th { background: #f1f1f1; font-weight: 750; }
-    th:first-child, td:first-child { width: 42px; text-align: center; }
-    td.numeric { text-align: right; white-space: nowrap; }
-    .print-tools { position: sticky; top: 0; display: flex; justify-content: flex-end; padding: 10px; background: #fff; }
-    .print-tools button { min-height: 44px; padding: 8px 14px; border: 0; border-radius: 10px; background: #246b49; color: #fff; font: inherit; font-weight: 700; }
-    @media print { .print-tools { display: none !important; } }
-  </style></head><body><div class="print-tools"><button type="button" onclick="window.print()">In / Lưu PDF</button></div><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250),{once:true});<\/script></body></html>`;
+function inventoryPdfColumnDefinitions(columnKeys) {
+  const optionalColumns = INVENTORY_PDF_COLUMNS.filter((column) => columnKeys.includes(column.key));
+  const definitions = [
+    { key: "index", label: "STT", weight: 0.78, align: "center" },
+    { key: "name", label: "Vật liệu", weight: 3.25, align: "left" },
+    ...optionalColumns.map((column) => ({
+      ...column,
+      weight: {
+        category: 1.45,
+        spec: 2.55,
+        quantity: 1.2,
+        unit: 0.9,
+        warning: 1.35,
+        status: 1.45,
+        note: 2.35,
+        updatedAt: 1.8,
+      }[column.key] || 1.3,
+      align: ["quantity", "warning"].includes(column.key) ? "right" : column.key === "unit" ? "center" : "left",
+    })),
+  ];
+  return definitions;
 }
 
-function printInventoryPdf(products, columnKeys) {
-  const printWindow = window.open("", "_blank");
-  if (!printWindow) throw new Error("Trình duyệt đang chặn cửa sổ in. Hãy cho phép mở cửa sổ mới rồi thử lại.");
-  printWindow.document.open();
-  printWindow.document.write(buildInventoryPrintDocument(products, columnKeys));
-  printWindow.document.close();
-  printWindow.focus();
+function inventoryPdfRowValue(product, key, index) {
+  if (key === "index") return String(index + 1);
+  if (key === "name") return product.name || "—";
+  return inventoryPdfCell(product, key);
 }
 
-function handleInventoryPdfSubmit(event, form) {
+function inventoryPdfStatusColors(value) {
+  const normalized = normalizeText(value);
+  if (normalized.includes("sap")) return { background: "#fff1cc", text: "#8a4b08", border: "#f4d58d" };
+  if (normalized.includes("het")) return { background: "#fee2e2", text: "#b42318", border: "#fecaca" };
+  return { background: "#dcfce7", text: "#166534", border: "#bbf7d0" };
+}
+
+function canvasRoundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function wrapCanvasText(ctx, value, maxWidth) {
+  const text = String(value ?? "—").trim() || "—";
+  const paragraphs = text.split(/\r?\n/);
+  const lines = [];
+  paragraphs.forEach((paragraph, paragraphIndex) => {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      lines.push("");
+      return;
+    }
+    let currentLine = "";
+    words.forEach((word) => {
+      const candidate = currentLine ? `${currentLine} ${word}` : word;
+      if (ctx.measureText(candidate).width <= maxWidth) {
+        currentLine = candidate;
+        return;
+      }
+      if (currentLine) lines.push(currentLine);
+      if (ctx.measureText(word).width <= maxWidth) {
+        currentLine = word;
+        return;
+      }
+      let fragment = "";
+      Array.from(word).forEach((character) => {
+        const nextFragment = fragment + character;
+        if (fragment && ctx.measureText(nextFragment).width > maxWidth) {
+          lines.push(fragment);
+          fragment = character;
+        } else {
+          fragment = nextFragment;
+        }
+      });
+      currentLine = fragment;
+    });
+    if (currentLine) lines.push(currentLine);
+    if (paragraphIndex < paragraphs.length - 1) lines.push("");
+  });
+  return lines.length ? lines : ["—"];
+}
+
+function inventoryPdfCanvasOptions(columnCount) {
+  const landscape = columnCount >= 6;
+  const pageWidthPoints = landscape ? 841.89 : 595.28;
+  const pageHeightPoints = landscape ? 595.28 : 841.89;
+  const pixelScale = 2.2;
+  return {
+    landscape,
+    pageWidthPoints,
+    pageHeightPoints,
+    width: Math.round(pageWidthPoints * pixelScale),
+    height: Math.round(pageHeightPoints * pixelScale),
+    pixelScale,
+  };
+}
+
+function createInventoryPdfCanvas(options) {
+  const canvas = document.createElement("canvas");
+  canvas.width = options.width;
+  canvas.height = options.height;
+  const ctx = canvas.getContext("2d", { alpha: false });
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textBaseline = "alphabetic";
+  return { canvas, ctx };
+}
+
+function inventoryPdfColumnLayout(columns, pageWidth, margin) {
+  const availableWidth = pageWidth - margin * 2;
+  const totalWeight = columns.reduce((sum, column) => sum + column.weight, 0);
+  let cursor = margin;
+  return columns.map((column, index) => {
+    const width = index === columns.length - 1
+      ? margin + availableWidth - cursor
+      : availableWidth * (column.weight / totalWeight);
+    const layout = { ...column, x: cursor, width };
+    cursor += width;
+    return layout;
+  });
+}
+
+function drawInventoryPdfHeader(ctx, columns, y, style) {
+  const { headerHeight, borderColor, headerBackground, headerText, paddingX, headerFont, headerLineHeight } = style;
+  columns.forEach((column, index) => {
+    ctx.fillStyle = headerBackground;
+    ctx.fillRect(column.x, y, column.width, headerHeight);
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(column.x, y, column.width, headerHeight);
+
+    ctx.font = headerFont;
+    ctx.fillStyle = headerText;
+    const lines = column.key === "index" ? ["STT"] : wrapCanvasText(ctx, column.label, Math.max(10, column.width - paddingX * 2));
+    const visibleLines = lines.slice(0, 2);
+    const textHeight = visibleLines.length * headerLineHeight;
+    let textY = y + (headerHeight - textHeight) / 2 + headerLineHeight * 0.78;
+    ctx.textAlign = column.key === "name" ? "left" : "center";
+    const textX = column.key === "name" ? column.x + paddingX : column.x + column.width / 2;
+    visibleLines.forEach((line) => {
+      ctx.fillText(line, textX, textY);
+      textY += headerLineHeight;
+    });
+  });
+  return y + headerHeight;
+}
+
+function measureInventoryPdfRow(ctx, row, columns, style) {
+  ctx.font = style.bodyFont;
+  let maxLines = 1;
+  const cellLines = columns.map((column) => {
+    const lines = wrapCanvasText(ctx, row[column.key], Math.max(12, column.width - style.paddingX * 2));
+    maxLines = Math.max(maxLines, lines.length);
+    return lines;
+  });
+  const height = Math.max(style.minRowHeight, maxLines * style.bodyLineHeight + style.paddingY * 2);
+  return { height, cellLines };
+}
+
+function drawInventoryPdfRow(ctx, row, rowIndex, columns, y, measured, style) {
+  const background = rowIndex % 2 === 0 ? "#ffffff" : style.alternateRow;
+  columns.forEach((column, columnIndex) => {
+    ctx.fillStyle = background;
+    ctx.fillRect(column.x, y, column.width, measured.height);
+    ctx.strokeStyle = style.borderColor;
+    ctx.lineWidth = 1.25;
+    ctx.strokeRect(column.x, y, column.width, measured.height);
+
+    const lines = measured.cellLines[columnIndex];
+    const contentHeight = lines.length * style.bodyLineHeight;
+    let textY = y + Math.max(style.paddingY, (measured.height - contentHeight) / 2) + style.bodyLineHeight * 0.78;
+    const value = String(row[column.key] ?? "—");
+
+    if (column.key === "status") {
+      ctx.font = style.statusFont;
+      const statusColors = inventoryPdfStatusColors(value);
+      const badgeWidth = Math.min(column.width - style.paddingX * 2, ctx.measureText(value).width + 24);
+      const badgeHeight = Math.min(34, measured.height - 12);
+      const badgeX = column.x + (column.width - badgeWidth) / 2;
+      const badgeY = y + (measured.height - badgeHeight) / 2;
+      canvasRoundedRect(ctx, badgeX, badgeY, badgeWidth, badgeHeight, 12);
+      ctx.fillStyle = statusColors.background;
+      ctx.fill();
+      ctx.strokeStyle = statusColors.border;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = statusColors.text;
+      ctx.textAlign = "center";
+      ctx.fillText(value, column.x + column.width / 2, badgeY + badgeHeight / 2 + 6);
+      return;
+    }
+
+    ctx.font = column.key === "name" ? style.nameFont : style.bodyFont;
+    ctx.fillStyle = style.bodyText;
+    ctx.textAlign = column.align === "right" ? "right" : column.align === "center" ? "center" : "left";
+    const textX = column.align === "right"
+      ? column.x + column.width - style.paddingX
+      : column.align === "center"
+        ? column.x + column.width / 2
+        : column.x + style.paddingX;
+    lines.forEach((line) => {
+      ctx.fillText(line, textX, textY);
+      textY += style.bodyLineHeight;
+    });
+  });
+}
+
+function canvasToJpegPage(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        reject(new Error("Không thể tạo ảnh cho trang PDF."));
+        return;
+      }
+      resolve({
+        bytes: new Uint8Array(await blob.arrayBuffer()),
+        width: canvas.width,
+        height: canvas.height,
+      });
+    }, "image/jpeg", 0.94);
+  });
+}
+
+function concatUint8Arrays(arrays) {
+  const totalLength = arrays.reduce((sum, array) => sum + array.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  arrays.forEach((array) => {
+    result.set(array, offset);
+    offset += array.length;
+  });
+  return result;
+}
+
+function asciiBytes(value) {
+  return new TextEncoder().encode(String(value));
+}
+
+function createPdfFromJpegPages(imagePages, pageWidthPoints, pageHeightPoints) {
+  const objectCount = 2 + imagePages.length * 3;
+  const chunks = [new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10, 37, 226, 227, 207, 211, 10])];
+  const offsets = new Array(objectCount + 1).fill(0);
+  let byteLength = chunks[0].length;
+
+  const append = (bytes) => {
+    chunks.push(bytes);
+    byteLength += bytes.length;
+  };
+
+  const appendObject = (objectNumber, bodyChunks) => {
+    offsets[objectNumber] = byteLength;
+    append(asciiBytes(`${objectNumber} 0 obj\n`));
+    bodyChunks.forEach(append);
+    append(asciiBytes("\nendobj\n"));
+  };
+
+  const pageObjectNumbers = imagePages.map((_, index) => 3 + index * 3);
+  appendObject(1, [asciiBytes("<< /Type /Catalog /Pages 2 0 R >>")]);
+  appendObject(2, [asciiBytes(`<< /Type /Pages /Count ${imagePages.length} /Kids [${pageObjectNumbers.map((number) => `${number} 0 R`).join(" ")}] >>`)]);
+
+  imagePages.forEach((image, index) => {
+    const pageObject = 3 + index * 3;
+    const contentObject = pageObject + 1;
+    const imageObject = pageObject + 2;
+    const imageName = `Im${index + 1}`;
+    const content = asciiBytes(`q\n${pageWidthPoints.toFixed(2)} 0 0 ${pageHeightPoints.toFixed(2)} 0 0 cm\n/${imageName} Do\nQ\n`);
+
+    appendObject(pageObject, [asciiBytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidthPoints.toFixed(2)} ${pageHeightPoints.toFixed(2)}] /Resources << /XObject << /${imageName} ${imageObject} 0 R >> >> /Contents ${contentObject} 0 R >>`)]);
+    appendObject(contentObject, [asciiBytes(`<< /Length ${content.length} >>\nstream\n`), content, asciiBytes("endstream")]);
+    appendObject(imageObject, [
+      asciiBytes(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>\nstream\n`),
+      image.bytes,
+      asciiBytes("\nendstream"),
+    ]);
+  });
+
+  const xrefOffset = byteLength;
+  let xref = `xref\n0 ${objectCount + 1}\n0000000000 65535 f \n`;
+  for (let index = 1; index <= objectCount; index += 1) {
+    xref += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  }
+  xref += `trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  append(asciiBytes(xref));
+  return new Blob([concatUint8Arrays(chunks)], { type: "application/pdf" });
+}
+
+async function createInventoryPdfBlob(products, columnKeys) {
+  const columns = inventoryPdfColumnDefinitions(columnKeys);
+  const options = inventoryPdfCanvasOptions(columns.length);
+  const margin = Math.round(34 * options.pixelScale);
+  const style = {
+    paddingX: Math.round(7 * options.pixelScale),
+    paddingY: Math.round(6 * options.pixelScale),
+    headerHeight: Math.round(29 * options.pixelScale),
+    minRowHeight: Math.round(30 * options.pixelScale),
+    headerLineHeight: Math.round(11 * options.pixelScale),
+    bodyLineHeight: Math.round(10.5 * options.pixelScale),
+    headerFont: `700 ${Math.round(9.3 * options.pixelScale)}px system-ui, -apple-system, "Segoe UI", sans-serif`,
+    bodyFont: `500 ${Math.round(8.9 * options.pixelScale)}px system-ui, -apple-system, "Segoe UI", sans-serif`,
+    nameFont: `650 ${Math.round(9 * options.pixelScale)}px system-ui, -apple-system, "Segoe UI", sans-serif`,
+    statusFont: `700 ${Math.round(8.4 * options.pixelScale)}px system-ui, -apple-system, "Segoe UI", sans-serif`,
+    headerBackground: "#256f4d",
+    headerText: "#ffffff",
+    bodyText: "#17211b",
+    alternateRow: "#f4f8f5",
+    borderColor: "#b8c9bf",
+  };
+  const columnLayout = inventoryPdfColumnLayout(columns, options.width, margin);
+  const rows = products.map((product, index) => Object.fromEntries(columns.map((column) => [column.key, inventoryPdfRowValue(product, column.key, index)])));
+  const pages = [];
+  let page = createInventoryPdfCanvas(options);
+  let y = drawInventoryPdfHeader(page.ctx, columnLayout, margin, style);
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const measured = measureInventoryPdfRow(page.ctx, rows[rowIndex], columnLayout, style);
+    if (y + measured.height > options.height - margin && y > margin + style.headerHeight) {
+      pages.push(await canvasToJpegPage(page.canvas));
+      page = createInventoryPdfCanvas(options);
+      y = drawInventoryPdfHeader(page.ctx, columnLayout, margin, style);
+    }
+    drawInventoryPdfRow(page.ctx, rows[rowIndex], rowIndex, columnLayout, y, measured, style);
+    y += measured.height;
+  }
+
+  pages.push(await canvasToJpegPage(page.canvas));
+  return createPdfFromJpegPages(pages, options.pageWidthPoints, options.pageHeightPoints);
+}
+
+function openInventoryPdfLoadingWindow(fileName) {
+  const viewer = window.open("", "_blank");
+  if (!viewer) return null;
+  viewer.document.open();
+  viewer.document.write(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(fileName)}</title><style>html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f5;color:#17211b}body{display:grid;place-items:center}.box{text-align:center;padding:24px}.spin{width:42px;height:42px;margin:0 auto 16px;border:4px solid #dbe7e0;border-top-color:#256f4d;border-radius:50%;animation:s .8s linear infinite}@keyframes s{to{transform:rotate(360deg)}}strong{display:block;font-size:18px;margin-bottom:6px}small{color:#617068}</style></head><body><div class="box"><div class="spin"></div><strong>Đang tạo PDF đẹp hơn</strong><small>Vui lòng chờ trong giây lát...</small></div></body></html>`);
+  viewer.document.close();
+  return viewer;
+}
+
+function downloadInventoryPdf(blob, fileName, viewerWindow = null) {
+  const objectUrl = URL.createObjectURL(blob);
+  if (viewerWindow && !viewerWindow.closed) {
+    viewerWindow.location.replace(objectUrl);
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120000);
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120000);
+}
+
+async function handleInventoryPdfSubmit(event, form) {
   event.preventDefault();
   const products = selectedInventoryProducts();
   if (!products.length) return showToast("warning", "Chưa chọn vật liệu");
   const columnKeys = new FormData(form).getAll("columns").map(String);
-  try {
-    printInventoryPdf(products, columnKeys);
-    closeModal(true);
-    showToast("success", "Đã mở bản in", "Trên iPhone, chọn In rồi lưu thành PDF hoặc chia sẻ.");
-  } catch (error) {
-    showToast("error", "Không thể mở bản PDF", error.message);
-  }
+  const fileName = `vat-lieu-${formatISODate(new Date()) || "bao-cao"}.pdf`;
+  const viewerWindow = openInventoryPdfLoadingWindow(fileName);
+  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
+
+  await withActionLock("inventory-pdf", submitButton, async () => {
+    try {
+      const pdfBlob = await createInventoryPdfBlob(products, columnKeys);
+      downloadInventoryPdf(pdfBlob, fileName, viewerWindow);
+      closeModal(true);
+      showToast("success", "Đã tạo PDF", "PDF đã được căn cột và xuống dòng tự động. Dùng nút Chia sẻ để lưu hoặc gửi file.");
+    } catch (error) {
+      if (viewerWindow && !viewerWindow.closed) viewerWindow.close();
+      showToast("error", "Không thể tạo PDF", error.message);
+    }
+  });
 }
 
 function filteredTransactions() {
