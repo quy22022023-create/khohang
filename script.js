@@ -1,14 +1,14 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.8
+ * Kho Khuôn Bế 2.0.9
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.8";
+const APP_VERSION = "2.0.9";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
-const DATA_FORMAT_VERSION = 5;
+const DATA_FORMAT_VERSION = 6;
 const EXPORT_REASON_THRESHOLD = 3;
 
 const INVENTORY_PDF_COLUMNS = Object.freeze([
@@ -1218,6 +1218,30 @@ function migrateStoreData(data) {
     changed = true;
   }
 
+  if (!Array.isArray(store.usernameHistory)) {
+    store.usernameHistory = [];
+    changed = true;
+  }
+  const reservedUsernames = new Set(store.usernameHistory.map((item) => normalizeText(item?.username).replace(/\s+/g, "")).filter(Boolean));
+  for (const account of store.accounts) {
+    const normalizedUsername = normalizeText(account.username).replace(/\s+/g, "");
+    if (!reservedUsernames.has(normalizedUsername)) {
+      store.usernameHistory.push({
+        id: makeId("username"),
+        accountId: account.id,
+        username: normalizedUsername,
+        assignedAt: account.createdAt || new Date().toISOString(),
+        retiredAt: null,
+      });
+      reservedUsernames.add(normalizedUsername);
+      changed = true;
+    }
+    if (!Number.isFinite(Number(account.revision)) || Number(account.revision) < 1) {
+      account.revision = 1;
+      changed = true;
+    }
+  }
+
   const schemaCategoryIds = new Set(store.schema.categories.map((category) => category.id));
   for (const account of store.accounts) {
     const status = accountStatus(account);
@@ -1268,6 +1292,7 @@ function seedData() {
     transactions: clone(DEFAULT_TRANSACTIONS),
     accounts: clone(DEFAULT_ACCOUNTS),
     accountAudit: [],
+    usernameHistory: [],
     updatedAt: new Date().toISOString(),
   };
   return migrateStoreData(seeded).store;
@@ -1703,9 +1728,10 @@ const localDataService = {
     if (!displayName) throw new Error("Vui lòng nhập tên hiển thị.");
     if (!ROLE_PRESETS[role]) throw new Error("Vai trò không hợp lệ.");
     if (!assignableRolesForAccount(actor, existing).includes(role)) throw new Error("Bạn không được gán vai trò này.");
-    if (existing && username !== existing.username) throw new Error("Không đổi tên đăng nhập sau khi tạo tài khoản.");
     const duplicate = store.accounts.find((account) => account.id !== payload.id && normalizeText(account.username).replace(/\s+/g, "") === username);
-    if (duplicate) throw new Error("Tên đăng nhập đã tồn tại.");
+    const usernameWillChange = Boolean(existing && username !== normalizeText(existing.username).replace(/\s+/g, ""));
+    const reservedUsername = (store.usernameHistory || []).find((item) => normalizeText(item?.username).replace(/\s+/g, "") === username);
+    if (duplicate || ((!existing || usernameWillChange) && reservedUsername)) throw new Error("Tên đăng nhập đã tồn tại hoặc từng được sử dụng.");
 
     if (normalizeRoleCode(existing?.role) === "superadmin" && normalizeRoleCode(role) !== "superadmin" && accountStatus(existing) === ACCOUNT_STATUSES.active) {
       const remaining = store.accounts.filter((account) => account.id !== existing.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
@@ -1736,23 +1762,47 @@ const localDataService = {
 
     const now = new Date().toISOString();
     let account;
+    let usernameChanged = false;
+    let currentSessionRevoked = false;
     if (existing) {
       const index = store.accounts.findIndex((item) => item.id === existing.id);
-      account = { ...existing, username, displayName, role, status, active: status === ACCOUNT_STATUSES.active, scopeMode, categoryPermissions, updatedAt: now };
+      usernameChanged = username !== normalizeText(existing.username).replace(/\s+/g, "");
+      if (usernameChanged) {
+        const activeHistory = (store.usernameHistory || []).find((item) => item.accountId === existing.id && !item.retiredAt);
+        if (activeHistory) activeHistory.retiredAt = now;
+        store.usernameHistory.push({ id: makeId("username"), accountId: existing.id, username, assignedAt: now, retiredAt: null });
+      }
+      account = {
+        ...existing, username, displayName, role, status, active: status === ACCOUNT_STATUSES.active,
+        scopeMode, categoryPermissions, revision: toNumber(existing.revision, 1) + 1, updatedAt: now,
+      };
       store.accounts[index] = account;
-      this.addAccountAudit(store, "update_account", account, `Vai trò: ${roleLabel(role)} · Trạng thái: ${accountStatusLabel(account)} · Phạm vi: ${scopeMode}`, actor);
+      this.addAccountAudit(
+        store,
+        usernameChanged ? "rename_username" : "update_account",
+        account,
+        usernameChanged
+          ? `Đổi tên đăng nhập từ ${existing.username} thành ${username}. Tất cả phiên cũ đã bị thu hồi.`
+          : `Vai trò: ${roleLabel(role)} · Trạng thái: ${accountStatusLabel(account)} · Phạm vi: ${scopeMode}`,
+        actor,
+      );
+      if (usernameChanged && existing.id === actor.id) {
+        clearAuthSession();
+        currentSessionRevoked = true;
+      }
     } else {
       if (String(payload.password || "") !== String(payload.passwordConfirm || "")) throw new Error("Xác nhận mật khẩu không khớp.");
       const passwordRecord = await createPasswordRecord(payload.password);
       account = {
         id: makeId("acc"), username, displayName, role, status: ACCOUNT_STATUSES.active, active: true, scopeMode, categoryPermissions,
-        ...passwordRecord, createdAt: now, updatedAt: now,
+        revision: 1, ...passwordRecord, createdAt: now, updatedAt: now,
       };
       store.accounts.unshift(account);
+      store.usernameHistory.push({ id: makeId("username"), accountId: account.id, username, assignedAt: now, retiredAt: null });
       this.addAccountAudit(store, "create_account", account, `Vai trò: ${roleLabel(role)} · Phạm vi: ${scopeMode} · Không bắt buộc đổi mật khẩu lần đầu`, actor);
     }
     this.writeStore(store);
-    return clone(account);
+    return clone({ ...account, usernameChanged, currentSessionRevoked });
   },
 
   async setAccountPassword(accountId, password, passwordConfirm) {
@@ -1789,6 +1839,45 @@ const localDataService = {
     this.addAccountAudit(store, "disable_account", store.accounts[index], "Ngừng sử dụng tài khoản.", actor);
     this.writeStore(store);
     return true;
+  },
+
+  async deleteAccount(accountId, expectedRevision = null) {
+    await delay(170);
+    const store = this.readStore();
+    const actor = assertStorePermission(store, PERMISSIONS.manageAccounts);
+    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa tài khoản.");
+    const index = store.accounts.findIndex((account) => account.id === accountId);
+    if (index < 0) throw new Error("Không tìm thấy tài khoản.");
+    const target = store.accounts[index];
+    if (target.id === actor.id) throw new Error("Không thể tự xóa tài khoản đang đăng nhập.");
+    if (expectedRevision !== null && toNumber(target.revision, 1) !== toNumber(expectedRevision, 1)) throw new Error("Dữ liệu tài khoản đã thay đổi. Hãy tải lại rồi thử lại.");
+    if (normalizeRoleCode(target.role) === "superadmin" && accountStatus(target) === ACCOUNT_STATUSES.active) {
+      const remaining = store.accounts.filter((account) => account.id !== target.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
+      if (!remaining.length) throw new Error("Phải giữ ít nhất một Super Admin đang hoạt động.");
+    }
+
+    const hasActivity = store.transactions.some((item) => item.actorId === target.id)
+      || store.products.some((item) => [item.createdBy, item.updatedBy, item.archivedBy].includes(target.id))
+      || store.schema.categories.some((item) => [item.createdBy, item.updatedBy].includes(target.id))
+      || (store.accountAudit || []).some((item) => item.actorId === target.id);
+
+    if (hasActivity) {
+      store.accounts[index] = {
+        ...target, status: ACCOUNT_STATUSES.disabled, active: false,
+        revision: toNumber(target.revision, 1) + 1, updatedAt: new Date().toISOString(),
+      };
+      this.addAccountAudit(store, "disable_account", store.accounts[index], "Tài khoản đã có hoạt động nên được chuyển sang ngừng sử dụng thay vì xóa.", actor);
+      this.writeStore(store);
+      return clone({ action: "disabled", account: store.accounts[index] });
+    }
+
+    this.addAccountAudit(store, "delete_account", target, "Xóa vĩnh viễn tài khoản chưa phát sinh hoạt động.", actor);
+    store.accounts.splice(index, 1);
+    for (const history of store.usernameHistory || []) {
+      if (history.accountId === target.id) history.accountId = null;
+    }
+    this.writeStore(store);
+    return clone({ action: "deleted", accountId: target.id, username: target.username });
   },
 
   async saveCategory(payload) {
@@ -3863,7 +3952,7 @@ function accountFormBody(account = null) {
     <input type="hidden" name="id" value="${escapeHTML(account?.id || "")}">
     <input type="hidden" name="expectedRevision" value="${escapeHTML(account?.revision ?? "")}">
     <label class="field" for="account-display-name"><span class="field-label">Tên hiển thị</span><input id="account-display-name" name="displayName" class="input" type="text" autocomplete="name" required value="${escapeHTML(account?.displayName || "")}"></label>
-    <label class="field" for="account-username"><span class="field-label">Tên đăng nhập</span><input id="account-username" name="username" class="input" type="text" autocapitalize="none" autocomplete="username" required ${account ? "readonly" : ""} value="${escapeHTML(account?.username || "")}"><span class="field-help">Không cần email thật. Tên đăng nhập không đổi sau khi tạo.</span></label>
+    <label class="field" for="account-username"><span class="field-label">Tên đăng nhập</span><input id="account-username" name="username" class="input" type="text" autocapitalize="none" autocomplete="username" required value="${escapeHTML(account?.username || "")}"><span class="field-help">Super Admin có thể đổi tên đăng nhập. Tên cũ được giữ lại và không thể cấp lại cho người khác.</span></label>
     ${passwordFields}
     <div class="field-grid two">
       <label class="field" for="account-role"><span class="field-label">Vai trò</span><select id="account-role" name="role" class="select">${roles.map((role) => `<option value="${role}" ${role === model.role ? "selected" : ""}>${escapeHTML(roleLabel(role))}</option>`).join("")}</select></label>
@@ -3932,11 +4021,14 @@ function openAccountForm(accountId = null) {
   const extraButton = account && canManageAccount(account) && hasPermission(PERMISSIONS.resetAccountPassword)
     ? `<button class="btn btn-soft" type="button" data-action="open-password-reset" data-account-id="${escapeHTML(account.id)}">Đặt mật khẩu mới</button>`
     : "";
+  const deleteSection = account && account.id !== appState.currentUser.id
+    ? `<details class="danger-zone"><summary>Tùy chọn nguy hiểm</summary><div class="danger-zone-body"><p>Tài khoản chưa phát sinh hoạt động sẽ bị xóa vĩnh viễn. Tài khoản đã có lịch sử sẽ chỉ chuyển sang ngừng sử dụng.</p><button class="btn btn-danger-soft btn-block" type="button" data-action="delete-account" data-account-id="${escapeHTML(account.id)}">${icon("trash")} Xóa tài khoản</button></div></details>`
+    : "";
   openModal({
     name: "account-form",
     title: account ? "Sửa tài khoản" : "Tạo tài khoản",
     subtitle: "Cấp vai trò và quyền riêng theo từng nhóm vật liệu.",
-    body: `${accountFormBody(account)}${extraButton ? `<div style="margin-top:12px">${extraButton}</div>` : ""}`,
+    body: `${accountFormBody(account)}${extraButton ? `<div style="margin-top:12px">${extraButton}</div>` : ""}${deleteSection}`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="account-form">${account ? "Lưu thay đổi" : "Tạo tài khoản"}</button>`,
   });
   updateAccountPermissionEditor();
@@ -4354,31 +4446,97 @@ async function handleHistoryPurgeSubmit(event, form) {
   });
 }
 
+async function saveAccountFromPayload(payload, submitButton) {
+  await withActionLock("save-account", submitButton, async () => {
+    try {
+      const result = await dataService.saveAccount(payload);
+      if (result?.currentSessionRevoked) {
+        clearAuthSession();
+        setAuthenticatedAccount(null);
+        appState.cache = { schema: null, products: [], transactions: [], accounts: [], accountAudit: [], loaded: { bootstrap: false, transactions: false, accounts: false, accountAudit: false } };
+        closeModal(true);
+        renderApp();
+        showToast("success", "Đã đổi tên đăng nhập", `Hãy đăng nhập lại bằng tên mới: ${result.username}`);
+        return;
+      }
+      await loadAccountData({ render: false });
+      syncCurrentUserFromAccounts();
+      closeModal(true);
+      renderApp();
+      showToast("success", result?.usernameChanged ? "Đã đổi tên đăng nhập" : "Đã lưu tài khoản");
+    } catch (error) {
+      showToast("error", "Không thể lưu tài khoản", error.message);
+    }
+  });
+}
+
 async function handleAccountSubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
   const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock("save-account", submitButton, async () => {
-    try {
-      await dataService.saveAccount({
-        id: data.get("id") || null,
-        expectedRevision: toOptionalNumber(data.get("expectedRevision")),
-        displayName: data.get("displayName"),
-        username: data.get("username"),
-        role: data.get("role"),
-        status: data.get("status") || ACCOUNT_STATUSES.active,
-        scopeMode: data.get("scopeMode") || "all",
-        categoryPermissions: readAccountCategoryPermissions(form),
-        password: data.get("password"),
-        passwordConfirm: data.get("passwordConfirm"),
+  const payload = {
+    id: data.get("id") || null,
+    expectedRevision: toOptionalNumber(data.get("expectedRevision")),
+    displayName: data.get("displayName"),
+    username: data.get("username"),
+    role: data.get("role"),
+    status: data.get("status") || ACCOUNT_STATUSES.active,
+    scopeMode: data.get("scopeMode") || "all",
+    categoryPermissions: readAccountCategoryPermissions(form),
+    password: data.get("password"),
+    passwordConfirm: data.get("passwordConfirm"),
+  };
+  const existing = payload.id ? appState.cache.accounts.find((account) => account.id === payload.id) : null;
+  let normalizedUsername;
+  try {
+    normalizedUsername = validateUsername(payload.username);
+  } catch (error) {
+    showToast("error", "Tên đăng nhập không hợp lệ", error.message);
+    return;
+  }
+  payload.username = normalizedUsername;
+  const usernameChanged = Boolean(existing && normalizedUsername !== normalizeText(existing.username).replace(/\s+/g, ""));
+  if (!usernameChanged) {
+    await saveAccountFromPayload(payload, submitButton);
+    return;
+  }
+  openConfirm({
+    title: "Đổi tên đăng nhập?",
+    message: `Đổi từ “${existing.username}” thành “${normalizedUsername}”? Tài khoản này sẽ bị đăng xuất khỏi tất cả thiết bị và tên cũ không thể dùng lại.`,
+    confirmLabel: "Đổi tên",
+    onConfirm: async (confirmButton) => {
+      await saveAccountFromPayload(payload, confirmButton);
+    },
+  });
+}
+
+function openDeleteAccountConfirm(accountId) {
+  const account = appState.cache.accounts.find((item) => item.id === accountId);
+  if (!account || !canManageAccount(account)) return showToast("error", "Không có quyền xóa tài khoản");
+  if (account.id === appState.currentUser.id) return showToast("warning", "Không thể tự xóa tài khoản đang đăng nhập");
+  openConfirm({
+    title: "Xóa tài khoản?",
+    message: `Tài khoản “${account.username}” chưa phát sinh hoạt động sẽ bị xóa vĩnh viễn. Nếu đã có lịch sử, hệ thống sẽ chỉ chuyển tài khoản sang ngừng sử dụng.`,
+    confirmLabel: "Xác nhận",
+    danger: true,
+    onConfirm: async (confirmButton) => {
+      await withActionLock(`delete-account:${account.id}`, confirmButton, async () => {
+        try {
+          const result = await dataService.deleteAccount(account.id, account.revision ?? null);
+          await loadAccountData({ render: false });
+          closeModal(true);
+          renderApp();
+          if (result?.action === "deleted") {
+            showToast("success", "Đã xóa tài khoản", `Tên đăng nhập ${account.username} được giữ trong lịch sử và không thể dùng lại.`);
+          } else {
+            showToast("success", "Đã ngừng sử dụng", "Tài khoản đã có hoạt động nên không bị xóa khỏi lịch sử.");
+          }
+        } catch (error) {
+          closeModal(true);
+          showToast("error", "Không thể xóa tài khoản", error.message);
+        }
       });
-      await loadAccountData({ render: false });
-      closeModal(true);
-      renderApp();
-      showToast("success", "Đã lưu tài khoản");
-    } catch (error) {
-      showToast("error", "Không thể lưu tài khoản", error.message);
-    }
+    },
   });
 }
 
@@ -4492,6 +4650,7 @@ function bindEvents() {
   on(document, "click", "[data-action='add-account']", () => openAccountForm());
   on(document, "click", "[data-action='edit-account']", (event, button) => openAccountForm(button.dataset.accountId));
   on(document, "click", "[data-action='open-password-reset']", (event, button) => openPasswordResetForm(button.dataset.accountId));
+  on(document, "click", "[data-action='delete-account']", (event, button) => openDeleteAccountConfirm(button.dataset.accountId));
   on(document, "click", "[data-action='add-category']", () => openCategoryForm());
   on(document, "click", "[data-action='edit-category']", (event, button) => openCategoryForm(button.dataset.categoryId));
   on(document, "click", "[data-action='open-delete-category']", (event, button) => openDeleteCategoryModal(button.dataset.categoryId));

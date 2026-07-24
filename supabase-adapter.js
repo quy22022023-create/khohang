@@ -9,7 +9,7 @@
     PERMISSION_DENIED: "Bạn không có quyền thực hiện thao tác này.",
     NOT_FOUND: "Không tìm thấy dữ liệu cần thao tác.",
     DUPLICATE_PRODUCT: "Quy cách vật liệu này đã tồn tại.",
-    DUPLICATE_USERNAME: "Tên đăng nhập đã tồn tại.",
+    DUPLICATE_USERNAME: "Tên đăng nhập đã tồn tại hoặc từng được sử dụng.",
     STALE_REVISION: "Dữ liệu đã được người khác cập nhật. Hãy tải lại rồi thử lại.",
     INSUFFICIENT_STOCK: "Tồn kho không đủ để xuất.",
     DUPLICATE_REQUEST: "Yêu cầu này đã được xử lý trước đó.",
@@ -232,9 +232,11 @@
       },
 
       async saveAccount(payload) {
-        return rpc("kb2_save_account_v1", authenticatedArgs({
+        const result = await rpc("kb2_save_account_v1", authenticatedArgs({
           p_payload: { ...payload, requestKey: payload.requestKey || makeRequestKey("account") },
         }));
+        if (result?.currentSessionRevoked) setToken("");
+        return result;
       },
 
       async setAccountPassword(accountId, password, passwordConfirm) {
@@ -253,6 +255,14 @@
           p_request_key: makeRequestKey("disable"),
         }));
         return true;
+      },
+
+      async deleteAccount(accountId, expectedRevision = null) {
+        return rpc("kb2_delete_account_v1", authenticatedArgs({
+          p_target_account_id: accountId,
+          p_expected_revision: expectedRevision,
+          p_request_key: makeRequestKey("delete-account"),
+        }));
       },
 
       async saveCategory(payload) {
