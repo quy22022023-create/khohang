@@ -1,14 +1,15 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.4
+ * Kho Khuôn Bế 2.0.5
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.5";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 5;
+const EXPORT_REASON_THRESHOLD = 3;
 
 const STORAGE_KEYS = Object.freeze({
   theme: "kho_v2_theme",
@@ -994,6 +995,48 @@ function assertTransactionPermission(type, categoryId = null) {
   }
 }
 
+function transactionRequiresNote(type, amount) {
+  if (type === TRANSACTION_TYPES.adjust) return true;
+  return type === TRANSACTION_TYPES.export && normalizeQuantity(amount, 0) > EXPORT_REASON_THRESHOLD;
+}
+
+function transactionModalPresentation(type) {
+  if (type === TRANSACTION_TYPES.import) {
+    return {
+      title: "Nhập kho",
+      subtitle: "Tăng tồn vật liệu và lưu lịch sử nhập kho.",
+      submitLabel: "Xác nhận nhập kho",
+      submitClass: "btn-primary",
+      iconName: "down",
+    };
+  }
+  if (type === TRANSACTION_TYPES.export) {
+    return {
+      title: "Xuất kho",
+      subtitle: `Xuất tối đa ${EXPORT_REASON_THRESHOLD} đơn vị không cần lý do.`,
+      submitLabel: "Xác nhận xuất kho",
+      submitClass: "btn-warning",
+      iconName: "up",
+    };
+  }
+  if (type === TRANSACTION_TYPES.adjust) {
+    return {
+      title: "Kiểm kê",
+      subtitle: "Đặt lại tồn theo số lượng thực tế.",
+      submitLabel: "Xác nhận kiểm kê",
+      submitClass: "btn-primary",
+      iconName: "check",
+    };
+  }
+  return {
+    title: "Giao dịch kho",
+    subtitle: "Chọn vật liệu và loại giao dịch cần thực hiện.",
+    submitLabel: "Lưu giao dịch",
+    submitClass: "btn-primary",
+    iconName: "swap",
+  };
+}
+
 function validateTransactionPayload(payload, product) {
   if (!product || product.archived) throw new Error("Vật liệu không còn khả dụng.");
   const type = payload.type;
@@ -1014,8 +1057,11 @@ function validateTransactionPayload(payload, product) {
   }
 
   const note = String(payload.note || "").trim();
-  if ([TRANSACTION_TYPES.export, TRANSACTION_TYPES.adjust].includes(type) && !note) {
-    throw new Error(type === TRANSACTION_TYPES.adjust ? "Kiểm kê bắt buộc có lý do." : "Xuất kho bắt buộc có mục đích hoặc ghi chú.");
+  if (type === TRANSACTION_TYPES.adjust && !note) {
+    throw new Error("Kiểm kê bắt buộc có lý do.");
+  }
+  if (type === TRANSACTION_TYPES.export && amount > EXPORT_REASON_THRESHOLD && !note) {
+    throw new Error(`Xuất trên ${EXPORT_REASON_THRESHOLD} đơn vị bắt buộc có lý do.`);
   }
 
   let afterQuantity = currentQuantity;
@@ -2927,24 +2973,77 @@ function openProductDetail(productId) {
     showToast("error", "Không có quyền", "Tài khoản hiện tại không được xem chi tiết vật liệu trong nhóm này.");
     return;
   }
+
   const category = categoryById(product.categoryId);
-  const status = hasPermission(PERMISSIONS.viewQuantity, product.categoryId) ? productStatus(product) : null;
-  const attributeRows = orderedCategoryAttributes(category).map((attribute) => `<div class="detail-row"><div class="detail-key">${escapeHTML(attribute.name)}</div><div class="detail-value">${escapeHTML(attributeDisplayValue(attribute, product.attributes[attribute.id]))}</div></div>`).join("");
-  const quantityRows = hasPermission(PERMISSIONS.viewQuantity, product.categoryId)
-    ? `<div class="detail-row"><div class="detail-key">Tồn hiện tại</div><div class="detail-value">${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</div></div><div class="detail-row"><div class="detail-key">Cảnh báo</div><div class="detail-value">${formatQuantity(product.warningLevel)} ${escapeHTML(product.unit)}</div></div>`
-    : `<div class="detail-row"><div class="detail-key">Tồn kho</div><div class="detail-value">Đã ẩn theo quyền</div></div>`;
-  const actions = [
-    canCreateAnyInventoryTransaction(product.categoryId) ? `<button class="btn btn-primary" type="button" data-action="open-transaction" data-product-id="${escapeHTML(product.id)}">Giao dịch</button>` : "",
-    hasPermission(PERMISSIONS.editProduct, product.categoryId) ? `<button class="btn btn-secondary" type="button" data-action="edit-product" data-product-id="${escapeHTML(product.id)}">Sửa</button>` : "",
+  const canViewQuantity = hasPermission(PERMISSIONS.viewQuantity, product.categoryId);
+  const status = canViewQuantity ? productStatus(product) : null;
+  const canImport = hasPermission(PERMISSIONS.importInventory, product.categoryId);
+  const canExport = hasPermission(PERMISSIONS.exportInventory, product.categoryId);
+  const canEdit = hasPermission(PERMISSIONS.editProduct, product.categoryId);
+  const canArchive = hasPermission(PERMISSIONS.archiveProduct, product.categoryId);
+
+  const attributeRows = orderedCategoryAttributes(category)
+    .map((attribute) => `<div class="detail-row"><div class="detail-key">${escapeHTML(attribute.name)}</div><div class="detail-value">${escapeHTML(attributeDisplayValue(attribute, product.attributes[attribute.id]))}</div></div>`)
+    .join("");
+
+  const stockCard = canViewQuantity
+    ? `<section class="product-stock-card product-stock-${escapeHTML(status.key)}" aria-label="Tồn kho hiện tại">
+        <div class="product-stock-main">
+          <span class="product-stock-label">Tồn hiện tại</span>
+          <strong class="product-stock-value">${formatQuantity(product.quantity)} <small>${escapeHTML(product.unit)}</small></strong>
+          <span class="badge ${escapeHTML(status.className)}">${escapeHTML(status.label)}</span>
+        </div>
+        <div class="product-stock-side">
+          <span>Mức cảnh báo</span>
+          <strong>${formatQuantity(product.warningLevel)} ${escapeHTML(product.unit)}</strong>
+        </div>
+      </section>`
+    : `<div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Đã ẩn số lượng</div><div class="notice-text">Tài khoản hiện tại không được xem tồn kho của nhóm này.</div></div></div>`;
+
+  const quickButtons = [
+    canImport ? `<button class="product-quick-action product-quick-import" type="button" data-action="open-transaction" data-product-id="${escapeHTML(product.id)}" data-transaction-type="${TRANSACTION_TYPES.import}"><span class="product-quick-icon">${icon("down")}</span><span><strong>Nhập kho</strong><small>Tăng số lượng tồn</small></span></button>` : "",
+    canExport ? `<button class="product-quick-action product-quick-export" type="button" data-action="open-transaction" data-product-id="${escapeHTML(product.id)}" data-transaction-type="${TRANSACTION_TYPES.export}" ${normalizeQuantity(product.quantity, 0) <= 0 ? "disabled" : ""}><span class="product-quick-icon">${icon("up")}</span><span><strong>Xuất kho</strong><small>${normalizeQuantity(product.quantity, 0) <= 0 ? "Không còn tồn để xuất" : "Giảm số lượng tồn"}</small></span></button>` : "",
+  ].filter(Boolean);
+
+  const quickActions = quickButtons.length
+    ? `<section class="product-action-section" aria-label="Thao tác kho nhanh">
+        <div class="product-detail-section-title">Thao tác nhanh</div>
+        <div class="product-quick-actions ${quickButtons.length === 1 ? "is-single" : ""}">${quickButtons.join("")}</div>
+      </section>`
+    : "";
+
+  const archiveArea = canArchive
+    ? `<details class="danger-zone">
+        <summary>Tùy chọn khác</summary>
+        <div class="danger-zone-body">
+          <p>Chỉ lưu trữ khi tồn kho đã bằng 0. Lịch sử cũ vẫn được giữ.</p>
+          <button class="btn btn-danger-soft btn-block" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}">${icon("archive")} Lưu trữ vật liệu</button>
+        </div>
+      </details>`
+    : "";
+
+  const footerButtons = [
+    `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>`,
+    canEdit ? `<button class="btn btn-soft" type="button" data-action="edit-product" data-product-id="${escapeHTML(product.id)}">${icon("edit")} Sửa vật liệu</button>` : "",
   ].filter(Boolean).join("");
 
   openModal({
     name: "product-detail",
     title: product.name,
     subtitle: `${category?.name || "Chưa phân nhóm"}${status ? ` · ${status.label}` : ""}`,
-    body: `<div class="detail-grid">${quantityRows}<div class="detail-row"><div class="detail-key">Đơn vị</div><div class="detail-value">${escapeHTML(product.unit)}</div></div>${attributeRows}<div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(product.note || "—")}</div></div><div class="detail-row"><div class="detail-key">Cập nhật</div><div class="detail-value">${formatDateTime(product.updatedAt)}</div></div></div>
-      ${hasPermission(PERMISSIONS.archiveProduct, product.categoryId) ? `<button class="btn btn-danger-soft btn-block" style="margin-top:14px" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}">${icon("archive")} Lưu trữ vật liệu</button>` : ""}`,
-    footer: actions ? `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button><div class="inline-actions">${actions}</div>` : `<button class="btn btn-secondary btn-block" type="button" data-action="close-modal">Đóng</button>`,
+    body: `${stockCard}
+      ${quickActions}
+      <section class="product-detail-section">
+        <div class="product-detail-section-title">Thông tin vật liệu</div>
+        <div class="detail-grid">
+          <div class="detail-row"><div class="detail-key">Đơn vị</div><div class="detail-value">${escapeHTML(product.unit)}</div></div>
+          ${attributeRows}
+          <div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(product.note || "—")}</div></div>
+          <div class="detail-row"><div class="detail-key">Cập nhật</div><div class="detail-value">${formatDateTime(product.updatedAt)}</div></div>
+        </div>
+      </section>
+      ${archiveArea}`,
+    footer: `<div class="product-detail-footer">${footerButtons}</div>`,
   });
 }
 
@@ -3041,33 +3140,70 @@ function renderTransactionTypeButtons(categoryId, selectedType = "") {
   return options.map(([type, label]) => `<button class="segmented-item" type="button" data-action="select-transaction-type" data-type="${type}" aria-pressed="${type === effectiveType}">${label}</button>`).join("");
 }
 
-function transactionFormBody(productId = null) {
+function transactionFormBody(productId = null, preferredType = null) {
   const products = appState.cache.products.filter((product) => !product.archived && canCreateAnyInventoryTransaction(product.categoryId));
   const selected = products.find((product) => product.id === productId) || products[0];
   if (!selected) return renderEmptyState("inventory", "Chưa có vật liệu", "Vai trò hiện tại chưa có vật liệu nào được phép giao dịch.");
+
   const allowedTypes = transactionTypeOptionsForCategory(selected.categoryId);
-  const firstType = allowedTypes[0]?.[0] || "";
+  const lockedType = allowedTypes.some(([type]) => type === preferredType) ? preferredType : null;
+  const firstType = lockedType || allowedTypes[0]?.[0] || "";
+  const presentation = transactionModalPresentation(firstType);
+  const lockProduct = Boolean(productId && lockedType && selected.id === productId);
+  const showNoteInitially = firstType !== TRANSACTION_TYPES.export;
+  const noteRequiredInitially = transactionRequiresNote(firstType, 0);
+
+  const productField = lockProduct
+    ? `<input type="hidden" name="productId" value="${escapeHTML(selected.id)}">
+      <div class="transaction-context-card">
+        <span class="transaction-context-icon">${icon("inventory")}</span>
+        <span class="transaction-context-copy"><small>Vật liệu</small><strong>${escapeHTML(selected.name)}</strong><span>Tồn hiện tại: ${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</span></span>
+      </div>`
+    : `<label class="field" for="transaction-product"><span class="field-label">Vật liệu</span><select id="transaction-product" name="productId" class="select">${products.map((product) => `<option value="${escapeHTML(product.id)}" ${product.id === selected.id ? "selected" : ""}>${escapeHTML(product.name)}</option>`).join("")}</select></label>`;
+
+  const typeField = lockedType
+    ? `<input id="transaction-type" type="hidden" name="type" value="${escapeHTML(firstType)}">
+      <div class="transaction-kind-card transaction-kind-${escapeHTML(firstType)}">
+        <span class="transaction-kind-icon">${icon(presentation.iconName)}</span>
+        <span><small>Loại giao dịch</small><strong>${escapeHTML(TRANSACTION_LABELS[firstType])}</strong></span>
+      </div>`
+    : `<fieldset class="field"><legend class="field-label">Loại giao dịch</legend><div id="transaction-type-buttons" class="segmented" role="group">${renderTransactionTypeButtons(selected.categoryId, firstType)}</div><input id="transaction-type" type="hidden" name="type" value="${escapeHTML(firstType)}"></fieldset>`;
+
   return `<form id="transaction-form" class="field-grid" novalidate>
     <input type="hidden" name="requestKey" value="${escapeHTML(makeId("request"))}">
-    <label class="field" for="transaction-product"><span class="field-label">Vật liệu</span><select id="transaction-product" name="productId" class="select">${products.map((product) => `<option value="${escapeHTML(product.id)}" ${product.id === selected.id ? "selected" : ""}>${escapeHTML(product.name)}</option>`).join("")}</select></label>
-    <fieldset class="field"><legend class="field-label">Loại giao dịch</legend><div id="transaction-type-buttons" class="segmented" role="group">${renderTransactionTypeButtons(selected.categoryId, firstType)}</div><input id="transaction-type" type="hidden" name="type" value="${firstType}"></fieldset>
-    <label class="field" for="transaction-amount"><span id="transaction-amount-label" class="field-label">${firstType === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng"}</span><input id="transaction-amount" name="amount" class="input" type="number" inputmode="decimal" min="0" max="${MAX_QUANTITY}" step="any" required value=""><span id="transaction-unit-help" class="field-help">Đơn vị: ${escapeHTML(selected.unit)}</span></label>
-    <div id="transaction-preview" class="helper-block">Tồn hiện tại: ${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</div>
-    <label class="field" for="transaction-note"><span class="field-label">Lý do / ghi chú</span><textarea id="transaction-note" name="note" class="textarea" rows="3" placeholder="${firstType === TRANSACTION_TYPES.export ? "Bắt buộc khi xuất kho" : firstType === TRANSACTION_TYPES.adjust ? "Bắt buộc khi kiểm kê" : "Nguồn nhập hoặc thông tin liên quan"}"></textarea><span id="transaction-note-help" class="field-help">${firstType === TRANSACTION_TYPES.import ? "Không bắt buộc, nhưng nên ghi nguồn nhập." : "Bắt buộc để bảo đảm lịch sử có thể đối soát."}</span></label>
-    <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Lịch sử không được sửa hoặc xóa</div><div class="notice-text">Nếu nhập sai, quản lý chỉ được đảo giao dịch mới nhất của vật liệu trong phạm vi được cấp.</div></div></div>
+    ${productField}
+    ${typeField}
+    <label class="field" for="transaction-amount"><span id="transaction-amount-label" class="field-label">${firstType === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng"}</span><input id="transaction-amount" name="amount" class="input transaction-amount-input" type="number" inputmode="decimal" min="0" max="${MAX_QUANTITY}" step="any" required value="" placeholder="0"><span id="transaction-unit-help" class="field-help">Đơn vị: ${escapeHTML(selected.unit)}</span></label>
+    <div id="transaction-preview" class="transaction-preview-card"><span>Tồn hiện tại</span><strong>${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</strong><span class="transaction-preview-arrow">→</span><span>Sau giao dịch</span><strong>${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</strong></div>
+    <div id="transaction-reason-rule" class="transaction-rule" data-required="${String(noteRequiredInitially)}">${firstType === TRANSACTION_TYPES.export ? `Xuất tối đa ${EXPORT_REASON_THRESHOLD} đơn vị không cần lý do.` : firstType === TRANSACTION_TYPES.import ? "Nhập kho không bắt buộc ghi chú." : "Kiểm kê bắt buộc nhập lý do."}</div>
+    <label id="transaction-note-field" class="field" for="transaction-note" ${showNoteInitially ? "" : "hidden"}><span id="transaction-note-label" class="field-label">${noteRequiredInitially ? "Lý do *" : "Ghi chú thêm"}</span><textarea id="transaction-note" name="note" class="textarea" rows="3" ${noteRequiredInitially ? "required" : ""} placeholder="${firstType === TRANSACTION_TYPES.adjust ? "Nhập lý do kiểm kê" : "Nguồn nhập hoặc thông tin liên quan"}"></textarea><span id="transaction-note-help" class="field-help">${noteRequiredInitially ? "Bắt buộc để lưu giao dịch." : "Không bắt buộc."}</span></label>
   </form>`;
 }
 
-function openTransactionModal(productId = null) {
-  if (!canCreateAnyInventoryTransaction()) return showToast("error", "Không có quyền giao dịch");
+function openTransactionModal(productId = null, preferredType = null) {
+  const product = productId ? productById(productId) : null;
+  if (preferredType && product) {
+    const permission = transactionPermission(preferredType);
+    if (!permission || !hasPermission(permission, product.categoryId)) {
+      return showToast("error", "Không có quyền", "Tài khoản hiện tại không được thực hiện thao tác này.");
+    }
+  } else if (!canCreateAnyInventoryTransaction()) {
+    return showToast("error", "Không có quyền giao dịch");
+  }
+
+  const lockedType = preferredType && [TRANSACTION_TYPES.import, TRANSACTION_TYPES.export, TRANSACTION_TYPES.adjust].includes(preferredType)
+    ? preferredType
+    : null;
+  const presentation = transactionModalPresentation(lockedType);
   closeModal(true);
   openModal({
     name: "transaction-form",
-    title: "Giao dịch kho",
-    subtitle: "Mỗi lần gửi chỉ tạo đúng một giao dịch.",
-    body: transactionFormBody(productId),
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="transaction-form">Lưu giao dịch</button>`,
+    title: presentation.title,
+    subtitle: presentation.subtitle,
+    body: transactionFormBody(productId, lockedType),
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn ${presentation.submitClass}" type="submit" form="transaction-form">${escapeHTML(presentation.submitLabel)}</button>`,
   });
+  updateTransactionPreview();
 }
 
 function updateTransactionPreview() {
@@ -3082,25 +3218,57 @@ function updateTransactionPreview() {
     type = typeOptions[0]?.[0] || "";
     setValue("#transaction-type", type, form);
   }
+
   const typeButtons = $("#transaction-type-buttons", form);
   if (typeButtons) typeButtons.innerHTML = renderTransactionTypeButtons(product.categoryId, type);
+
   const amount = normalizeQuantity(formData.get("amount"), 0);
   let after = normalizeQuantity(product.quantity, 0);
   if (type === TRANSACTION_TYPES.import) after = normalizeQuantity(after + amount, 0);
   if (type === TRANSACTION_TYPES.export) after = normalizeQuantity(after - amount, 0);
   if (type === TRANSACTION_TYPES.adjust) after = amount;
+
   setText("#transaction-amount-label", type === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng", form);
   setText("#transaction-unit-help", `Đơn vị: ${product.unit}`, form);
+
+  const noteRequired = transactionRequiresNote(type, amount);
+  const noteField = $("#transaction-note-field", form);
   const note = $("#transaction-note", form);
-  if (note) note.placeholder = type === TRANSACTION_TYPES.export ? "Bắt buộc khi xuất kho" : type === TRANSACTION_TYPES.adjust ? "Bắt buộc khi kiểm kê" : "Nguồn nhập hoặc thông tin liên quan";
-  setText("#transaction-note-help", type === TRANSACTION_TYPES.import ? "Không bắt buộc, nhưng nên ghi nguồn nhập." : "Bắt buộc để bảo đảm lịch sử có thể đối soát.", form);
+  const noteLabel = $("#transaction-note-label", form);
+  const noteHelp = $("#transaction-note-help", form);
+  const reasonRule = $("#transaction-reason-rule", form);
+
+  if (note) {
+    note.required = noteRequired;
+    note.placeholder = type === TRANSACTION_TYPES.adjust
+      ? "Nhập lý do kiểm kê"
+      : type === TRANSACTION_TYPES.export
+        ? `Nhập lý do xuất trên ${EXPORT_REASON_THRESHOLD} đơn vị`
+        : "Nguồn nhập hoặc thông tin liên quan";
+  }
+  if (noteField) noteField.hidden = type === TRANSACTION_TYPES.export && !noteRequired;
+  if (noteLabel) noteLabel.textContent = noteRequired ? "Lý do *" : "Ghi chú thêm";
+  if (noteHelp) noteHelp.textContent = noteRequired ? "Bắt buộc để lưu giao dịch." : "Không bắt buộc.";
+  if (reasonRule) {
+    reasonRule.dataset.required = String(noteRequired);
+    if (type === TRANSACTION_TYPES.export) {
+      reasonRule.textContent = noteRequired
+        ? `Bạn đang xuất trên ${EXPORT_REASON_THRESHOLD} đơn vị. Vui lòng nhập lý do.`
+        : `Xuất tối đa ${EXPORT_REASON_THRESHOLD} đơn vị không cần lý do.`;
+    } else if (type === TRANSACTION_TYPES.import) {
+      reasonRule.textContent = "Nhập kho không bắt buộc ghi chú.";
+    } else {
+      reasonRule.textContent = "Kiểm kê bắt buộc nhập lý do.";
+    }
+  }
+
   const preview = $("#transaction-preview", form);
   if (preview) {
     const invalid = after < 0 || after > MAX_QUANTITY;
     preview.classList.toggle("helper-danger", invalid);
     preview.innerHTML = invalid
-      ? `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong> · <strong>Không thể tạo tồn ${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`
-      : `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong> · Sau giao dịch: <strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`;
+      ? `<span>Tồn hiện tại</span><strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong><span class="transaction-preview-arrow">→</span><span>Không hợp lệ</span><strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`
+      : `<span>Tồn hiện tại</span><strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong><span class="transaction-preview-arrow">→</span><span>Sau giao dịch</span><strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`;
   }
 }
 
@@ -3770,7 +3938,7 @@ function bindEvents() {
   on(document, "click", "[data-action='open-product']", (event, button) => openProductDetail(button.dataset.productId));
   on(document, "click", "[data-action='add-product']", () => openProductForm());
   on(document, "click", "[data-action='edit-product']", (event, button) => openProductForm(button.dataset.productId));
-  on(document, "click", "[data-action='open-transaction']", (event, button) => openTransactionModal(button.dataset.productId));
+  on(document, "click", "[data-action='open-transaction']", (event, button) => openTransactionModal(button.dataset.productId || null, button.dataset.transactionType || null));
   on(document, "click", "[data-action='open-transaction-detail']", (event, button) => openTransactionDetail(button.dataset.transactionId));
   on(document, "click", "[data-action='open-reverse-transaction']", (event, button) => openReverseTransactionModal(button.dataset.transactionId));
   on(document, "click", "[data-action='add-account']", () => openAccountForm());
