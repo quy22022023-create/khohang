@@ -1,15 +1,26 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.5
+ * Kho Khuôn Bế 2.0.6
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.5";
+const APP_VERSION = "2.0.6";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 5;
 const EXPORT_REASON_THRESHOLD = 3;
+
+const INVENTORY_PDF_COLUMNS = Object.freeze([
+  { key: "category", label: "Nhóm", defaultChecked: true },
+  { key: "spec", label: "Quy cách", defaultChecked: true },
+  { key: "quantity", label: "Tồn hiện tại", defaultChecked: true, quantityPermission: true },
+  { key: "unit", label: "Đơn vị", defaultChecked: true },
+  { key: "warning", label: "Mức cảnh báo", defaultChecked: true, quantityPermission: true },
+  { key: "status", label: "Tình trạng", defaultChecked: true, quantityPermission: true },
+  { key: "note", label: "Ghi chú", defaultChecked: false },
+  { key: "updatedAt", label: "Cập nhật", defaultChecked: false },
+]);
 
 const STORAGE_KEYS = Object.freeze({
   theme: "kho_v2_theme",
@@ -418,6 +429,8 @@ const appState = {
     confirmCallbackId: null,
     bootstrapError: null,
     initialized: null,
+    inventoryExportMode: false,
+    inventoryExportIds: [],
   },
 };
 
@@ -2533,6 +2546,8 @@ function renderInventoryScreen() {
   const canFilterStatus = visibleInventoryProducts.length > 0 && visibleInventoryProducts.every((product) => hasPermission(PERMISSIONS.viewQuantity, product.categoryId));
   if (!canFilterStatus && appState.filters.inventory.status !== "all") appState.filters.inventory.status = "all";
   const products = filteredProducts();
+  const exportMode = appState.ui.inventoryExportMode;
+  const selectedCount = selectedInventoryProducts().length;
   return `<section class="screen" aria-label="Kho vật liệu">
     <div class="toolbar">
       <div class="toolbar-row">
@@ -2540,7 +2555,7 @@ function renderInventoryScreen() {
           <span class="search-icon">${icon("search")}</span>
           <input id="inventory-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Tìm tên hoặc quy cách" value="${escapeHTML(appState.filters.inventory.search)}">
         </label>
-        ${categoriesWithPermission(PERMISSIONS.addProduct).length ? `<button class="icon-btn" type="button" data-action="add-product" aria-label="Thêm vật liệu">${icon("plus")}</button>` : ""}
+        ${categoriesWithPermission(PERMISSIONS.addProduct).length && !exportMode ? `<button class="icon-btn" type="button" data-action="add-product" aria-label="Thêm vật liệu">${icon("plus")}</button>` : ""}
       </div>
       <div class="filter-grid">
         <label class="field" for="inventory-category">
@@ -2559,21 +2574,34 @@ function renderInventoryScreen() {
       </div>
     </div>
 
-    <div class="section-head">
+    <div class="section-head inventory-section-head">
       <div class="section-copy"><h2 class="section-title">Danh sách vật liệu</h2><p id="inventory-result-count" class="section-subtitle">${products.length} kết quả</p></div>
-      <div class="status-line" data-state="local"><span class="status-dot"></span><span>Trên thiết bị</span></div>
+      <div class="inventory-head-actions">
+        <button class="btn btn-compact ${exportMode ? "btn-secondary" : "btn-soft"}" type="button" data-action="toggle-inventory-export">${icon(exportMode ? "close" : "download")} ${exportMode ? "Hủy chọn" : "Xuất PDF"}</button>
+        <div class="status-line" data-state="${dataService.mode === "supabase" ? "online" : "local"}"><span class="status-dot"></span><span>${dataService.mode === "supabase" ? "Supabase" : "Trên thiết bị"}</span></div>
+      </div>
     </div>
 
-    <div id="inventory-list" class="card list-card">
+    ${exportMode ? `<div class="inventory-export-panel" aria-live="polite">
+      <div class="inventory-export-summary"><strong id="inventory-export-count">${selectedCount}</strong><span>vật liệu đã chọn</span></div>
+      <div class="inventory-export-buttons">
+        <button class="btn btn-compact btn-secondary" type="button" data-action="select-visible-inventory">Chọn tất cả đang hiển thị</button>
+        <button class="btn btn-compact btn-secondary" type="button" data-action="clear-inventory-selection" ${selectedCount ? "" : "disabled"}>Bỏ chọn</button>
+        <button class="btn btn-compact btn-primary" type="button" data-action="open-inventory-pdf-options" ${selectedCount ? "" : "disabled"}>Tiếp tục</button>
+      </div>
+    </div>` : ""}
+
+    <div id="inventory-list" class="card list-card ${exportMode ? "inventory-list-selecting" : ""}">
       ${renderInventoryListContent(products)}
     </div>
   </section>`;
 }
 
 function renderInventoryListContent(products = filteredProducts()) {
-  return products.length
-    ? products.map(renderProductRow).join("")
-    : renderEmptyState("search", "Không tìm thấy vật liệu", "Thử thay đổi từ khóa hoặc bộ lọc.");
+  if (!products.length) return renderEmptyState("search", "Không tìm thấy vật liệu", "Thử thay đổi từ khóa hoặc bộ lọc.");
+  return appState.ui.inventoryExportMode
+    ? products.map(renderInventorySelectionRow).join("")
+    : products.map(renderProductRow).join("");
 }
 
 function renderProductRow(product) {
@@ -2591,6 +2619,167 @@ function renderProductRow(product) {
       ${status ? `<div style="margin-top:5px;text-align:right"><span class="badge ${status.className}">${escapeHTML(status.label)}</span></div>` : ""}
     </div>
   </button>`;
+}
+
+
+function selectedInventoryProductIdSet() {
+  return new Set(Array.isArray(appState.ui.inventoryExportIds) ? appState.ui.inventoryExportIds : []);
+}
+
+function selectedInventoryProducts() {
+  const selectedIds = selectedInventoryProductIdSet();
+  return appState.cache.products
+    .filter((product) => selectedIds.has(product.id) && hasPermission(PERMISSIONS.viewInventory, product.categoryId))
+    .sort((left, right) => left.name.localeCompare(right.name, "vi"));
+}
+
+function renderInventorySelectionRow(product) {
+  const category = categoryById(product.categoryId);
+  const canViewQuantity = hasPermission(PERMISSIONS.viewQuantity, product.categoryId);
+  const status = canViewQuantity ? productStatus(product) : null;
+  const quantityText = canViewQuantity ? `${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}` : "Đã ẩn";
+  const checked = selectedInventoryProductIdSet().has(product.id);
+  return `<label class="list-row inventory-select-row" for="inventory-select-${escapeHTML(product.id)}">
+    <input id="inventory-select-${escapeHTML(product.id)}" class="inventory-select-checkbox" type="checkbox" data-product-id="${escapeHTML(product.id)}" ${checked ? "checked" : ""}>
+    <div class="row-main">
+      <div class="row-title">${escapeHTML(product.name)}</div>
+      <div class="row-sub">${escapeHTML(category?.name || "Chưa phân nhóm")} · ${product.note ? escapeHTML(product.note) : "Không có ghi chú"}</div>
+    </div>
+    <div class="row-copy">
+      <div class="row-value">${quantityText}</div>
+      ${status ? `<div class="inventory-select-status"><span class="badge ${status.className}">${escapeHTML(status.label)}</span></div>` : ""}
+    </div>
+  </label>`;
+}
+
+function updateInventoryExportControls() {
+  const count = selectedInventoryProducts().length;
+  setText("#inventory-export-count", count);
+  const continueButton = $("[data-action='open-inventory-pdf-options']");
+  const clearButton = $("[data-action='clear-inventory-selection']");
+  if (continueButton) continueButton.disabled = count === 0;
+  if (clearButton) clearButton.disabled = count === 0;
+}
+
+function toggleInventoryExportSelection(productId, checked) {
+  const selectedIds = selectedInventoryProductIdSet();
+  if (checked) selectedIds.add(productId);
+  else selectedIds.delete(productId);
+  appState.ui.inventoryExportIds = [...selectedIds];
+  updateInventoryExportControls();
+}
+
+function selectVisibleInventoryProducts() {
+  const selectedIds = selectedInventoryProductIdSet();
+  filteredProducts().forEach((product) => selectedIds.add(product.id));
+  appState.ui.inventoryExportIds = [...selectedIds];
+  updateInventoryListOnly();
+}
+
+function clearInventoryExportSelection() {
+  appState.ui.inventoryExportIds = [];
+  updateInventoryListOnly();
+}
+
+function productSpecificationText(product) {
+  const category = categoryById(product.categoryId);
+  if (!category) return "—";
+  const values = orderedCategoryAttributes(category)
+    .map((attribute) => {
+      const value = product.attributes?.[attribute.id];
+      if (value === "" || value === null || value === undefined) return null;
+      return `${attribute.name}: ${attributeDisplayValue(attribute, value)}`;
+    })
+    .filter(Boolean);
+  return values.length ? values.join("; ") : "—";
+}
+
+function openInventoryPdfOptions() {
+  const products = selectedInventoryProducts();
+  if (!products.length) return showToast("warning", "Chưa chọn vật liệu", "Tick ít nhất một vật liệu trước khi xuất.");
+  const canExportAnyQuantity = products.some((product) => hasPermission(PERMISSIONS.viewQuantity, product.categoryId));
+  const columnItems = INVENTORY_PDF_COLUMNS.map((column) => {
+    const disabled = column.quantityPermission && !canExportAnyQuantity;
+    return `<label class="pdf-column-item ${disabled ? "pdf-column-disabled" : ""}">
+      <input type="checkbox" name="columns" value="${escapeHTML(column.key)}" ${column.defaultChecked && !disabled ? "checked" : ""} ${disabled ? "disabled" : ""}>
+      <span><strong>${escapeHTML(column.label)}</strong>${disabled ? "<small>Không có quyền xem số lượng.</small>" : ""}</span>
+    </label>`;
+  }).join("");
+  openModal({
+    name: "inventory-pdf-form",
+    title: "Chọn cột xuất PDF",
+    subtitle: `${products.length} vật liệu đã chọn`,
+    body: `<form id="inventory-pdf-form" class="field-grid" novalidate>
+      <div class="notice"><div class="notice-icon">${icon("download")}</div><div><div class="notice-title">PDF chỉ gồm bảng dữ liệu</div><div class="notice-text">STT và tên vật liệu luôn được giữ. Không có tiêu đề, ngày xuất, người xuất hoặc tổng số vật liệu trên PDF.</div></div></div>
+      <div class="pdf-column-grid">${columnItems}</div>
+    </form>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="inventory-pdf-form">${icon("download")} In / Lưu PDF</button>`,
+  });
+}
+
+function inventoryPdfCell(product, key) {
+  const category = categoryById(product.categoryId);
+  const canViewQuantity = hasPermission(PERMISSIONS.viewQuantity, product.categoryId);
+  if (key === "category") return category?.name || "—";
+  if (key === "spec") return productSpecificationText(product);
+  if (key === "quantity") return canViewQuantity ? formatQuantity(product.quantity) : "Đã ẩn";
+  if (key === "unit") return product.unit || "—";
+  if (key === "warning") return canViewQuantity ? formatQuantity(product.warningLevel) : "Đã ẩn";
+  if (key === "status") return canViewQuantity ? productStatus(product).label : "Đã ẩn";
+  if (key === "note") return product.note || "—";
+  if (key === "updatedAt") return formatDateTime(product.updatedAt);
+  return "—";
+}
+
+function buildInventoryPrintDocument(products, columnKeys) {
+  const columns = INVENTORY_PDF_COLUMNS.filter((column) => columnKeys.includes(column.key));
+  const allColumns = [{ key: "index", label: "STT" }, { key: "name", label: "Vật liệu" }, ...columns];
+  const landscape = allColumns.length > 6;
+  const headers = allColumns.map((column) => `<th>${escapeHTML(column.label)}</th>`).join("");
+  const rows = products.map((product, index) => `<tr>${allColumns.map((column) => {
+    const value = column.key === "index" ? String(index + 1) : column.key === "name" ? product.name : inventoryPdfCell(product, column.key);
+    const className = ["index", "quantity", "warning"].includes(column.key) ? "numeric" : "";
+    return `<td class="${className}">${escapeHTML(value)}</td>`;
+  }).join("")}</tr>`).join("");
+  const fileDate = formatISODate(new Date()) || "bao-cao";
+  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>vat-lieu-${fileDate}</title><style>
+    @page { size: A4 ${landscape ? "landscape" : "portrait"}; margin: 10mm; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; color: #111; background: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 10.5pt; }
+    table { width: 100%; border-collapse: collapse; table-layout: auto; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    th, td { padding: 6px 7px; border: 1px solid #444; vertical-align: top; text-align: left; overflow-wrap: anywhere; }
+    th { background: #f1f1f1; font-weight: 750; }
+    th:first-child, td:first-child { width: 42px; text-align: center; }
+    td.numeric { text-align: right; white-space: nowrap; }
+    .print-tools { position: sticky; top: 0; display: flex; justify-content: flex-end; padding: 10px; background: #fff; }
+    .print-tools button { min-height: 44px; padding: 8px 14px; border: 0; border-radius: 10px; background: #246b49; color: #fff; font: inherit; font-weight: 700; }
+    @media print { .print-tools { display: none !important; } }
+  </style></head><body><div class="print-tools"><button type="button" onclick="window.print()">In / Lưu PDF</button></div><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250),{once:true});<\/script></body></html>`;
+}
+
+function printInventoryPdf(products, columnKeys) {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) throw new Error("Trình duyệt đang chặn cửa sổ in. Hãy cho phép mở cửa sổ mới rồi thử lại.");
+  printWindow.document.open();
+  printWindow.document.write(buildInventoryPrintDocument(products, columnKeys));
+  printWindow.document.close();
+  printWindow.focus();
+}
+
+function handleInventoryPdfSubmit(event, form) {
+  event.preventDefault();
+  const products = selectedInventoryProducts();
+  if (!products.length) return showToast("warning", "Chưa chọn vật liệu");
+  const columnKeys = new FormData(form).getAll("columns").map(String);
+  try {
+    printInventoryPdf(products, columnKeys);
+    closeModal(true);
+    showToast("success", "Đã mở bản in", "Trên iPhone, chọn In rồi lưu thành PDF hoặc chia sẻ.");
+  } catch (error) {
+    showToast("error", "Không thể mở bản PDF", error.message);
+  }
 }
 
 function filteredTransactions() {
@@ -3612,6 +3801,7 @@ function updateInventoryListOnly() {
   const products = filteredProducts();
   list.innerHTML = renderInventoryListContent(products);
   setText("#inventory-result-count", `${products.length} kết quả`);
+  updateInventoryExportControls();
 }
 
 function updateHistoryListOnly() {
@@ -3627,6 +3817,10 @@ const debouncedHistoryFilter = debounce(updateHistoryListOnly, 160);
 
 async function switchScreen(screen, manageTarget = null) {
   if (!Object.values(SCREENS).includes(screen)) return;
+  if (screen !== SCREENS.inventory) {
+    appState.ui.inventoryExportMode = false;
+    appState.ui.inventoryExportIds = [];
+  }
   appState.screen = screen;
   if (manageTarget && Object.values(MANAGE_TABS).includes(manageTarget)) appState.manageTab = manageTarget;
   closeModal(true);
@@ -3935,6 +4129,14 @@ function bindEvents() {
     });
   });
   on(document, "click", "[data-action='close-modal']", () => closeModal());
+  on(document, "click", "[data-action='toggle-inventory-export']", () => {
+    appState.ui.inventoryExportMode = !appState.ui.inventoryExportMode;
+    if (!appState.ui.inventoryExportMode) appState.ui.inventoryExportIds = [];
+    renderApp();
+  });
+  on(document, "click", "[data-action='select-visible-inventory']", selectVisibleInventoryProducts);
+  on(document, "click", "[data-action='clear-inventory-selection']", clearInventoryExportSelection);
+  on(document, "click", "[data-action='open-inventory-pdf-options']", openInventoryPdfOptions);
   on(document, "click", "[data-action='open-product']", (event, button) => openProductDetail(button.dataset.productId));
   on(document, "click", "[data-action='add-product']", () => openProductForm());
   on(document, "click", "[data-action='edit-product']", (event, button) => openProductForm(button.dataset.productId));
@@ -4096,7 +4298,7 @@ function bindEvents() {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     const formId = form.getAttribute("id") || "";
-    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "history-purge-form", "account-form", "password-reset-form", "category-form", "delete-category-form"]);
+    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "history-purge-form", "account-form", "password-reset-form", "category-form", "delete-category-form", "inventory-pdf-form"]);
     if (!handledForms.has(formId)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -4111,6 +4313,7 @@ function bindEvents() {
     if (formId === "password-reset-form") handlePasswordResetSubmit(event, form);
     if (formId === "category-form") handleCategorySubmit(event, form);
     if (formId === "delete-category-form") handleDeleteCategorySubmit(event, form);
+    if (formId === "inventory-pdf-form") handleInventoryPdfSubmit(event, form);
   }, true);
 
   document.addEventListener("input", (event) => {
@@ -4131,6 +4334,9 @@ function bindEvents() {
   document.addEventListener("change", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+    if (target.classList.contains("inventory-select-checkbox")) {
+      toggleInventoryExportSelection(target.dataset.productId, target.checked);
+    }
     if (target.id === "inventory-category") {
       appState.filters.inventory.category = target.value;
       updateInventoryListOnly();
