@@ -1,12 +1,12 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.9
+ * Kho Khuôn Bế 2.0.10
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.9";
+const APP_VERSION = "2.0.10";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
 const DATA_FORMAT_VERSION = 6;
 const EXPORT_REASON_THRESHOLD = 3;
@@ -690,7 +690,8 @@ function showToast(type, title, message = "") {
   toast.innerHTML = `${icon(type === "success" ? "check" : type === "error" ? "warning" : "info")}
     <div><div class="toast-title">${escapeHTML(title)}</div>${message ? `<div class="toast-message">${escapeHTML(message)}</div>` : ""}</div>`;
   root.append(toast);
-  window.setTimeout(() => toast.remove(), 3600);
+  const duration = type === "error" ? 5200 : type === "warning" ? 4200 : 2600;
+  window.setTimeout(() => toast.remove(), duration);
 }
 
 function applyTheme(theme) {
@@ -2498,12 +2499,12 @@ function renderLoginScreen() {
         <button class="btn btn-primary btn-full" type="submit">Đăng nhập</button>
       </form>`}
       ${dataService.mode === "local"
-        ? `<div class="notice"><div class="notice-icon">${icon("info")}</div><div><div class="notice-title">Tài khoản thử nghiệm</div><div class="notice-text"><strong>superadmin-demo</strong> · mật khẩu <strong>${escapeHTML(DEFAULT_DEMO_PASSWORD)}</strong>.</div></div></div>`
+        ? `<div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Tài khoản thử nghiệm</div><div class="notice-text"><strong>superadmin-demo</strong> · mật khẩu <strong>${escapeHTML(DEFAULT_DEMO_PASSWORD)}</strong>.</div></div></div>`
         : dataServiceConfigurationError
           ? `<div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Supabase chưa cấu hình</div><div class="notice-text">${escapeHTML(dataServiceConfigurationError.message)}</div></div></div>`
           : appState.ui.bootstrapError
             ? `<div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Database chưa sẵn sàng</div><div class="notice-text">${escapeHTML(appState.ui.bootstrapError)} Hãy chạy file database.sql trong Supabase SQL Editor.</div></div></div>`
-            : `<div class="notice"><div class="notice-icon">${icon("cloud")}</div><div><div class="notice-title">Dữ liệu Supabase</div><div class="notice-text">Dùng được trên iPhone, iPad và máy tính. Không cần email thật.</div></div></div>`}
+            : ""}
       <div class="app-footer-note">Phiên bản ${APP_VERSION}</div>
     </section>
   </main>`;
@@ -2564,14 +2565,6 @@ function renderDashboardScreen() {
   const recentTransactions = historyTransactions.slice(0, 4);
 
   return `<section class="screen" aria-label="Tổng quan kho">
-    <div class="notice">
-      <div class="notice-icon">${icon(dataService.mode === "supabase" ? "cloud" : "database")}</div>
-      <div>
-        <div class="notice-title">${dataService.mode === "supabase" ? "Đã kết nối Supabase" : "Bản thử nghiệm trên thiết bị"}</div>
-        <div class="notice-text">${dataService.mode === "supabase" ? "Dữ liệu được lưu trên cloud và dùng chung giữa iPhone, iPad và máy tính." : "Dữ liệu hiện tại chỉ dùng để kiểm thử giao diện và nghiệp vụ."}</div>
-      </div>
-    </div>
-
     <article class="hero-card">
       <div class="hero-label">${canViewQuantity ? "Tổng số lượng đang quản lý" : "Tổng quan tồn kho"}</div>
       <div class="hero-value">${canViewQuantity ? formatQuantity(totalQuantity) : "Đã ẩn"}</div>
@@ -2663,7 +2656,6 @@ function renderInventoryScreen() {
       <div class="section-copy"><h2 class="section-title">Danh sách vật liệu</h2><p id="inventory-result-count" class="section-subtitle">${products.length} kết quả</p></div>
       <div class="inventory-head-actions">
         <button class="btn btn-compact ${exportMode ? "btn-secondary" : "btn-soft"}" type="button" data-action="toggle-inventory-export">${icon(exportMode ? "close" : "download")} ${exportMode ? "Hủy chọn" : "Xuất PDF"}</button>
-        <div class="status-line" data-state="${dataService.mode === "supabase" ? "online" : "local"}"><span class="status-dot"></span><span>${dataService.mode === "supabase" ? "Supabase" : "Trên thiết bị"}</span></div>
       </div>
     </div>
 
@@ -2795,7 +2787,6 @@ function openInventoryPdfOptions() {
     title: "Chọn cột xuất PDF",
     subtitle: `${products.length} vật liệu đã chọn`,
     body: `<form id="inventory-pdf-form" class="field-grid" novalidate>
-      <div class="notice"><div class="notice-icon">${icon("download")}</div><div><div class="notice-title">PDF được căn cột tự động</div><div class="notice-text">STT và tên vật liệu luôn được giữ. Chữ sẽ xuống dòng theo từ, không bị tràn cột; PDF không có tiêu đề hoặc thông tin phụ.</div></div></div>
       <div class="pdf-column-grid">${columnItems}</div>
     </form>`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="inventory-pdf-form">${icon("download")} Tạo PDF</button>`,
@@ -3302,10 +3293,10 @@ function renderAccountsPanel() {
       <div class="section-copy"><h2 class="section-title">Tài khoản</h2><p class="section-subtitle">Vai trò, trạng thái và quyền riêng theo từng nhóm vật liệu.</p></div>
       ${canManageAccount() ? `<button class="btn btn-compact btn-primary" type="button" data-action="add-account">${icon("plus")} Tạo</button>` : ""}
     </div>
-    <div class="notice ${dataService.mode === "supabase" ? "notice-success" : "notice-warning"}">
-      <div class="notice-icon">${icon(dataService.mode === "supabase" ? "shield" : "warning")}</div>
-      <div><div class="notice-title">${dataService.mode === "supabase" ? "Tài khoản lưu trên Supabase" : "Tài khoản thử nghiệm trên thiết bị"}</div><div class="notice-text">${dataService.mode === "supabase" ? "Mật khẩu chỉ lưu dạng bcrypt hash; Super Admin quản lý tài khoản ngay trong app." : "Dữ liệu local chỉ dùng kiểm thử giao diện."}</div></div>
-    </div>
+    ${dataService.mode === "local" ? `<div class="notice notice-warning">
+      <div class="notice-icon">${icon("warning")}</div>
+      <div><div class="notice-title">Tài khoản thử nghiệm trên thiết bị</div><div class="notice-text">Dữ liệu local chỉ dùng kiểm thử giao diện.</div></div>
+    </div>` : ""}
     <div class="card list-card">
       ${appState.cache.accounts.length ? appState.cache.accounts.map((account) => {
         const status = accountStatus(account);
@@ -3331,10 +3322,6 @@ function renderCategoriesPanel() {
     <div class="section-head">
       <div class="section-copy"><h2 class="section-title">Nhóm và thuộc tính</h2><p class="section-subtitle">Thứ tự hiển thị điều khiển form và tên; khóa chống trùng được giữ độc lập.</p></div>
       <button class="btn btn-compact btn-primary" type="button" data-action="add-category">${icon("plus")} Thêm</button>
-    </div>
-    <div class="notice">
-      <div class="notice-icon">${icon("info")}</div>
-      <div><div class="notice-title">Thứ tự hiển thị không đổi khóa chống trùng</div><div class="notice-text">Bạn có thể sắp xếp lại thuộc tính an toàn. Chỉ khi thêm, bỏ hoặc đổi thuộc tính nhận diện mới cần migration chữ ký trong production.</div></div>
     </div>
     <div class="card list-card">
       ${categories.map((category) => `<button class="list-row list-row-button" type="button" data-action="edit-category" data-category-id="${escapeHTML(category.id)}">
@@ -3379,10 +3366,6 @@ function renderDataPanel() {
 
   if (!dataService.capabilities?.localBackup) {
     return `<div class="screen">
-      <div class="notice notice-success">
-        <div class="notice-icon">${icon("check")}</div>
-        <div><div class="notice-title">Dữ liệu đang lưu trên Supabase</div><div class="notice-text">Ứng dụng không cho tải toàn bộ database hoặc phục hồi JSON trực tiếp từ trình duyệt.</div></div>
-      </div>
       <div class="card list-card">
         <div class="list-row">
           <div class="row-main"><div class="row-title">Sao lưu database</div><div class="row-sub">Thiết lập backup hoặc Point-in-Time Recovery trong Supabase Dashboard.</div></div><div class="row-actions">${icon("shield")}</div>
@@ -3562,7 +3545,7 @@ function openProfileModal() {
     </div>
     ${dataService.mode === "local"
       ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Dữ liệu chỉ nằm trên thiết bị</div><div class="notice-text">Chế độ local chỉ dùng xem thử; dữ liệu không đồng bộ giữa các thiết bị.</div></div></div>`
-      : `<div class="notice notice-success" style="margin-top:14px"><div class="notice-icon">${icon("check")}</div><div><div class="notice-title">Đang dùng dữ liệu cloud</div><div class="notice-text">Quyền và giao dịch được kiểm tra lại tại Supabase.</div></div></div>`}`,
+      : ""}`,
     footer: `<button class="btn btn-danger" type="button" data-action="logout">Đăng xuất</button><button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>`,
   });
 }
@@ -3966,7 +3949,6 @@ function accountFormBody(account = null) {
         return `<label class="scope-permission-item"><input type="checkbox" data-account-scope-permission data-category-id="${escapeHTML(category.id)}" data-permission="${escapeHTML(permission)}" ${checked ? "checked" : ""} ${allowedScoped.has(permission) && model.scopeMode === "custom" ? "" : "disabled"}><span>${escapeHTML(name)}</span></label>`;
       }).join("")}</div></fieldset>`).join("")}
     </div>
-    <div class="notice"><div class="notice-icon">${icon("info")}</div><div><div class="notice-title">Không bắt buộc đổi mật khẩu lần đầu</div><div class="notice-text">Tài khoản mới đăng nhập và sử dụng ngay theo quyền được cấp. Super Admin có thể đặt mật khẩu mới khi cần.</div></div></div>
   </form>`;
 }
 
@@ -3981,7 +3963,6 @@ function openPasswordResetForm(accountId) {
       <input type="hidden" name="accountId" value="${escapeHTML(account.id)}">
       <label class="field" for="reset-password"><span class="field-label">Mật khẩu mới</span><input id="reset-password" name="password" class="input" type="password" autocomplete="new-password" minlength="8" required autofocus><span class="field-help">Tối thiểu 8 ký tự, có chữ và số.</span></label>
       <label class="field" for="reset-password-confirm"><span class="field-label">Xác nhận mật khẩu</span><input id="reset-password-confirm" name="passwordConfirm" class="input" type="password" autocomplete="new-password" minlength="8" required></label>
-      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Có hiệu lực ngay</div><div class="notice-text">Tài khoản không bị bắt buộc đổi lại mật khẩu ở lần đăng nhập sau.</div></div></div>
     </form>`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="password-reset-form">Lưu mật khẩu</button>`,
   });
