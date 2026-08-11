@@ -9,7 +9,7 @@
     PERMISSION_DENIED: "Bạn không có quyền thực hiện thao tác này.",
     NOT_FOUND: "Không tìm thấy dữ liệu cần thao tác.",
     DUPLICATE_PRODUCT: "Quy cách vật liệu này đã tồn tại.",
-    DUPLICATE_USERNAME: "Tên đăng nhập đã tồn tại hoặc từng được sử dụng.",
+    DUPLICATE_USERNAME: "Tên đăng nhập đã tồn tại.",
     STALE_REVISION: "Dữ liệu đã được người khác cập nhật. Hãy tải lại rồi thử lại.",
     INSUFFICIENT_STOCK: "Tồn kho không đủ để xuất.",
     DUPLICATE_REQUEST: "Yêu cầu này đã được xử lý trước đó.",
@@ -232,11 +232,9 @@
       },
 
       async saveAccount(payload) {
-        const result = await rpc("kb2_save_account_v1", authenticatedArgs({
+        return rpc("kb2_save_account_v1", authenticatedArgs({
           p_payload: { ...payload, requestKey: payload.requestKey || makeRequestKey("account") },
         }));
-        if (result?.currentSessionRevoked) setToken("");
-        return result;
       },
 
       async setAccountPassword(accountId, password, passwordConfirm) {
@@ -257,14 +255,6 @@
         return true;
       },
 
-      async deleteAccount(accountId, expectedRevision = null) {
-        return rpc("kb2_delete_account_v1", authenticatedArgs({
-          p_target_account_id: accountId,
-          p_expected_revision: expectedRevision,
-          p_request_key: makeRequestKey("delete-account"),
-        }));
-      },
-
       async saveCategory(payload) {
         return rpc("kb2_save_category_v1", authenticatedArgs({ p_payload: normalizeCategoryPayload(payload) }));
       },
@@ -278,29 +268,11 @@
         return true;
       },
 
-      async deleteCategory({ categoryId, expectedRevision = null, reason = "" } = {}) {
-        return rpc("kb2_delete_category_v1", authenticatedArgs({
-          p_category_code: categoryId,
-          p_expected_revision: expectedRevision,
-          p_reason: String(reason || "").trim(),
-          p_confirmation: "XOA NHOM",
-        }));
-      },
-
-      async deleteInventoryHistory({ before = null, reason = "" } = {}) {
+      async deleteInventoryHistory({ before = null, reason = "", confirmation = "" } = {}) {
         return rpc("kb2_delete_inventory_history_v1", authenticatedArgs({
           p_before: before ? localDayBoundary(before, 1) : null,
           p_reason: String(reason || "").trim(),
-          p_confirmation: "XOA LICH SU",
-        }));
-      },
-
-      async purgeInventoryHistory({ before = null, reason = "" } = {}) {
-        return rpc("kb2_purge_inventory_history_v1", authenticatedArgs({
-          p_before: before ? localDayBoundary(before, 1) : null,
-          p_reason: String(reason || "").trim(),
-          p_confirmation: "XOA VINH VIEN",
-          p_acknowledged: true,
+          p_confirmation: String(confirmation || "").trim(),
         }));
       },
 

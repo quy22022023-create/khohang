@@ -1,26 +1,14 @@
 "use strict";
 
 /*
- * Kho Khuôn Bế 2.0.10
+ * Kho Khuôn Bế 2.0.2
  * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
  * Không đặt service-role/secret key trong frontend.
  */
 
-const APP_VERSION = "2.0.10";
+const APP_VERSION = "2.0.2";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
-const DATA_FORMAT_VERSION = 6;
-const EXPORT_REASON_THRESHOLD = 3;
-
-const INVENTORY_PDF_COLUMNS = Object.freeze([
-  { key: "category", label: "Nhóm", defaultChecked: true },
-  { key: "spec", label: "Quy cách", defaultChecked: true },
-  { key: "quantity", label: "Tồn hiện tại", defaultChecked: true, quantityPermission: true },
-  { key: "unit", label: "Đơn vị", defaultChecked: true },
-  { key: "warning", label: "Mức cảnh báo", defaultChecked: true, quantityPermission: true },
-  { key: "status", label: "Tình trạng", defaultChecked: true, quantityPermission: true },
-  { key: "note", label: "Ghi chú", defaultChecked: false },
-  { key: "updatedAt", label: "Cập nhật", defaultChecked: false },
-]);
+const DATA_FORMAT_VERSION = 5;
 
 const STORAGE_KEYS = Object.freeze({
   theme: "kho_v2_theme",
@@ -418,7 +406,7 @@ const appState = {
     loaded: { bootstrap: false, transactions: false, accounts: false, accountAudit: false },
   },
   filters: {
-    inventory: { search: "", category: "all", status: "all" },
+    inventory: { search: "", category: "all", status: "all", quantityBelow: "" },
     history: { search: "", type: "all", from: "", to: "" },
   },
   ui: {
@@ -429,8 +417,6 @@ const appState = {
     confirmCallbackId: null,
     bootstrapError: null,
     initialized: null,
-    inventoryExportMode: false,
-    inventoryExportIds: [],
   },
 };
 
@@ -468,6 +454,41 @@ function normalizeText(value) {
     .trim()
     .replace(/×/g, "x")
     .replace(/\s+/g, " ");
+}
+
+function normalizeSearchText(value) {
+  let normalized = normalizeText(value)
+    .replace(/(\d),(\d)/g, "$1.$2")
+    .replace(/(\d)\s*x\s*(?=\d)/g, "$1 ")
+    .replace(/[·•∙⋅・‧‣◦▪●○◆◇|/\\;:_=+\-–—()[\]{}<>!?"'“”‘’]/g, " ")
+    .replace(/,/g, " ");
+
+  normalized = normalized.replace(/\./g, (character, offset, source) => {
+    const previous = source[offset - 1] || "";
+    const next = source[offset + 1] || "";
+    return /\d/.test(previous) && /\d/.test(next) ? character : " ";
+  });
+
+  return normalized.replace(/\s+/g, " ").trim();
+}
+
+function searchTokens(value) {
+  const normalized = normalizeSearchText(value);
+  return normalized ? [...new Set(normalized.split(" ").filter(Boolean))] : [];
+}
+
+function productSearchText(product, category) {
+  const parts = [product?.name, product?.customName, product?.note, category?.name];
+
+  if (product?.categoryId && hasPermission(PERMISSIONS.viewDetail, product.categoryId)) {
+    for (const attribute of orderedCategoryAttributes(category)) {
+      const value = product?.attributes?.[attribute.id];
+      if (value === "" || value === null || value === undefined) continue;
+      parts.push(attribute.name, attributeDisplayValue(attribute, value));
+    }
+  }
+
+  return normalizeSearchText(parts.filter(Boolean).join(" "));
 }
 
 function slugify(value) {
@@ -690,8 +711,7 @@ function showToast(type, title, message = "") {
   toast.innerHTML = `${icon(type === "success" ? "check" : type === "error" ? "warning" : "info")}
     <div><div class="toast-title">${escapeHTML(title)}</div>${message ? `<div class="toast-message">${escapeHTML(message)}</div>` : ""}</div>`;
   root.append(toast);
-  const duration = type === "error" ? 5200 : type === "warning" ? 4200 : 2600;
-  window.setTimeout(() => toast.remove(), duration);
+  window.setTimeout(() => toast.remove(), 3600);
 }
 
 function applyTheme(theme) {
@@ -1009,48 +1029,6 @@ function assertTransactionPermission(type, categoryId = null) {
   }
 }
 
-function transactionRequiresNote(type, amount) {
-  if (type === TRANSACTION_TYPES.adjust) return true;
-  return type === TRANSACTION_TYPES.export && normalizeQuantity(amount, 0) > EXPORT_REASON_THRESHOLD;
-}
-
-function transactionModalPresentation(type) {
-  if (type === TRANSACTION_TYPES.import) {
-    return {
-      title: "Nhập kho",
-      subtitle: "Tăng tồn vật liệu và lưu lịch sử nhập kho.",
-      submitLabel: "Xác nhận nhập kho",
-      submitClass: "btn-primary",
-      iconName: "down",
-    };
-  }
-  if (type === TRANSACTION_TYPES.export) {
-    return {
-      title: "Xuất kho",
-      subtitle: `Xuất tối đa ${EXPORT_REASON_THRESHOLD} đơn vị không cần lý do.`,
-      submitLabel: "Xác nhận xuất kho",
-      submitClass: "btn-warning",
-      iconName: "up",
-    };
-  }
-  if (type === TRANSACTION_TYPES.adjust) {
-    return {
-      title: "Kiểm kê",
-      subtitle: "Đặt lại tồn theo số lượng thực tế.",
-      submitLabel: "Xác nhận kiểm kê",
-      submitClass: "btn-primary",
-      iconName: "check",
-    };
-  }
-  return {
-    title: "Giao dịch kho",
-    subtitle: "Chọn vật liệu và loại giao dịch cần thực hiện.",
-    submitLabel: "Lưu giao dịch",
-    submitClass: "btn-primary",
-    iconName: "swap",
-  };
-}
-
 function validateTransactionPayload(payload, product) {
   if (!product || product.archived) throw new Error("Vật liệu không còn khả dụng.");
   const type = payload.type;
@@ -1071,11 +1049,8 @@ function validateTransactionPayload(payload, product) {
   }
 
   const note = String(payload.note || "").trim();
-  if (type === TRANSACTION_TYPES.adjust && !note) {
-    throw new Error("Kiểm kê bắt buộc có lý do.");
-  }
-  if (type === TRANSACTION_TYPES.export && amount > EXPORT_REASON_THRESHOLD && !note) {
-    throw new Error(`Xuất trên ${EXPORT_REASON_THRESHOLD} đơn vị bắt buộc có lý do.`);
+  if ([TRANSACTION_TYPES.export, TRANSACTION_TYPES.adjust].includes(type) && !note) {
+    throw new Error(type === TRANSACTION_TYPES.adjust ? "Kiểm kê bắt buộc có lý do." : "Xuất kho bắt buộc có mục đích hoặc ghi chú.");
   }
 
   let afterQuantity = currentQuantity;
@@ -1219,30 +1194,6 @@ function migrateStoreData(data) {
     changed = true;
   }
 
-  if (!Array.isArray(store.usernameHistory)) {
-    store.usernameHistory = [];
-    changed = true;
-  }
-  const reservedUsernames = new Set(store.usernameHistory.map((item) => normalizeText(item?.username).replace(/\s+/g, "")).filter(Boolean));
-  for (const account of store.accounts) {
-    const normalizedUsername = normalizeText(account.username).replace(/\s+/g, "");
-    if (!reservedUsernames.has(normalizedUsername)) {
-      store.usernameHistory.push({
-        id: makeId("username"),
-        accountId: account.id,
-        username: normalizedUsername,
-        assignedAt: account.createdAt || new Date().toISOString(),
-        retiredAt: null,
-      });
-      reservedUsernames.add(normalizedUsername);
-      changed = true;
-    }
-    if (!Number.isFinite(Number(account.revision)) || Number(account.revision) < 1) {
-      account.revision = 1;
-      changed = true;
-    }
-  }
-
   const schemaCategoryIds = new Set(store.schema.categories.map((category) => category.id));
   for (const account of store.accounts) {
     const status = accountStatus(account);
@@ -1293,7 +1244,6 @@ function seedData() {
     transactions: clone(DEFAULT_TRANSACTIONS),
     accounts: clone(DEFAULT_ACCOUNTS),
     accountAudit: [],
-    usernameHistory: [],
     updatedAt: new Date().toISOString(),
   };
   return migrateStoreData(seeded).store;
@@ -1729,10 +1679,9 @@ const localDataService = {
     if (!displayName) throw new Error("Vui lòng nhập tên hiển thị.");
     if (!ROLE_PRESETS[role]) throw new Error("Vai trò không hợp lệ.");
     if (!assignableRolesForAccount(actor, existing).includes(role)) throw new Error("Bạn không được gán vai trò này.");
+    if (existing && username !== existing.username) throw new Error("Không đổi tên đăng nhập sau khi tạo tài khoản.");
     const duplicate = store.accounts.find((account) => account.id !== payload.id && normalizeText(account.username).replace(/\s+/g, "") === username);
-    const usernameWillChange = Boolean(existing && username !== normalizeText(existing.username).replace(/\s+/g, ""));
-    const reservedUsername = (store.usernameHistory || []).find((item) => normalizeText(item?.username).replace(/\s+/g, "") === username);
-    if (duplicate || ((!existing || usernameWillChange) && reservedUsername)) throw new Error("Tên đăng nhập đã tồn tại hoặc từng được sử dụng.");
+    if (duplicate) throw new Error("Tên đăng nhập đã tồn tại.");
 
     if (normalizeRoleCode(existing?.role) === "superadmin" && normalizeRoleCode(role) !== "superadmin" && accountStatus(existing) === ACCOUNT_STATUSES.active) {
       const remaining = store.accounts.filter((account) => account.id !== existing.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
@@ -1763,47 +1712,23 @@ const localDataService = {
 
     const now = new Date().toISOString();
     let account;
-    let usernameChanged = false;
-    let currentSessionRevoked = false;
     if (existing) {
       const index = store.accounts.findIndex((item) => item.id === existing.id);
-      usernameChanged = username !== normalizeText(existing.username).replace(/\s+/g, "");
-      if (usernameChanged) {
-        const activeHistory = (store.usernameHistory || []).find((item) => item.accountId === existing.id && !item.retiredAt);
-        if (activeHistory) activeHistory.retiredAt = now;
-        store.usernameHistory.push({ id: makeId("username"), accountId: existing.id, username, assignedAt: now, retiredAt: null });
-      }
-      account = {
-        ...existing, username, displayName, role, status, active: status === ACCOUNT_STATUSES.active,
-        scopeMode, categoryPermissions, revision: toNumber(existing.revision, 1) + 1, updatedAt: now,
-      };
+      account = { ...existing, username, displayName, role, status, active: status === ACCOUNT_STATUSES.active, scopeMode, categoryPermissions, updatedAt: now };
       store.accounts[index] = account;
-      this.addAccountAudit(
-        store,
-        usernameChanged ? "rename_username" : "update_account",
-        account,
-        usernameChanged
-          ? `Đổi tên đăng nhập từ ${existing.username} thành ${username}. Tất cả phiên cũ đã bị thu hồi.`
-          : `Vai trò: ${roleLabel(role)} · Trạng thái: ${accountStatusLabel(account)} · Phạm vi: ${scopeMode}`,
-        actor,
-      );
-      if (usernameChanged && existing.id === actor.id) {
-        clearAuthSession();
-        currentSessionRevoked = true;
-      }
+      this.addAccountAudit(store, "update_account", account, `Vai trò: ${roleLabel(role)} · Trạng thái: ${accountStatusLabel(account)} · Phạm vi: ${scopeMode}`, actor);
     } else {
       if (String(payload.password || "") !== String(payload.passwordConfirm || "")) throw new Error("Xác nhận mật khẩu không khớp.");
       const passwordRecord = await createPasswordRecord(payload.password);
       account = {
         id: makeId("acc"), username, displayName, role, status: ACCOUNT_STATUSES.active, active: true, scopeMode, categoryPermissions,
-        revision: 1, ...passwordRecord, createdAt: now, updatedAt: now,
+        ...passwordRecord, createdAt: now, updatedAt: now,
       };
       store.accounts.unshift(account);
-      store.usernameHistory.push({ id: makeId("username"), accountId: account.id, username, assignedAt: now, retiredAt: null });
       this.addAccountAudit(store, "create_account", account, `Vai trò: ${roleLabel(role)} · Phạm vi: ${scopeMode} · Không bắt buộc đổi mật khẩu lần đầu`, actor);
     }
     this.writeStore(store);
-    return clone({ ...account, usernameChanged, currentSessionRevoked });
+    return clone(account);
   },
 
   async setAccountPassword(accountId, password, passwordConfirm) {
@@ -1840,45 +1765,6 @@ const localDataService = {
     this.addAccountAudit(store, "disable_account", store.accounts[index], "Ngừng sử dụng tài khoản.", actor);
     this.writeStore(store);
     return true;
-  },
-
-  async deleteAccount(accountId, expectedRevision = null) {
-    await delay(170);
-    const store = this.readStore();
-    const actor = assertStorePermission(store, PERMISSIONS.manageAccounts);
-    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa tài khoản.");
-    const index = store.accounts.findIndex((account) => account.id === accountId);
-    if (index < 0) throw new Error("Không tìm thấy tài khoản.");
-    const target = store.accounts[index];
-    if (target.id === actor.id) throw new Error("Không thể tự xóa tài khoản đang đăng nhập.");
-    if (expectedRevision !== null && toNumber(target.revision, 1) !== toNumber(expectedRevision, 1)) throw new Error("Dữ liệu tài khoản đã thay đổi. Hãy tải lại rồi thử lại.");
-    if (normalizeRoleCode(target.role) === "superadmin" && accountStatus(target) === ACCOUNT_STATUSES.active) {
-      const remaining = store.accounts.filter((account) => account.id !== target.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
-      if (!remaining.length) throw new Error("Phải giữ ít nhất một Super Admin đang hoạt động.");
-    }
-
-    const hasActivity = store.transactions.some((item) => item.actorId === target.id)
-      || store.products.some((item) => [item.createdBy, item.updatedBy, item.archivedBy].includes(target.id))
-      || store.schema.categories.some((item) => [item.createdBy, item.updatedBy].includes(target.id))
-      || (store.accountAudit || []).some((item) => item.actorId === target.id);
-
-    if (hasActivity) {
-      store.accounts[index] = {
-        ...target, status: ACCOUNT_STATUSES.disabled, active: false,
-        revision: toNumber(target.revision, 1) + 1, updatedAt: new Date().toISOString(),
-      };
-      this.addAccountAudit(store, "disable_account", store.accounts[index], "Tài khoản đã có hoạt động nên được chuyển sang ngừng sử dụng thay vì xóa.", actor);
-      this.writeStore(store);
-      return clone({ action: "disabled", account: store.accounts[index] });
-    }
-
-    this.addAccountAudit(store, "delete_account", target, "Xóa vĩnh viễn tài khoản chưa phát sinh hoạt động.", actor);
-    store.accounts.splice(index, 1);
-    for (const history of store.usernameHistory || []) {
-      if (history.accountId === target.id) history.accountId = null;
-    }
-    this.writeStore(store);
-    return clone({ action: "deleted", accountId: target.id, username: target.username });
   },
 
   async saveCategory(payload) {
@@ -2051,67 +1937,12 @@ const localDataService = {
     return true;
   },
 
-  async deleteCategory({ categoryId, expectedRevision = null, reason = "" } = {}) {
-    await delay(180);
-    const store = this.readStore();
-    const actor = assertStorePermission(store, PERMISSIONS.manageSchema);
-    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa hoặc ngừng nhóm.");
-    if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
-
-    const index = store.schema.categories.findIndex((category) => category.id === categoryId);
-    if (index < 0) throw new Error("Không tìm thấy nhóm.");
-    const category = store.schema.categories[index];
-    const revision = toOptionalNumber(category.revision);
-    if (expectedRevision !== null && revision !== null && Number(expectedRevision) !== revision) {
-      throw new Error("Danh mục đã được cập nhật ở nơi khác. Hãy tải lại trước khi thao tác.");
-    }
-    if (category.active !== false) {
-      const otherActiveCategories = store.schema.categories.filter((item) => item.id !== categoryId && item.active !== false);
-      if (!otherActiveCategories.length) throw new Error("Phải giữ ít nhất một nhóm vật liệu đang hoạt động.");
-    }
-
-    const productCount = store.products.filter((product) => product.categoryId === categoryId).length;
-    const transactionCount = store.transactions.filter((transaction) => transaction.categoryId === categoryId).length;
-    const now = new Date().toISOString();
-    let action = "deactivated";
-
-    if (productCount === 0 && transactionCount === 0) {
-      store.schema.categories.splice(index, 1);
-      for (const account of store.accounts) {
-        if (!account.categoryPermissions || typeof account.categoryPermissions !== "object") continue;
-        const nextPermissions = { ...account.categoryPermissions };
-        delete nextPermissions[categoryId];
-        account.categoryPermissions = nextPermissions;
-        account.updatedAt = now;
-      }
-      action = "deleted";
-    } else {
-      store.schema.categories[index] = { ...category, active: false, revision: toNumber(category.revision, 1) + 1, updatedAt: now };
-    }
-
-    store.schema.version = toNumber(store.schema.version, 1) + 1;
-    store.accountAudit = Array.isArray(store.accountAudit) ? store.accountAudit : [];
-    store.accountAudit.unshift({
-      id: makeId("audit"),
-      action: action === "deleted" ? "delete_category" : "deactivate_category",
-      targetId: category.id,
-      targetUsername: category.name,
-      actorId: actor.id,
-      actorName: actor.displayName,
-      actorRole: actor.role,
-      detail: `${String(reason || "").trim()} · ${productCount} vật liệu · ${transactionCount} giao dịch`,
-      createdAt: now,
-    });
-    store.accountAudit = store.accountAudit.slice(0, 500);
-    this.writeStore(store);
-    return { action, categoryId, categoryName: category.name, productCount, transactionCount };
-  },
-
-  async deleteInventoryHistory({ before = null, reason = "" } = {}) {
+  async deleteInventoryHistory({ before = null, reason = "", confirmation = "" } = {}) {
     await delay(180);
     const store = this.readStore();
     const actor = assertStorePermission(store, PERMISSIONS.manageData);
     if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa lịch sử kho.");
+    if (String(confirmation || "").trim().toUpperCase() !== "XOA LICH SU") throw new Error("Vui lòng nhập đúng XOA LICH SU để xác nhận.");
     if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
     const cutoff = before ? new Date(`${before}T23:59:59.999`) : null;
     if (cutoff && Number.isNaN(cutoff.getTime())) throw new Error("Ngày xóa lịch sử không hợp lệ.");
@@ -2142,44 +1973,6 @@ const localDataService = {
     });
     this.writeStore(store);
     return { deletedCount, before: before || null };
-  },
-
-  async purgeInventoryHistory({ before = null, reason = "" } = {}) {
-    await delay(180);
-    const store = this.readStore();
-    const actor = assertStorePermission(store, PERMISSIONS.manageData);
-    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa vĩnh viễn lịch sử kho.");
-    if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
-    const cutoff = before ? new Date(`${before}T23:59:59.999`) : null;
-    if (cutoff && Number.isNaN(cutoff.getTime())) throw new Error("Ngày xóa vĩnh viễn không hợp lệ.");
-
-    const selectedIds = new Set(store.transactions
-      .filter((transaction) => transaction.hiddenAt && (!cutoff || new Date(transaction.hiddenAt) <= cutoff))
-      .map((transaction) => transaction.id));
-    const safeIds = new Set([...selectedIds].filter((transactionId) => {
-      const transaction = store.transactions.find((item) => item.id === transactionId);
-      if (!transaction) return false;
-      const linkedIds = [transaction.reversalOf, transaction.reversalTransactionId].filter(Boolean);
-      return linkedIds.every((linkedId) => selectedIds.has(linkedId));
-    }));
-    const skippedLinkedCount = selectedIds.size - safeIds.size;
-    const purgedCount = safeIds.size;
-    store.transactions = store.transactions.filter((transaction) => !safeIds.has(transaction.id));
-    const now = new Date().toISOString();
-    store.accountAudit = Array.isArray(store.accountAudit) ? store.accountAudit : [];
-    store.accountAudit.unshift({
-      id: makeId("audit"),
-      action: "purge_inventory_history",
-      targetId: before || "all-hidden",
-      targetUsername: "Lịch sử kho đã ẩn",
-      actorId: actor.id,
-      actorName: actor.displayName,
-      actorRole: actor.role,
-      detail: `${String(reason || "").trim()} · xóa vĩnh viễn ${purgedCount} giao dịch · bỏ qua ${skippedLinkedCount} giao dịch liên kết`,
-      createdAt: now,
-    });
-    this.writeStore(store);
-    return { purgedCount, skippedLinkedCount, before: before || null };
   },
 
   exportBackup() {
@@ -2499,12 +2292,12 @@ function renderLoginScreen() {
         <button class="btn btn-primary btn-full" type="submit">Đăng nhập</button>
       </form>`}
       ${dataService.mode === "local"
-        ? `<div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Tài khoản thử nghiệm</div><div class="notice-text"><strong>superadmin-demo</strong> · mật khẩu <strong>${escapeHTML(DEFAULT_DEMO_PASSWORD)}</strong>.</div></div></div>`
+        ? `<div class="notice"><div class="notice-icon">${icon("info")}</div><div><div class="notice-title">Tài khoản thử nghiệm</div><div class="notice-text"><strong>superadmin-demo</strong> · mật khẩu <strong>${escapeHTML(DEFAULT_DEMO_PASSWORD)}</strong>.</div></div></div>`
         : dataServiceConfigurationError
           ? `<div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Supabase chưa cấu hình</div><div class="notice-text">${escapeHTML(dataServiceConfigurationError.message)}</div></div></div>`
           : appState.ui.bootstrapError
             ? `<div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Database chưa sẵn sàng</div><div class="notice-text">${escapeHTML(appState.ui.bootstrapError)} Hãy chạy file database.sql trong Supabase SQL Editor.</div></div></div>`
-            : ""}
+            : `<div class="notice"><div class="notice-icon">${icon("cloud")}</div><div><div class="notice-title">Dữ liệu Supabase</div><div class="notice-text">Dùng được trên iPhone, iPad và máy tính. Không cần email thật.</div></div></div>`}
       <div class="app-footer-note">Phiên bản ${APP_VERSION}</div>
     </section>
   </main>`;
@@ -2565,6 +2358,14 @@ function renderDashboardScreen() {
   const recentTransactions = historyTransactions.slice(0, 4);
 
   return `<section class="screen" aria-label="Tổng quan kho">
+    <div class="notice">
+      <div class="notice-icon">${icon(dataService.mode === "supabase" ? "cloud" : "database")}</div>
+      <div>
+        <div class="notice-title">${dataService.mode === "supabase" ? "Đã kết nối Supabase" : "Bản thử nghiệm trên thiết bị"}</div>
+        <div class="notice-text">${dataService.mode === "supabase" ? "Dữ liệu được lưu trên cloud và dùng chung giữa iPhone, iPad và máy tính." : "Dữ liệu hiện tại chỉ dùng để kiểm thử giao diện và nghiệp vụ."}</div>
+      </div>
+    </div>
+
     <article class="hero-card">
       <div class="hero-label">${canViewQuantity ? "Tổng số lượng đang quản lý" : "Tổng quan tồn kho"}</div>
       <div class="hero-value">${canViewQuantity ? formatQuantity(totalQuantity) : "Đã ẩn"}</div>
@@ -2606,14 +2407,22 @@ function renderMetric(value, label) {
 }
 
 function filteredProducts() {
-  const { search, category, status } = appState.filters.inventory;
-  const searchKey = normalizeText(search);
+  const { search, category, status, quantityBelow } = appState.filters.inventory;
+  const tokens = searchTokens(search);
+  const hasQuantityBelow = String(quantityBelow ?? "").trim() !== "";
+  const quantityBelowValue = hasQuantityBelow ? toNumber(quantityBelow, Number.NaN) : null;
   return visibleProducts().filter((product) => {
     const categoryItem = categoryById(product.categoryId);
-    const matchesSearch = !searchKey || normalizeText(`${product.name} ${product.note} ${categoryItem?.name || ""}`).includes(searchKey);
+    const searchText = productSearchText(product, categoryItem);
+    const matchesSearch = !tokens.length || tokens.every((token) => searchText.includes(token));
     const matchesCategory = category === "all" || product.categoryId === category;
     const matchesStatus = status === "all" || (hasPermission(PERMISSIONS.viewQuantity, product.categoryId) && productStatus(product).key === status);
-    return matchesSearch && matchesCategory && matchesStatus;
+    const matchesQuantity = !hasQuantityBelow
+      || (Number.isFinite(quantityBelowValue)
+        && quantityBelowValue >= 0
+        && hasPermission(PERMISSIONS.viewQuantity, product.categoryId)
+        && toNumber(product.quantity) < quantityBelowValue);
+    return matchesSearch && matchesCategory && matchesStatus && matchesQuantity;
   }).sort((a, b) => a.name.localeCompare(b.name, "vi"));
 }
 
@@ -2622,18 +2431,18 @@ function renderInventoryScreen() {
   const categories = categoriesWithPermission(PERMISSIONS.viewInventory);
   const visibleInventoryProducts = visibleProducts();
   const canFilterStatus = visibleInventoryProducts.length > 0 && visibleInventoryProducts.every((product) => hasPermission(PERMISSIONS.viewQuantity, product.categoryId));
+  const canFilterQuantity = canFilterStatus;
   if (!canFilterStatus && appState.filters.inventory.status !== "all") appState.filters.inventory.status = "all";
+  if (!canFilterQuantity && appState.filters.inventory.quantityBelow !== "") appState.filters.inventory.quantityBelow = "";
   const products = filteredProducts();
-  const exportMode = appState.ui.inventoryExportMode;
-  const selectedCount = selectedInventoryProducts().length;
   return `<section class="screen" aria-label="Kho vật liệu">
     <div class="toolbar">
       <div class="toolbar-row">
         <label class="search-wrap" for="inventory-search">
           <span class="search-icon">${icon("search")}</span>
-          <input id="inventory-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Tìm tên hoặc quy cách" value="${escapeHTML(appState.filters.inventory.search)}">
+          <input id="inventory-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Ví dụ: dao cắt 0.7 23.8" value="${escapeHTML(appState.filters.inventory.search)}">
         </label>
-        ${categoriesWithPermission(PERMISSIONS.addProduct).length && !exportMode ? `<button class="icon-btn" type="button" data-action="add-product" aria-label="Thêm vật liệu">${icon("plus")}</button>` : ""}
+        ${categoriesWithPermission(PERMISSIONS.addProduct).length ? `<button class="icon-btn" type="button" data-action="add-product" aria-label="Thêm vật liệu">${icon("plus")}</button>` : ""}
       </div>
       <div class="filter-grid">
         <label class="field" for="inventory-category">
@@ -2649,36 +2458,28 @@ function renderInventoryScreen() {
             ${[["all", "Tất cả"], ["ok", "Đủ hàng"], ["low", "Sắp hết"], ["out", "Hết hàng"]].map(([value, label]) => `<option value="${value}" ${value === appState.filters.inventory.status ? "selected" : ""}>${label}</option>`).join("")}
           </select>${canFilterStatus ? "" : '<span class="field-help">Đã tắt để tránh suy luận tồn của nhóm bị ẩn số lượng.</span>'}
         </label>
+        <label class="field inventory-quantity-filter" for="inventory-quantity-below">
+          <span class="field-label">Số lượng dưới</span>
+          <input id="inventory-quantity-below" class="input" type="number" inputmode="decimal" min="0" step="any" placeholder="Ví dụ: 5" value="${escapeHTML(appState.filters.inventory.quantityBelow)}" ${canFilterQuantity ? "" : "disabled"}>
+        </label>
       </div>
     </div>
 
-    <div class="section-head inventory-section-head">
+    <div class="section-head">
       <div class="section-copy"><h2 class="section-title">Danh sách vật liệu</h2><p id="inventory-result-count" class="section-subtitle">${products.length} kết quả</p></div>
-      <div class="inventory-head-actions">
-        <button class="btn btn-compact ${exportMode ? "btn-secondary" : "btn-soft"}" type="button" data-action="toggle-inventory-export">${icon(exportMode ? "close" : "download")} ${exportMode ? "Hủy chọn" : "Xuất PDF"}</button>
-      </div>
+      <div class="status-line" data-state="local"><span class="status-dot"></span><span>Trên thiết bị</span></div>
     </div>
 
-    ${exportMode ? `<div class="inventory-export-panel" aria-live="polite">
-      <div class="inventory-export-summary"><strong id="inventory-export-count">${selectedCount}</strong><span>vật liệu đã chọn</span></div>
-      <div class="inventory-export-buttons">
-        <button class="btn btn-compact btn-secondary" type="button" data-action="select-visible-inventory">Chọn tất cả đang hiển thị</button>
-        <button class="btn btn-compact btn-secondary" type="button" data-action="clear-inventory-selection" ${selectedCount ? "" : "disabled"}>Bỏ chọn</button>
-        <button class="btn btn-compact btn-primary" type="button" data-action="open-inventory-pdf-options" ${selectedCount ? "" : "disabled"}>Tiếp tục</button>
-      </div>
-    </div>` : ""}
-
-    <div id="inventory-list" class="card list-card ${exportMode ? "inventory-list-selecting" : ""}">
+    <div id="inventory-list" class="card list-card">
       ${renderInventoryListContent(products)}
     </div>
   </section>`;
 }
 
 function renderInventoryListContent(products = filteredProducts()) {
-  if (!products.length) return renderEmptyState("search", "Không tìm thấy vật liệu", "Thử thay đổi từ khóa hoặc bộ lọc.");
-  return appState.ui.inventoryExportMode
-    ? products.map(renderInventorySelectionRow).join("")
-    : products.map(renderProductRow).join("");
+  return products.length
+    ? products.map(renderProductRow).join("")
+    : renderEmptyState("search", "Không tìm thấy vật liệu", "Thử thay đổi từ khóa hoặc bộ lọc.");
 }
 
 function renderProductRow(product) {
@@ -2696,496 +2497,6 @@ function renderProductRow(product) {
       ${status ? `<div style="margin-top:5px;text-align:right"><span class="badge ${status.className}">${escapeHTML(status.label)}</span></div>` : ""}
     </div>
   </button>`;
-}
-
-
-function selectedInventoryProductIdSet() {
-  return new Set(Array.isArray(appState.ui.inventoryExportIds) ? appState.ui.inventoryExportIds : []);
-}
-
-function selectedInventoryProducts() {
-  const selectedIds = selectedInventoryProductIdSet();
-  return appState.cache.products
-    .filter((product) => selectedIds.has(product.id) && hasPermission(PERMISSIONS.viewInventory, product.categoryId))
-    .sort((left, right) => left.name.localeCompare(right.name, "vi"));
-}
-
-function renderInventorySelectionRow(product) {
-  const category = categoryById(product.categoryId);
-  const canViewQuantity = hasPermission(PERMISSIONS.viewQuantity, product.categoryId);
-  const status = canViewQuantity ? productStatus(product) : null;
-  const quantityText = canViewQuantity ? `${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}` : "Đã ẩn";
-  const checked = selectedInventoryProductIdSet().has(product.id);
-  return `<label class="list-row inventory-select-row" for="inventory-select-${escapeHTML(product.id)}">
-    <input id="inventory-select-${escapeHTML(product.id)}" class="inventory-select-checkbox" type="checkbox" data-product-id="${escapeHTML(product.id)}" ${checked ? "checked" : ""}>
-    <div class="row-main">
-      <div class="row-title">${escapeHTML(product.name)}</div>
-      <div class="row-sub">${escapeHTML(category?.name || "Chưa phân nhóm")} · ${product.note ? escapeHTML(product.note) : "Không có ghi chú"}</div>
-    </div>
-    <div class="row-copy">
-      <div class="row-value">${quantityText}</div>
-      ${status ? `<div class="inventory-select-status"><span class="badge ${status.className}">${escapeHTML(status.label)}</span></div>` : ""}
-    </div>
-  </label>`;
-}
-
-function updateInventoryExportControls() {
-  const count = selectedInventoryProducts().length;
-  setText("#inventory-export-count", count);
-  const continueButton = $("[data-action='open-inventory-pdf-options']");
-  const clearButton = $("[data-action='clear-inventory-selection']");
-  if (continueButton) continueButton.disabled = count === 0;
-  if (clearButton) clearButton.disabled = count === 0;
-}
-
-function toggleInventoryExportSelection(productId, checked) {
-  const selectedIds = selectedInventoryProductIdSet();
-  if (checked) selectedIds.add(productId);
-  else selectedIds.delete(productId);
-  appState.ui.inventoryExportIds = [...selectedIds];
-  updateInventoryExportControls();
-}
-
-function selectVisibleInventoryProducts() {
-  const selectedIds = selectedInventoryProductIdSet();
-  filteredProducts().forEach((product) => selectedIds.add(product.id));
-  appState.ui.inventoryExportIds = [...selectedIds];
-  updateInventoryListOnly();
-}
-
-function clearInventoryExportSelection() {
-  appState.ui.inventoryExportIds = [];
-  updateInventoryListOnly();
-}
-
-function productSpecificationText(product) {
-  const category = categoryById(product.categoryId);
-  if (!category) return "—";
-  const values = orderedCategoryAttributes(category)
-    .map((attribute) => {
-      const value = product.attributes?.[attribute.id];
-      if (value === "" || value === null || value === undefined) return null;
-      return `${attribute.name}: ${attributeDisplayValue(attribute, value)}`;
-    })
-    .filter(Boolean);
-  return values.length ? values.join("; ") : "—";
-}
-
-function openInventoryPdfOptions() {
-  const products = selectedInventoryProducts();
-  if (!products.length) return showToast("warning", "Chưa chọn vật liệu", "Tick ít nhất một vật liệu trước khi xuất.");
-  const canExportAnyQuantity = products.some((product) => hasPermission(PERMISSIONS.viewQuantity, product.categoryId));
-  const columnItems = INVENTORY_PDF_COLUMNS.map((column) => {
-    const disabled = column.quantityPermission && !canExportAnyQuantity;
-    return `<label class="pdf-column-item ${disabled ? "pdf-column-disabled" : ""}">
-      <input type="checkbox" name="columns" value="${escapeHTML(column.key)}" ${column.defaultChecked && !disabled ? "checked" : ""} ${disabled ? "disabled" : ""}>
-      <span><strong>${escapeHTML(column.label)}</strong>${disabled ? "<small>Không có quyền xem số lượng.</small>" : ""}</span>
-    </label>`;
-  }).join("");
-  openModal({
-    name: "inventory-pdf-form",
-    title: "Chọn cột xuất PDF",
-    subtitle: `${products.length} vật liệu đã chọn`,
-    body: `<form id="inventory-pdf-form" class="field-grid" novalidate>
-      <div class="pdf-column-grid">${columnItems}</div>
-    </form>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="inventory-pdf-form">${icon("download")} Tạo PDF</button>`,
-  });
-}
-
-function inventoryPdfCell(product, key) {
-  const category = categoryById(product.categoryId);
-  const canViewQuantity = hasPermission(PERMISSIONS.viewQuantity, product.categoryId);
-  if (key === "category") return category?.name || "—";
-  if (key === "spec") return productSpecificationText(product);
-  if (key === "quantity") return canViewQuantity ? formatQuantity(product.quantity) : "Đã ẩn";
-  if (key === "unit") return product.unit || "—";
-  if (key === "warning") return canViewQuantity ? formatQuantity(product.warningLevel) : "Đã ẩn";
-  if (key === "status") return canViewQuantity ? productStatus(product).label : "Đã ẩn";
-  if (key === "note") return product.note || "—";
-  if (key === "updatedAt") return formatDateTime(product.updatedAt);
-  return "—";
-}
-
-function inventoryPdfColumnDefinitions(columnKeys) {
-  const optionalColumns = INVENTORY_PDF_COLUMNS.filter((column) => columnKeys.includes(column.key));
-  const definitions = [
-    { key: "index", label: "STT", weight: 0.78, align: "center" },
-    { key: "name", label: "Vật liệu", weight: 3.25, align: "left" },
-    ...optionalColumns.map((column) => ({
-      ...column,
-      weight: {
-        category: 1.45,
-        spec: 2.55,
-        quantity: 1.2,
-        unit: 0.9,
-        warning: 1.35,
-        status: 1.45,
-        note: 2.35,
-        updatedAt: 1.8,
-      }[column.key] || 1.3,
-      align: ["quantity", "warning"].includes(column.key) ? "right" : column.key === "unit" ? "center" : "left",
-    })),
-  ];
-  return definitions;
-}
-
-function inventoryPdfRowValue(product, key, index) {
-  if (key === "index") return String(index + 1);
-  if (key === "name") return product.name || "—";
-  return inventoryPdfCell(product, key);
-}
-
-function inventoryPdfStatusColors(value) {
-  const normalized = normalizeText(value);
-  if (normalized.includes("sap")) return { background: "#fff1cc", text: "#8a4b08", border: "#f4d58d" };
-  if (normalized.includes("het")) return { background: "#fee2e2", text: "#b42318", border: "#fecaca" };
-  return { background: "#dcfce7", text: "#166534", border: "#bbf7d0" };
-}
-
-function canvasRoundedRect(ctx, x, y, width, height, radius) {
-  const r = Math.min(radius, width / 2, height / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + width, y, x + width, y + height, r);
-  ctx.arcTo(x + width, y + height, x, y + height, r);
-  ctx.arcTo(x, y + height, x, y, r);
-  ctx.arcTo(x, y, x + width, y, r);
-  ctx.closePath();
-}
-
-function wrapCanvasText(ctx, value, maxWidth) {
-  const text = String(value ?? "—").trim() || "—";
-  const paragraphs = text.split(/\r?\n/);
-  const lines = [];
-  paragraphs.forEach((paragraph, paragraphIndex) => {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    if (!words.length) {
-      lines.push("");
-      return;
-    }
-    let currentLine = "";
-    words.forEach((word) => {
-      const candidate = currentLine ? `${currentLine} ${word}` : word;
-      if (ctx.measureText(candidate).width <= maxWidth) {
-        currentLine = candidate;
-        return;
-      }
-      if (currentLine) lines.push(currentLine);
-      if (ctx.measureText(word).width <= maxWidth) {
-        currentLine = word;
-        return;
-      }
-      let fragment = "";
-      Array.from(word).forEach((character) => {
-        const nextFragment = fragment + character;
-        if (fragment && ctx.measureText(nextFragment).width > maxWidth) {
-          lines.push(fragment);
-          fragment = character;
-        } else {
-          fragment = nextFragment;
-        }
-      });
-      currentLine = fragment;
-    });
-    if (currentLine) lines.push(currentLine);
-    if (paragraphIndex < paragraphs.length - 1) lines.push("");
-  });
-  return lines.length ? lines : ["—"];
-}
-
-function inventoryPdfCanvasOptions(columnCount) {
-  const landscape = columnCount >= 6;
-  const pageWidthPoints = landscape ? 841.89 : 595.28;
-  const pageHeightPoints = landscape ? 595.28 : 841.89;
-  const pixelScale = 2.2;
-  return {
-    landscape,
-    pageWidthPoints,
-    pageHeightPoints,
-    width: Math.round(pageWidthPoints * pixelScale),
-    height: Math.round(pageHeightPoints * pixelScale),
-    pixelScale,
-  };
-}
-
-function createInventoryPdfCanvas(options) {
-  const canvas = document.createElement("canvas");
-  canvas.width = options.width;
-  canvas.height = options.height;
-  const ctx = canvas.getContext("2d", { alpha: false });
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.textBaseline = "alphabetic";
-  return { canvas, ctx };
-}
-
-function inventoryPdfColumnLayout(columns, pageWidth, margin) {
-  const availableWidth = pageWidth - margin * 2;
-  const totalWeight = columns.reduce((sum, column) => sum + column.weight, 0);
-  let cursor = margin;
-  return columns.map((column, index) => {
-    const width = index === columns.length - 1
-      ? margin + availableWidth - cursor
-      : availableWidth * (column.weight / totalWeight);
-    const layout = { ...column, x: cursor, width };
-    cursor += width;
-    return layout;
-  });
-}
-
-function drawInventoryPdfHeader(ctx, columns, y, style) {
-  const { headerHeight, borderColor, headerBackground, headerText, paddingX, headerFont, headerLineHeight } = style;
-  columns.forEach((column, index) => {
-    ctx.fillStyle = headerBackground;
-    ctx.fillRect(column.x, y, column.width, headerHeight);
-    ctx.strokeStyle = borderColor;
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(column.x, y, column.width, headerHeight);
-
-    ctx.font = headerFont;
-    ctx.fillStyle = headerText;
-    const lines = column.key === "index" ? ["STT"] : wrapCanvasText(ctx, column.label, Math.max(10, column.width - paddingX * 2));
-    const visibleLines = lines.slice(0, 2);
-    const textHeight = visibleLines.length * headerLineHeight;
-    let textY = y + (headerHeight - textHeight) / 2 + headerLineHeight * 0.78;
-    ctx.textAlign = column.key === "name" ? "left" : "center";
-    const textX = column.key === "name" ? column.x + paddingX : column.x + column.width / 2;
-    visibleLines.forEach((line) => {
-      ctx.fillText(line, textX, textY);
-      textY += headerLineHeight;
-    });
-  });
-  return y + headerHeight;
-}
-
-function measureInventoryPdfRow(ctx, row, columns, style) {
-  ctx.font = style.bodyFont;
-  let maxLines = 1;
-  const cellLines = columns.map((column) => {
-    const lines = wrapCanvasText(ctx, row[column.key], Math.max(12, column.width - style.paddingX * 2));
-    maxLines = Math.max(maxLines, lines.length);
-    return lines;
-  });
-  const height = Math.max(style.minRowHeight, maxLines * style.bodyLineHeight + style.paddingY * 2);
-  return { height, cellLines };
-}
-
-function drawInventoryPdfRow(ctx, row, rowIndex, columns, y, measured, style) {
-  const background = rowIndex % 2 === 0 ? "#ffffff" : style.alternateRow;
-  columns.forEach((column, columnIndex) => {
-    ctx.fillStyle = background;
-    ctx.fillRect(column.x, y, column.width, measured.height);
-    ctx.strokeStyle = style.borderColor;
-    ctx.lineWidth = 1.25;
-    ctx.strokeRect(column.x, y, column.width, measured.height);
-
-    const lines = measured.cellLines[columnIndex];
-    const contentHeight = lines.length * style.bodyLineHeight;
-    let textY = y + Math.max(style.paddingY, (measured.height - contentHeight) / 2) + style.bodyLineHeight * 0.78;
-    const value = String(row[column.key] ?? "—");
-
-    if (column.key === "status") {
-      ctx.font = style.statusFont;
-      const statusColors = inventoryPdfStatusColors(value);
-      const badgeWidth = Math.min(column.width - style.paddingX * 2, ctx.measureText(value).width + 24);
-      const badgeHeight = Math.min(34, measured.height - 12);
-      const badgeX = column.x + (column.width - badgeWidth) / 2;
-      const badgeY = y + (measured.height - badgeHeight) / 2;
-      canvasRoundedRect(ctx, badgeX, badgeY, badgeWidth, badgeHeight, 12);
-      ctx.fillStyle = statusColors.background;
-      ctx.fill();
-      ctx.strokeStyle = statusColors.border;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = statusColors.text;
-      ctx.textAlign = "center";
-      ctx.fillText(value, column.x + column.width / 2, badgeY + badgeHeight / 2 + 6);
-      return;
-    }
-
-    ctx.font = column.key === "name" ? style.nameFont : style.bodyFont;
-    ctx.fillStyle = style.bodyText;
-    ctx.textAlign = column.align === "right" ? "right" : column.align === "center" ? "center" : "left";
-    const textX = column.align === "right"
-      ? column.x + column.width - style.paddingX
-      : column.align === "center"
-        ? column.x + column.width / 2
-        : column.x + style.paddingX;
-    lines.forEach((line) => {
-      ctx.fillText(line, textX, textY);
-      textY += style.bodyLineHeight;
-    });
-  });
-}
-
-function canvasToJpegPage(canvas) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(async (blob) => {
-      if (!blob) {
-        reject(new Error("Không thể tạo ảnh cho trang PDF."));
-        return;
-      }
-      resolve({
-        bytes: new Uint8Array(await blob.arrayBuffer()),
-        width: canvas.width,
-        height: canvas.height,
-      });
-    }, "image/jpeg", 0.94);
-  });
-}
-
-function concatUint8Arrays(arrays) {
-  const totalLength = arrays.reduce((sum, array) => sum + array.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  arrays.forEach((array) => {
-    result.set(array, offset);
-    offset += array.length;
-  });
-  return result;
-}
-
-function asciiBytes(value) {
-  return new TextEncoder().encode(String(value));
-}
-
-function createPdfFromJpegPages(imagePages, pageWidthPoints, pageHeightPoints) {
-  const objectCount = 2 + imagePages.length * 3;
-  const chunks = [new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10, 37, 226, 227, 207, 211, 10])];
-  const offsets = new Array(objectCount + 1).fill(0);
-  let byteLength = chunks[0].length;
-
-  const append = (bytes) => {
-    chunks.push(bytes);
-    byteLength += bytes.length;
-  };
-
-  const appendObject = (objectNumber, bodyChunks) => {
-    offsets[objectNumber] = byteLength;
-    append(asciiBytes(`${objectNumber} 0 obj\n`));
-    bodyChunks.forEach(append);
-    append(asciiBytes("\nendobj\n"));
-  };
-
-  const pageObjectNumbers = imagePages.map((_, index) => 3 + index * 3);
-  appendObject(1, [asciiBytes("<< /Type /Catalog /Pages 2 0 R >>")]);
-  appendObject(2, [asciiBytes(`<< /Type /Pages /Count ${imagePages.length} /Kids [${pageObjectNumbers.map((number) => `${number} 0 R`).join(" ")}] >>`)]);
-
-  imagePages.forEach((image, index) => {
-    const pageObject = 3 + index * 3;
-    const contentObject = pageObject + 1;
-    const imageObject = pageObject + 2;
-    const imageName = `Im${index + 1}`;
-    const content = asciiBytes(`q\n${pageWidthPoints.toFixed(2)} 0 0 ${pageHeightPoints.toFixed(2)} 0 0 cm\n/${imageName} Do\nQ\n`);
-
-    appendObject(pageObject, [asciiBytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidthPoints.toFixed(2)} ${pageHeightPoints.toFixed(2)}] /Resources << /XObject << /${imageName} ${imageObject} 0 R >> >> /Contents ${contentObject} 0 R >>`)]);
-    appendObject(contentObject, [asciiBytes(`<< /Length ${content.length} >>\nstream\n`), content, asciiBytes("endstream")]);
-    appendObject(imageObject, [
-      asciiBytes(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>\nstream\n`),
-      image.bytes,
-      asciiBytes("\nendstream"),
-    ]);
-  });
-
-  const xrefOffset = byteLength;
-  let xref = `xref\n0 ${objectCount + 1}\n0000000000 65535 f \n`;
-  for (let index = 1; index <= objectCount; index += 1) {
-    xref += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
-  }
-  xref += `trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-  append(asciiBytes(xref));
-  return new Blob([concatUint8Arrays(chunks)], { type: "application/pdf" });
-}
-
-async function createInventoryPdfBlob(products, columnKeys) {
-  const columns = inventoryPdfColumnDefinitions(columnKeys);
-  const options = inventoryPdfCanvasOptions(columns.length);
-  const margin = Math.round(34 * options.pixelScale);
-  const style = {
-    paddingX: Math.round(7 * options.pixelScale),
-    paddingY: Math.round(6 * options.pixelScale),
-    headerHeight: Math.round(29 * options.pixelScale),
-    minRowHeight: Math.round(30 * options.pixelScale),
-    headerLineHeight: Math.round(11 * options.pixelScale),
-    bodyLineHeight: Math.round(10.5 * options.pixelScale),
-    headerFont: `700 ${Math.round(9.3 * options.pixelScale)}px system-ui, -apple-system, "Segoe UI", sans-serif`,
-    bodyFont: `500 ${Math.round(8.9 * options.pixelScale)}px system-ui, -apple-system, "Segoe UI", sans-serif`,
-    nameFont: `650 ${Math.round(9 * options.pixelScale)}px system-ui, -apple-system, "Segoe UI", sans-serif`,
-    statusFont: `700 ${Math.round(8.4 * options.pixelScale)}px system-ui, -apple-system, "Segoe UI", sans-serif`,
-    headerBackground: "#256f4d",
-    headerText: "#ffffff",
-    bodyText: "#17211b",
-    alternateRow: "#f4f8f5",
-    borderColor: "#b8c9bf",
-  };
-  const columnLayout = inventoryPdfColumnLayout(columns, options.width, margin);
-  const rows = products.map((product, index) => Object.fromEntries(columns.map((column) => [column.key, inventoryPdfRowValue(product, column.key, index)])));
-  const pages = [];
-  let page = createInventoryPdfCanvas(options);
-  let y = drawInventoryPdfHeader(page.ctx, columnLayout, margin, style);
-
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    const measured = measureInventoryPdfRow(page.ctx, rows[rowIndex], columnLayout, style);
-    if (y + measured.height > options.height - margin && y > margin + style.headerHeight) {
-      pages.push(await canvasToJpegPage(page.canvas));
-      page = createInventoryPdfCanvas(options);
-      y = drawInventoryPdfHeader(page.ctx, columnLayout, margin, style);
-    }
-    drawInventoryPdfRow(page.ctx, rows[rowIndex], rowIndex, columnLayout, y, measured, style);
-    y += measured.height;
-  }
-
-  pages.push(await canvasToJpegPage(page.canvas));
-  return createPdfFromJpegPages(pages, options.pageWidthPoints, options.pageHeightPoints);
-}
-
-function openInventoryPdfLoadingWindow(fileName) {
-  const viewer = window.open("", "_blank");
-  if (!viewer) return null;
-  viewer.document.open();
-  viewer.document.write(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(fileName)}</title><style>html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f5;color:#17211b}body{display:grid;place-items:center}.box{text-align:center;padding:24px}.spin{width:42px;height:42px;margin:0 auto 16px;border:4px solid #dbe7e0;border-top-color:#256f4d;border-radius:50%;animation:s .8s linear infinite}@keyframes s{to{transform:rotate(360deg)}}strong{display:block;font-size:18px;margin-bottom:6px}small{color:#617068}</style></head><body><div class="box"><div class="spin"></div><strong>Đang tạo PDF đẹp hơn</strong><small>Vui lòng chờ trong giây lát...</small></div></body></html>`);
-  viewer.document.close();
-  return viewer;
-}
-
-function downloadInventoryPdf(blob, fileName, viewerWindow = null) {
-  const objectUrl = URL.createObjectURL(blob);
-  if (viewerWindow && !viewerWindow.closed) {
-    viewerWindow.location.replace(objectUrl);
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120000);
-    return;
-  }
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download = fileName;
-  link.rel = "noopener";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120000);
-}
-
-async function handleInventoryPdfSubmit(event, form) {
-  event.preventDefault();
-  const products = selectedInventoryProducts();
-  if (!products.length) return showToast("warning", "Chưa chọn vật liệu");
-  const columnKeys = new FormData(form).getAll("columns").map(String);
-  const fileName = `vat-lieu-${formatISODate(new Date()) || "bao-cao"}.pdf`;
-  const viewerWindow = openInventoryPdfLoadingWindow(fileName);
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-
-  await withActionLock("inventory-pdf", submitButton, async () => {
-    try {
-      const pdfBlob = await createInventoryPdfBlob(products, columnKeys);
-      downloadInventoryPdf(pdfBlob, fileName, viewerWindow);
-      closeModal(true);
-      showToast("success", "Đã tạo PDF", "PDF đã được căn cột và xuống dòng tự động. Dùng nút Chia sẻ để lưu hoặc gửi file.");
-    } catch (error) {
-      if (viewerWindow && !viewerWindow.closed) viewerWindow.close();
-      showToast("error", "Không thể tạo PDF", error.message);
-    }
-  });
 }
 
 function filteredTransactions() {
@@ -3293,10 +2604,10 @@ function renderAccountsPanel() {
       <div class="section-copy"><h2 class="section-title">Tài khoản</h2><p class="section-subtitle">Vai trò, trạng thái và quyền riêng theo từng nhóm vật liệu.</p></div>
       ${canManageAccount() ? `<button class="btn btn-compact btn-primary" type="button" data-action="add-account">${icon("plus")} Tạo</button>` : ""}
     </div>
-    ${dataService.mode === "local" ? `<div class="notice notice-warning">
-      <div class="notice-icon">${icon("warning")}</div>
-      <div><div class="notice-title">Tài khoản thử nghiệm trên thiết bị</div><div class="notice-text">Dữ liệu local chỉ dùng kiểm thử giao diện.</div></div>
-    </div>` : ""}
+    <div class="notice ${dataService.mode === "supabase" ? "notice-success" : "notice-warning"}">
+      <div class="notice-icon">${icon(dataService.mode === "supabase" ? "shield" : "warning")}</div>
+      <div><div class="notice-title">${dataService.mode === "supabase" ? "Tài khoản lưu trên Supabase" : "Tài khoản thử nghiệm trên thiết bị"}</div><div class="notice-text">${dataService.mode === "supabase" ? "Mật khẩu chỉ lưu dạng bcrypt hash; Super Admin quản lý tài khoản ngay trong app." : "Dữ liệu local chỉ dùng kiểm thử giao diện."}</div></div>
+    </div>
     <div class="card list-card">
       ${appState.cache.accounts.length ? appState.cache.accounts.map((account) => {
         const status = accountStatus(account);
@@ -3322,6 +2633,10 @@ function renderCategoriesPanel() {
     <div class="section-head">
       <div class="section-copy"><h2 class="section-title">Nhóm và thuộc tính</h2><p class="section-subtitle">Thứ tự hiển thị điều khiển form và tên; khóa chống trùng được giữ độc lập.</p></div>
       <button class="btn btn-compact btn-primary" type="button" data-action="add-category">${icon("plus")} Thêm</button>
+    </div>
+    <div class="notice">
+      <div class="notice-icon">${icon("info")}</div>
+      <div><div class="notice-title">Thứ tự hiển thị không đổi khóa chống trùng</div><div class="notice-text">Bạn có thể sắp xếp lại thuộc tính an toàn. Chỉ khi thêm, bỏ hoặc đổi thuộc tính nhận diện mới cần migration chữ ký trong production.</div></div>
     </div>
     <div class="card list-card">
       ${categories.map((category) => `<button class="list-row list-row-button" type="button" data-action="edit-category" data-category-id="${escapeHTML(category.id)}">
@@ -3366,6 +2681,10 @@ function renderDataPanel() {
 
   if (!dataService.capabilities?.localBackup) {
     return `<div class="screen">
+      <div class="notice notice-success">
+        <div class="notice-icon">${icon("check")}</div>
+        <div><div class="notice-title">Dữ liệu đang lưu trên Supabase</div><div class="notice-text">Ứng dụng không cho tải toàn bộ database hoặc phục hồi JSON trực tiếp từ trình duyệt.</div></div>
+      </div>
       <div class="card list-card">
         <div class="list-row">
           <div class="row-main"><div class="row-title">Sao lưu database</div><div class="row-sub">Thiết lập backup hoặc Point-in-Time Recovery trong Supabase Dashboard.</div></div><div class="row-actions">${icon("shield")}</div>
@@ -3377,10 +2696,7 @@ function renderDataPanel() {
           <div class="row-main"><div class="row-title">Tầng dữ liệu</div><div class="row-sub">${escapeHTML(dataService.label)} · RLS và RPC kiểm tra quyền phía server.</div></div><div class="row-actions">${icon("cloud")}</div>
         </div>
         ${normalizeRoleCode(appState.currentUser.role) === "superadmin" ? `<button class="list-row list-row-button" type="button" data-action="open-history-cleanup">
-          <div class="row-main"><div class="row-title" style="color:var(--danger)">Ẩn lịch sử kho</div><div class="row-sub">Ẩn khỏi màn hình theo ngày hoặc toàn bộ. Tồn kho hiện tại không thay đổi và dữ liệu vẫn còn trong database.</div></div><div class="row-actions" style="color:var(--danger)">${icon("trash")}</div>
-        </button>
-        <button class="list-row list-row-button" type="button" data-action="open-history-purge">
-          <div class="row-main"><div class="row-title" style="color:var(--danger)">Xóa vĩnh viễn lịch sử đã ẩn</div><div class="row-sub">Xóa vật lý khỏi database các giao dịch đã ẩn. Không thể khôi phục và không làm thay đổi tồn kho hiện tại.</div></div><div class="row-actions" style="color:var(--danger)">${icon("warning")}</div>
+          <div class="row-main"><div class="row-title" style="color:var(--danger)">Xóa lịch sử kho</div><div class="row-sub">Xóa khỏi màn hình theo ngày hoặc toàn bộ. Tồn kho hiện tại không thay đổi và thao tác vẫn được ghi nhật ký quản trị.</div></div><div class="row-actions" style="color:var(--danger)">${icon("trash")}</div>
         </button>` : ""}
       </div>
       <div class="helper-block">File <strong>database.sql</strong> là file cài đặt database cho ứng dụng này.</div>
@@ -3483,7 +2799,8 @@ function openHistoryCleanupModal() {
       <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không dùng để sửa tồn kho</div><div class="notice-text">Giao dịch sai nên dùng Đảo giao dịch. Xóa lịch sử chỉ dùng để dọn dữ liệu hiển thị.</div></div></div>
       <label class="field" for="history-cleanup-scope"><span class="field-label">Phạm vi xóa</span><select id="history-cleanup-scope" name="scope" class="select"><option value="before">Đến hết một ngày</option><option value="all">Toàn bộ lịch sử</option></select></label>
       <label class="field" id="history-cleanup-date-field" for="history-cleanup-before"><span class="field-label">Xóa đến hết ngày</span><input id="history-cleanup-before" name="before" class="input" type="date" value="${escapeHTML(today)}"></label>
-      <label class="field" for="history-cleanup-reason"><span class="field-label">Lý do</span><textarea id="history-cleanup-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Dọn dữ liệu thử nghiệm trước khi sử dụng chính thức"></textarea><span class="field-help">Sau khi bấm Xóa lịch sử, ứng dụng sẽ hỏi xác nhận lần cuối.</span></label>
+      <label class="field" for="history-cleanup-reason"><span class="field-label">Lý do</span><textarea id="history-cleanup-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Dọn dữ liệu thử nghiệm trước khi sử dụng chính thức"></textarea></label>
+      <label class="field" for="history-cleanup-confirmation"><span class="field-label">Nhập XOA LICH SU để xác nhận</span><input id="history-cleanup-confirmation" name="confirmation" class="input" type="text" autocapitalize="characters" autocomplete="off" required></label>
     </form>`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="history-cleanup-form">Xóa lịch sử</button>`,
   });
@@ -3495,36 +2812,6 @@ function updateHistoryCleanupFields() {
   const deleteAll = $("#history-cleanup-scope", form)?.value === "all";
   const dateField = $("#history-cleanup-date-field", form);
   const dateInput = $("#history-cleanup-before", form);
-  if (dateField) dateField.hidden = deleteAll;
-  if (dateInput) dateInput.required = !deleteAll;
-}
-
-function openHistoryPurgeModal() {
-  if (normalizeRoleCode(appState.currentUser?.role) !== "superadmin" || !hasPermission(PERMISSIONS.manageData)) {
-    showToast("error", "Không có quyền", "Chỉ Super Admin được xóa vĩnh viễn lịch sử kho.");
-    return;
-  }
-  const today = formatISODate(new Date());
-  openModal({
-    name: "history-purge",
-    title: "Xóa vĩnh viễn lịch sử đã ẩn",
-    subtitle: "Chỉ xóa các giao dịch đã được ẩn trước đó; tồn kho hiện tại không thay đổi.",
-    body: `<form id="history-purge-form" class="field-grid" novalidate>
-      <div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không thể khôi phục</div><div class="notice-text">Dữ liệu giao dịch sẽ bị xóa vật lý khỏi database. Nhật ký quản trị chỉ giữ số lượng, lý do và người thực hiện.</div></div></div>
-      <label class="field" for="history-purge-scope"><span class="field-label">Phạm vi xóa</span><select id="history-purge-scope" name="scope" class="select"><option value="before">Đã ẩn đến hết một ngày</option><option value="all">Toàn bộ lịch sử đã ẩn</option></select></label>
-      <label class="field" id="history-purge-date-field" for="history-purge-before"><span class="field-label">Ngày đã ẩn đến hết</span><input id="history-purge-before" name="before" class="input" type="date" value="${escapeHTML(today)}"></label>
-      <label class="field" for="history-purge-reason"><span class="field-label">Lý do *</span><textarea id="history-purge-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Xóa dữ liệu thử nghiệm đã được kiểm tra"></textarea><span class="field-help">Ứng dụng sẽ hỏi xác nhận lần cuối trước khi xóa vĩnh viễn.</span></label>
-    </form>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="history-purge-form">Xóa vĩnh viễn</button>`,
-  });
-}
-
-function updateHistoryPurgeFields() {
-  const form = $("#history-purge-form");
-  if (!form) return;
-  const deleteAll = $("#history-purge-scope", form)?.value === "all";
-  const dateField = $("#history-purge-date-field", form);
-  const dateInput = $("#history-purge-before", form);
   if (dateField) dateField.hidden = deleteAll;
   if (dateInput) dateInput.required = !deleteAll;
 }
@@ -3545,7 +2832,7 @@ function openProfileModal() {
     </div>
     ${dataService.mode === "local"
       ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Dữ liệu chỉ nằm trên thiết bị</div><div class="notice-text">Chế độ local chỉ dùng xem thử; dữ liệu không đồng bộ giữa các thiết bị.</div></div></div>`
-      : ""}`,
+      : `<div class="notice notice-success" style="margin-top:14px"><div class="notice-icon">${icon("check")}</div><div><div class="notice-title">Đang dùng dữ liệu cloud</div><div class="notice-text">Quyền và giao dịch được kiểm tra lại tại Supabase.</div></div></div>`}`,
     footer: `<button class="btn btn-danger" type="button" data-action="logout">Đăng xuất</button><button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>`,
   });
 }
@@ -3557,77 +2844,24 @@ function openProductDetail(productId) {
     showToast("error", "Không có quyền", "Tài khoản hiện tại không được xem chi tiết vật liệu trong nhóm này.");
     return;
   }
-
   const category = categoryById(product.categoryId);
-  const canViewQuantity = hasPermission(PERMISSIONS.viewQuantity, product.categoryId);
-  const status = canViewQuantity ? productStatus(product) : null;
-  const canImport = hasPermission(PERMISSIONS.importInventory, product.categoryId);
-  const canExport = hasPermission(PERMISSIONS.exportInventory, product.categoryId);
-  const canEdit = hasPermission(PERMISSIONS.editProduct, product.categoryId);
-  const canArchive = hasPermission(PERMISSIONS.archiveProduct, product.categoryId);
-
-  const attributeRows = orderedCategoryAttributes(category)
-    .map((attribute) => `<div class="detail-row"><div class="detail-key">${escapeHTML(attribute.name)}</div><div class="detail-value">${escapeHTML(attributeDisplayValue(attribute, product.attributes[attribute.id]))}</div></div>`)
-    .join("");
-
-  const stockCard = canViewQuantity
-    ? `<section class="product-stock-card product-stock-${escapeHTML(status.key)}" aria-label="Tồn kho hiện tại">
-        <div class="product-stock-main">
-          <span class="product-stock-label">Tồn hiện tại</span>
-          <strong class="product-stock-value">${formatQuantity(product.quantity)} <small>${escapeHTML(product.unit)}</small></strong>
-          <span class="badge ${escapeHTML(status.className)}">${escapeHTML(status.label)}</span>
-        </div>
-        <div class="product-stock-side">
-          <span>Mức cảnh báo</span>
-          <strong>${formatQuantity(product.warningLevel)} ${escapeHTML(product.unit)}</strong>
-        </div>
-      </section>`
-    : `<div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Đã ẩn số lượng</div><div class="notice-text">Tài khoản hiện tại không được xem tồn kho của nhóm này.</div></div></div>`;
-
-  const quickButtons = [
-    canImport ? `<button class="product-quick-action product-quick-import" type="button" data-action="open-transaction" data-product-id="${escapeHTML(product.id)}" data-transaction-type="${TRANSACTION_TYPES.import}"><span class="product-quick-icon">${icon("down")}</span><span><strong>Nhập kho</strong><small>Tăng số lượng tồn</small></span></button>` : "",
-    canExport ? `<button class="product-quick-action product-quick-export" type="button" data-action="open-transaction" data-product-id="${escapeHTML(product.id)}" data-transaction-type="${TRANSACTION_TYPES.export}" ${normalizeQuantity(product.quantity, 0) <= 0 ? "disabled" : ""}><span class="product-quick-icon">${icon("up")}</span><span><strong>Xuất kho</strong><small>${normalizeQuantity(product.quantity, 0) <= 0 ? "Không còn tồn để xuất" : "Giảm số lượng tồn"}</small></span></button>` : "",
-  ].filter(Boolean);
-
-  const quickActions = quickButtons.length
-    ? `<section class="product-action-section" aria-label="Thao tác kho nhanh">
-        <div class="product-detail-section-title">Thao tác nhanh</div>
-        <div class="product-quick-actions ${quickButtons.length === 1 ? "is-single" : ""}">${quickButtons.join("")}</div>
-      </section>`
-    : "";
-
-  const archiveArea = canArchive
-    ? `<details class="danger-zone">
-        <summary>Tùy chọn khác</summary>
-        <div class="danger-zone-body">
-          <p>Chỉ lưu trữ khi tồn kho đã bằng 0. Lịch sử cũ vẫn được giữ.</p>
-          <button class="btn btn-danger-soft btn-block" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}">${icon("archive")} Lưu trữ vật liệu</button>
-        </div>
-      </details>`
-    : "";
-
-  const footerButtons = [
-    `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>`,
-    canEdit ? `<button class="btn btn-soft" type="button" data-action="edit-product" data-product-id="${escapeHTML(product.id)}">${icon("edit")} Sửa vật liệu</button>` : "",
+  const status = hasPermission(PERMISSIONS.viewQuantity, product.categoryId) ? productStatus(product) : null;
+  const attributeRows = orderedCategoryAttributes(category).map((attribute) => `<div class="detail-row"><div class="detail-key">${escapeHTML(attribute.name)}</div><div class="detail-value">${escapeHTML(attributeDisplayValue(attribute, product.attributes[attribute.id]))}</div></div>`).join("");
+  const quantityRows = hasPermission(PERMISSIONS.viewQuantity, product.categoryId)
+    ? `<div class="detail-row"><div class="detail-key">Tồn hiện tại</div><div class="detail-value">${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</div></div><div class="detail-row"><div class="detail-key">Cảnh báo</div><div class="detail-value">${formatQuantity(product.warningLevel)} ${escapeHTML(product.unit)}</div></div>`
+    : `<div class="detail-row"><div class="detail-key">Tồn kho</div><div class="detail-value">Đã ẩn theo quyền</div></div>`;
+  const actions = [
+    canCreateAnyInventoryTransaction(product.categoryId) ? `<button class="btn btn-primary" type="button" data-action="open-transaction" data-product-id="${escapeHTML(product.id)}">Giao dịch</button>` : "",
+    hasPermission(PERMISSIONS.editProduct, product.categoryId) ? `<button class="btn btn-secondary" type="button" data-action="edit-product" data-product-id="${escapeHTML(product.id)}">Sửa</button>` : "",
   ].filter(Boolean).join("");
 
   openModal({
     name: "product-detail",
     title: product.name,
     subtitle: `${category?.name || "Chưa phân nhóm"}${status ? ` · ${status.label}` : ""}`,
-    body: `${stockCard}
-      ${quickActions}
-      <section class="product-detail-section">
-        <div class="product-detail-section-title">Thông tin vật liệu</div>
-        <div class="detail-grid">
-          <div class="detail-row"><div class="detail-key">Đơn vị</div><div class="detail-value">${escapeHTML(product.unit)}</div></div>
-          ${attributeRows}
-          <div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(product.note || "—")}</div></div>
-          <div class="detail-row"><div class="detail-key">Cập nhật</div><div class="detail-value">${formatDateTime(product.updatedAt)}</div></div>
-        </div>
-      </section>
-      ${archiveArea}`,
-    footer: `<div class="product-detail-footer">${footerButtons}</div>`,
+    body: `<div class="detail-grid">${quantityRows}<div class="detail-row"><div class="detail-key">Đơn vị</div><div class="detail-value">${escapeHTML(product.unit)}</div></div>${attributeRows}<div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(product.note || "—")}</div></div><div class="detail-row"><div class="detail-key">Cập nhật</div><div class="detail-value">${formatDateTime(product.updatedAt)}</div></div></div>
+      ${hasPermission(PERMISSIONS.archiveProduct, product.categoryId) ? `<button class="btn btn-danger-soft btn-block" style="margin-top:14px" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}">${icon("archive")} Lưu trữ vật liệu</button>` : ""}`,
+    footer: actions ? `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button><div class="inline-actions">${actions}</div>` : `<button class="btn btn-secondary btn-block" type="button" data-action="close-modal">Đóng</button>`,
   });
 }
 
@@ -3724,70 +2958,33 @@ function renderTransactionTypeButtons(categoryId, selectedType = "") {
   return options.map(([type, label]) => `<button class="segmented-item" type="button" data-action="select-transaction-type" data-type="${type}" aria-pressed="${type === effectiveType}">${label}</button>`).join("");
 }
 
-function transactionFormBody(productId = null, preferredType = null) {
+function transactionFormBody(productId = null) {
   const products = appState.cache.products.filter((product) => !product.archived && canCreateAnyInventoryTransaction(product.categoryId));
   const selected = products.find((product) => product.id === productId) || products[0];
   if (!selected) return renderEmptyState("inventory", "Chưa có vật liệu", "Vai trò hiện tại chưa có vật liệu nào được phép giao dịch.");
-
   const allowedTypes = transactionTypeOptionsForCategory(selected.categoryId);
-  const lockedType = allowedTypes.some(([type]) => type === preferredType) ? preferredType : null;
-  const firstType = lockedType || allowedTypes[0]?.[0] || "";
-  const presentation = transactionModalPresentation(firstType);
-  const lockProduct = Boolean(productId && lockedType && selected.id === productId);
-  const showNoteInitially = firstType !== TRANSACTION_TYPES.export;
-  const noteRequiredInitially = transactionRequiresNote(firstType, 0);
-
-  const productField = lockProduct
-    ? `<input type="hidden" name="productId" value="${escapeHTML(selected.id)}">
-      <div class="transaction-context-card">
-        <span class="transaction-context-icon">${icon("inventory")}</span>
-        <span class="transaction-context-copy"><small>Vật liệu</small><strong>${escapeHTML(selected.name)}</strong><span>Tồn hiện tại: ${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</span></span>
-      </div>`
-    : `<label class="field" for="transaction-product"><span class="field-label">Vật liệu</span><select id="transaction-product" name="productId" class="select">${products.map((product) => `<option value="${escapeHTML(product.id)}" ${product.id === selected.id ? "selected" : ""}>${escapeHTML(product.name)}</option>`).join("")}</select></label>`;
-
-  const typeField = lockedType
-    ? `<input id="transaction-type" type="hidden" name="type" value="${escapeHTML(firstType)}">
-      <div class="transaction-kind-card transaction-kind-${escapeHTML(firstType)}">
-        <span class="transaction-kind-icon">${icon(presentation.iconName)}</span>
-        <span><small>Loại giao dịch</small><strong>${escapeHTML(TRANSACTION_LABELS[firstType])}</strong></span>
-      </div>`
-    : `<fieldset class="field"><legend class="field-label">Loại giao dịch</legend><div id="transaction-type-buttons" class="segmented" role="group">${renderTransactionTypeButtons(selected.categoryId, firstType)}</div><input id="transaction-type" type="hidden" name="type" value="${escapeHTML(firstType)}"></fieldset>`;
-
+  const firstType = allowedTypes[0]?.[0] || "";
   return `<form id="transaction-form" class="field-grid" novalidate>
     <input type="hidden" name="requestKey" value="${escapeHTML(makeId("request"))}">
-    ${productField}
-    ${typeField}
-    <label class="field" for="transaction-amount"><span id="transaction-amount-label" class="field-label">${firstType === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng"}</span><input id="transaction-amount" name="amount" class="input transaction-amount-input" type="number" inputmode="decimal" min="0" max="${MAX_QUANTITY}" step="any" required value="" placeholder="0"><span id="transaction-unit-help" class="field-help">Đơn vị: ${escapeHTML(selected.unit)}</span></label>
-    <div id="transaction-preview" class="transaction-preview-card"><span>Tồn hiện tại</span><strong>${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</strong><span class="transaction-preview-arrow">→</span><span>Sau giao dịch</span><strong>${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</strong></div>
-    <div id="transaction-reason-rule" class="transaction-rule" data-required="${String(noteRequiredInitially)}">${firstType === TRANSACTION_TYPES.export ? `Xuất tối đa ${EXPORT_REASON_THRESHOLD} đơn vị không cần lý do.` : firstType === TRANSACTION_TYPES.import ? "Nhập kho không bắt buộc ghi chú." : "Kiểm kê bắt buộc nhập lý do."}</div>
-    <label id="transaction-note-field" class="field" for="transaction-note" ${showNoteInitially ? "" : "hidden"}><span id="transaction-note-label" class="field-label">${noteRequiredInitially ? "Lý do *" : "Ghi chú thêm"}</span><textarea id="transaction-note" name="note" class="textarea" rows="3" ${noteRequiredInitially ? "required" : ""} placeholder="${firstType === TRANSACTION_TYPES.adjust ? "Nhập lý do kiểm kê" : "Nguồn nhập hoặc thông tin liên quan"}"></textarea><span id="transaction-note-help" class="field-help">${noteRequiredInitially ? "Bắt buộc để lưu giao dịch." : "Không bắt buộc."}</span></label>
+    <label class="field" for="transaction-product"><span class="field-label">Vật liệu</span><select id="transaction-product" name="productId" class="select">${products.map((product) => `<option value="${escapeHTML(product.id)}" ${product.id === selected.id ? "selected" : ""}>${escapeHTML(product.name)}</option>`).join("")}</select></label>
+    <fieldset class="field"><legend class="field-label">Loại giao dịch</legend><div id="transaction-type-buttons" class="segmented" role="group">${renderTransactionTypeButtons(selected.categoryId, firstType)}</div><input id="transaction-type" type="hidden" name="type" value="${firstType}"></fieldset>
+    <label class="field" for="transaction-amount"><span id="transaction-amount-label" class="field-label">${firstType === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng"}</span><input id="transaction-amount" name="amount" class="input" type="number" inputmode="decimal" min="0" max="${MAX_QUANTITY}" step="any" required value=""><span id="transaction-unit-help" class="field-help">Đơn vị: ${escapeHTML(selected.unit)}</span></label>
+    <div id="transaction-preview" class="helper-block">Tồn hiện tại: ${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</div>
+    <label class="field" for="transaction-note"><span class="field-label">Lý do / ghi chú</span><textarea id="transaction-note" name="note" class="textarea" rows="3" placeholder="${firstType === TRANSACTION_TYPES.export ? "Bắt buộc khi xuất kho" : firstType === TRANSACTION_TYPES.adjust ? "Bắt buộc khi kiểm kê" : "Nguồn nhập hoặc thông tin liên quan"}"></textarea><span id="transaction-note-help" class="field-help">${firstType === TRANSACTION_TYPES.import ? "Không bắt buộc, nhưng nên ghi nguồn nhập." : "Bắt buộc để bảo đảm lịch sử có thể đối soát."}</span></label>
+    <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Lịch sử không được sửa hoặc xóa</div><div class="notice-text">Nếu nhập sai, quản lý chỉ được đảo giao dịch mới nhất của vật liệu trong phạm vi được cấp.</div></div></div>
   </form>`;
 }
 
-function openTransactionModal(productId = null, preferredType = null) {
-  const product = productId ? productById(productId) : null;
-  if (preferredType && product) {
-    const permission = transactionPermission(preferredType);
-    if (!permission || !hasPermission(permission, product.categoryId)) {
-      return showToast("error", "Không có quyền", "Tài khoản hiện tại không được thực hiện thao tác này.");
-    }
-  } else if (!canCreateAnyInventoryTransaction()) {
-    return showToast("error", "Không có quyền giao dịch");
-  }
-
-  const lockedType = preferredType && [TRANSACTION_TYPES.import, TRANSACTION_TYPES.export, TRANSACTION_TYPES.adjust].includes(preferredType)
-    ? preferredType
-    : null;
-  const presentation = transactionModalPresentation(lockedType);
+function openTransactionModal(productId = null) {
+  if (!canCreateAnyInventoryTransaction()) return showToast("error", "Không có quyền giao dịch");
   closeModal(true);
   openModal({
     name: "transaction-form",
-    title: presentation.title,
-    subtitle: presentation.subtitle,
-    body: transactionFormBody(productId, lockedType),
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn ${presentation.submitClass}" type="submit" form="transaction-form">${escapeHTML(presentation.submitLabel)}</button>`,
+    title: "Giao dịch kho",
+    subtitle: "Mỗi lần gửi chỉ tạo đúng một giao dịch.",
+    body: transactionFormBody(productId),
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="transaction-form">Lưu giao dịch</button>`,
   });
-  updateTransactionPreview();
 }
 
 function updateTransactionPreview() {
@@ -3802,57 +2999,25 @@ function updateTransactionPreview() {
     type = typeOptions[0]?.[0] || "";
     setValue("#transaction-type", type, form);
   }
-
   const typeButtons = $("#transaction-type-buttons", form);
   if (typeButtons) typeButtons.innerHTML = renderTransactionTypeButtons(product.categoryId, type);
-
   const amount = normalizeQuantity(formData.get("amount"), 0);
   let after = normalizeQuantity(product.quantity, 0);
   if (type === TRANSACTION_TYPES.import) after = normalizeQuantity(after + amount, 0);
   if (type === TRANSACTION_TYPES.export) after = normalizeQuantity(after - amount, 0);
   if (type === TRANSACTION_TYPES.adjust) after = amount;
-
   setText("#transaction-amount-label", type === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng", form);
   setText("#transaction-unit-help", `Đơn vị: ${product.unit}`, form);
-
-  const noteRequired = transactionRequiresNote(type, amount);
-  const noteField = $("#transaction-note-field", form);
   const note = $("#transaction-note", form);
-  const noteLabel = $("#transaction-note-label", form);
-  const noteHelp = $("#transaction-note-help", form);
-  const reasonRule = $("#transaction-reason-rule", form);
-
-  if (note) {
-    note.required = noteRequired;
-    note.placeholder = type === TRANSACTION_TYPES.adjust
-      ? "Nhập lý do kiểm kê"
-      : type === TRANSACTION_TYPES.export
-        ? `Nhập lý do xuất trên ${EXPORT_REASON_THRESHOLD} đơn vị`
-        : "Nguồn nhập hoặc thông tin liên quan";
-  }
-  if (noteField) noteField.hidden = type === TRANSACTION_TYPES.export && !noteRequired;
-  if (noteLabel) noteLabel.textContent = noteRequired ? "Lý do *" : "Ghi chú thêm";
-  if (noteHelp) noteHelp.textContent = noteRequired ? "Bắt buộc để lưu giao dịch." : "Không bắt buộc.";
-  if (reasonRule) {
-    reasonRule.dataset.required = String(noteRequired);
-    if (type === TRANSACTION_TYPES.export) {
-      reasonRule.textContent = noteRequired
-        ? `Bạn đang xuất trên ${EXPORT_REASON_THRESHOLD} đơn vị. Vui lòng nhập lý do.`
-        : `Xuất tối đa ${EXPORT_REASON_THRESHOLD} đơn vị không cần lý do.`;
-    } else if (type === TRANSACTION_TYPES.import) {
-      reasonRule.textContent = "Nhập kho không bắt buộc ghi chú.";
-    } else {
-      reasonRule.textContent = "Kiểm kê bắt buộc nhập lý do.";
-    }
-  }
-
+  if (note) note.placeholder = type === TRANSACTION_TYPES.export ? "Bắt buộc khi xuất kho" : type === TRANSACTION_TYPES.adjust ? "Bắt buộc khi kiểm kê" : "Nguồn nhập hoặc thông tin liên quan";
+  setText("#transaction-note-help", type === TRANSACTION_TYPES.import ? "Không bắt buộc, nhưng nên ghi nguồn nhập." : "Bắt buộc để bảo đảm lịch sử có thể đối soát.", form);
   const preview = $("#transaction-preview", form);
   if (preview) {
     const invalid = after < 0 || after > MAX_QUANTITY;
     preview.classList.toggle("helper-danger", invalid);
     preview.innerHTML = invalid
-      ? `<span>Tồn hiện tại</span><strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong><span class="transaction-preview-arrow">→</span><span>Không hợp lệ</span><strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`
-      : `<span>Tồn hiện tại</span><strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong><span class="transaction-preview-arrow">→</span><span>Sau giao dịch</span><strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`;
+      ? `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong> · <strong>Không thể tạo tồn ${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`
+      : `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong> · Sau giao dịch: <strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`;
   }
 }
 
@@ -3935,7 +3100,7 @@ function accountFormBody(account = null) {
     <input type="hidden" name="id" value="${escapeHTML(account?.id || "")}">
     <input type="hidden" name="expectedRevision" value="${escapeHTML(account?.revision ?? "")}">
     <label class="field" for="account-display-name"><span class="field-label">Tên hiển thị</span><input id="account-display-name" name="displayName" class="input" type="text" autocomplete="name" required value="${escapeHTML(account?.displayName || "")}"></label>
-    <label class="field" for="account-username"><span class="field-label">Tên đăng nhập</span><input id="account-username" name="username" class="input" type="text" autocapitalize="none" autocomplete="username" required value="${escapeHTML(account?.username || "")}"><span class="field-help">Super Admin có thể đổi tên đăng nhập. Tên cũ được giữ lại và không thể cấp lại cho người khác.</span></label>
+    <label class="field" for="account-username"><span class="field-label">Tên đăng nhập</span><input id="account-username" name="username" class="input" type="text" autocapitalize="none" autocomplete="username" required ${account ? "readonly" : ""} value="${escapeHTML(account?.username || "")}"><span class="field-help">Không cần email thật. Tên đăng nhập không đổi sau khi tạo.</span></label>
     ${passwordFields}
     <div class="field-grid two">
       <label class="field" for="account-role"><span class="field-label">Vai trò</span><select id="account-role" name="role" class="select">${roles.map((role) => `<option value="${role}" ${role === model.role ? "selected" : ""}>${escapeHTML(roleLabel(role))}</option>`).join("")}</select></label>
@@ -3949,6 +3114,7 @@ function accountFormBody(account = null) {
         return `<label class="scope-permission-item"><input type="checkbox" data-account-scope-permission data-category-id="${escapeHTML(category.id)}" data-permission="${escapeHTML(permission)}" ${checked ? "checked" : ""} ${allowedScoped.has(permission) && model.scopeMode === "custom" ? "" : "disabled"}><span>${escapeHTML(name)}</span></label>`;
       }).join("")}</div></fieldset>`).join("")}
     </div>
+    <div class="notice"><div class="notice-icon">${icon("info")}</div><div><div class="notice-title">Không bắt buộc đổi mật khẩu lần đầu</div><div class="notice-text">Tài khoản mới đăng nhập và sử dụng ngay theo quyền được cấp. Super Admin có thể đặt mật khẩu mới khi cần.</div></div></div>
   </form>`;
 }
 
@@ -3963,6 +3129,7 @@ function openPasswordResetForm(accountId) {
       <input type="hidden" name="accountId" value="${escapeHTML(account.id)}">
       <label class="field" for="reset-password"><span class="field-label">Mật khẩu mới</span><input id="reset-password" name="password" class="input" type="password" autocomplete="new-password" minlength="8" required autofocus><span class="field-help">Tối thiểu 8 ký tự, có chữ và số.</span></label>
       <label class="field" for="reset-password-confirm"><span class="field-label">Xác nhận mật khẩu</span><input id="reset-password-confirm" name="passwordConfirm" class="input" type="password" autocomplete="new-password" minlength="8" required></label>
+      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Có hiệu lực ngay</div><div class="notice-text">Tài khoản không bị bắt buộc đổi lại mật khẩu ở lần đăng nhập sau.</div></div></div>
     </form>`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="password-reset-form">Lưu mật khẩu</button>`,
   });
@@ -4002,14 +3169,11 @@ function openAccountForm(accountId = null) {
   const extraButton = account && canManageAccount(account) && hasPermission(PERMISSIONS.resetAccountPassword)
     ? `<button class="btn btn-soft" type="button" data-action="open-password-reset" data-account-id="${escapeHTML(account.id)}">Đặt mật khẩu mới</button>`
     : "";
-  const deleteSection = account && account.id !== appState.currentUser.id
-    ? `<details class="danger-zone"><summary>Tùy chọn nguy hiểm</summary><div class="danger-zone-body"><p>Tài khoản chưa phát sinh hoạt động sẽ bị xóa vĩnh viễn. Tài khoản đã có lịch sử sẽ chỉ chuyển sang ngừng sử dụng.</p><button class="btn btn-danger-soft btn-block" type="button" data-action="delete-account" data-account-id="${escapeHTML(account.id)}">${icon("trash")} Xóa tài khoản</button></div></details>`
-    : "";
   openModal({
     name: "account-form",
     title: account ? "Sửa tài khoản" : "Tạo tài khoản",
     subtitle: "Cấp vai trò và quyền riêng theo từng nhóm vật liệu.",
-    body: `${accountFormBody(account)}${extraButton ? `<div style="margin-top:12px">${extraButton}</div>` : ""}${deleteSection}`,
+    body: `${accountFormBody(account)}${extraButton ? `<div style="margin-top:12px">${extraButton}</div>` : ""}`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="account-form">${account ? "Lưu thay đổi" : "Tạo tài khoản"}</button>`,
   });
   updateAccountPermissionEditor();
@@ -4119,35 +3283,12 @@ function openCategoryForm(categoryId = null) {
     active: true,
     attributes: [{ id: "", name: "Tên vật liệu", type: "text", options: [], unit: "", required: true, identity: true, list: true, identityOrder: 0 }],
   });
-  const deleteButton = category && normalizeRoleCode(appState.currentUser?.role) === "superadmin"
-    ? `<button class="btn btn-danger sheet-footer-wide" type="button" data-action="open-delete-category" data-category-id="${escapeHTML(category.id)}">${icon("trash")} Xóa nhóm</button>`
-    : "";
   openModal({
     name: "category-form",
     title: category ? "Sửa nhóm vật liệu" : "Thêm nhóm vật liệu",
     subtitle: "Không đổi ID nhóm khi đã có dữ liệu lịch sử.",
     body: categoryFormBody(category, appState.ui.categoryDraft),
-    footer: `${deleteButton}<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="category-form">${category ? "Lưu thay đổi" : "Tạo nhóm"}</button>`,
-  });
-}
-
-function openDeleteCategoryModal(categoryId) {
-  if (normalizeRoleCode(appState.currentUser?.role) !== "superadmin") return showToast("error", "Chỉ Super Admin được xóa hoặc ngừng nhóm");
-  const category = categoryById(categoryId);
-  if (!category) return showToast("error", "Không tìm thấy nhóm");
-  const visibleProductCount = appState.cache.products.filter((product) => product.categoryId === categoryId).length;
-  openModal({
-    name: "delete-category-form",
-    title: "Xóa hoặc ngừng nhóm",
-    subtitle: `${category.icon || "◇"} ${category.name}`,
-    body: `<form id="delete-category-form" class="field-grid" novalidate>
-      <input type="hidden" name="categoryId" value="${escapeHTML(category.id)}">
-      <input type="hidden" name="expectedRevision" value="${escapeHTML(category.revision ?? "")}">
-      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Database sẽ tự chọn cách xử lý an toàn</div><div class="notice-text">Nhóm hoàn toàn trống sẽ bị xóa hẳn. Nếu đã có vật liệu hoặc lịch sử, nhóm chỉ chuyển sang ngừng sử dụng; vật liệu và lịch sử cũ vẫn được giữ.</div></div></div>
-      <div class="detail-grid"><div class="detail-row"><div class="detail-key">Vật liệu đang tải</div><div class="detail-value">${visibleProductCount}</div></div><div class="detail-row"><div class="detail-key">Lưu ý</div><div class="detail-value">Database sẽ kiểm tra lại toàn bộ dữ liệu, không dựa vào số đang hiển thị.</div></div></div>
-      <label class="field" for="delete-category-reason"><span class="field-label">Lý do *</span><textarea id="delete-category-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Tạo nhầm nhóm hoặc không còn sử dụng"></textarea><span class="field-help">Tối thiểu 5 ký tự. Ứng dụng sẽ hỏi xác nhận lần cuối.</span></label>
-    </form>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="delete-category-form">Xác nhận</button>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="category-form">${category ? "Lưu thay đổi" : "Tạo nhóm"}</button>`,
   });
 }
 
@@ -4196,7 +3337,6 @@ function updateInventoryListOnly() {
   const products = filteredProducts();
   list.innerHTML = renderInventoryListContent(products);
   setText("#inventory-result-count", `${products.length} kết quả`);
-  updateInventoryExportControls();
 }
 
 function updateHistoryListOnly() {
@@ -4212,10 +3352,6 @@ const debouncedHistoryFilter = debounce(updateHistoryListOnly, 160);
 
 async function switchScreen(screen, manageTarget = null) {
   if (!Object.values(SCREENS).includes(screen)) return;
-  if (screen !== SCREENS.inventory) {
-    appState.ui.inventoryExportMode = false;
-    appState.ui.inventoryExportIds = [];
-  }
   appState.screen = screen;
   if (manageTarget && Object.values(MANAGE_TABS).includes(manageTarget)) appState.manageTab = manageTarget;
   closeModal(true);
@@ -4365,88 +3501,23 @@ async function handleReverseTransactionSubmit(event, form) {
 async function handleHistoryCleanupSubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
-  const scope = data.get("scope") === "all" ? "all" : "before";
-  const before = scope === "all" ? null : String(data.get("before") || "");
-  const reason = String(data.get("reason") || "").trim();
-  if (scope === "before" && !before) return showToast("error", "Thiếu ngày kết thúc", "Vui lòng chọn ngày kết thúc.");
-  if (reason.length < 5) return showToast("error", "Lý do chưa hợp lệ", "Lý do cần có ít nhất 5 ký tự.");
-
-  const scopeText = scope === "all" ? "toàn bộ lịch sử đang hiển thị" : `lịch sử đến hết ngày ${before.split("-").reverse().join("/")}`;
-  openConfirm({
-    title: "Xác nhận xóa lịch sử?",
-    message: `Bạn có chắc muốn ẩn ${scopeText} khỏi ứng dụng? Tồn kho hiện tại không thay đổi.`,
-    confirmLabel: "Xóa lịch sử",
-    danger: true,
-    onConfirm: async (confirmButton) => {
-      await withActionLock("delete-inventory-history", confirmButton, async () => {
-        try {
-          const result = await dataService.deleteInventoryHistory({ before, reason });
-          await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50, useFilters: appState.screen === SCREENS.history });
-          closeModal(true);
-          renderApp();
-          showToast("success", "Đã xóa lịch sử", `${toNumber(result?.deletedCount, 0)} giao dịch đã được xóa khỏi ứng dụng.`);
-        } catch (error) {
-          closeModal(true);
-          showToast("error", "Không thể xóa lịch sử", error.message);
-        }
-      });
-    },
-  });
-}
-
-async function handleHistoryPurgeSubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const scope = data.get("scope") === "all" ? "all" : "before";
-  const before = scope === "all" ? null : String(data.get("before") || "");
-  const reason = String(data.get("reason") || "").trim();
-  if (scope === "before" && !before) return showToast("error", "Thiếu ngày kết thúc", "Vui lòng chọn ngày kết thúc.");
-  if (reason.length < 5) return showToast("error", "Lý do chưa hợp lệ", "Lý do cần có ít nhất 5 ký tự.");
-
-  const scopeText = scope === "all" ? "toàn bộ lịch sử đã ẩn" : `lịch sử đã ẩn đến hết ngày ${before.split("-").reverse().join("/")}`;
-  openConfirm({
-    title: "Xóa vĩnh viễn?",
-    message: `Bạn có chắc muốn xóa vĩnh viễn ${scopeText}? Dữ liệu này không thể khôi phục và tồn kho hiện tại không thay đổi.`,
-    confirmLabel: "Xóa vĩnh viễn",
-    danger: true,
-    onConfirm: async (confirmButton) => {
-      await withActionLock("purge-inventory-history", confirmButton, async () => {
-        try {
-          const result = await dataService.purgeInventoryHistory({ before, reason });
-          closeModal(true);
-          renderApp();
-          const skipped = toNumber(result?.skippedLinkedCount, 0);
-          const suffix = skipped > 0 ? ` Bỏ qua ${skipped} giao dịch còn liên kết với lịch sử chưa ẩn.` : "";
-          showToast("success", "Đã xóa vĩnh viễn", `${toNumber(result?.purgedCount, 0)} giao dịch đã bị xóa khỏi database.${suffix}`);
-        } catch (error) {
-          closeModal(true);
-          showToast("error", "Không thể xóa vĩnh viễn", error.message);
-        }
-      });
-    },
-  });
-}
-
-async function saveAccountFromPayload(payload, submitButton) {
-  await withActionLock("save-account", submitButton, async () => {
+  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
+  await withActionLock("delete-inventory-history", submitButton, async () => {
     try {
-      const result = await dataService.saveAccount(payload);
-      if (result?.currentSessionRevoked) {
-        clearAuthSession();
-        setAuthenticatedAccount(null);
-        appState.cache = { schema: null, products: [], transactions: [], accounts: [], accountAudit: [], loaded: { bootstrap: false, transactions: false, accounts: false, accountAudit: false } };
-        closeModal(true);
-        renderApp();
-        showToast("success", "Đã đổi tên đăng nhập", `Hãy đăng nhập lại bằng tên mới: ${result.username}`);
-        return;
-      }
-      await loadAccountData({ render: false });
-      syncCurrentUserFromAccounts();
+      const scope = data.get("scope") === "all" ? "all" : "before";
+      const before = scope === "all" ? null : String(data.get("before") || "");
+      if (scope === "before" && !before) throw new Error("Vui lòng chọn ngày kết thúc.");
+      const result = await dataService.deleteInventoryHistory({
+        before,
+        reason: data.get("reason"),
+        confirmation: data.get("confirmation"),
+      });
+      await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50, useFilters: appState.screen === SCREENS.history });
       closeModal(true);
       renderApp();
-      showToast("success", result?.usernameChanged ? "Đã đổi tên đăng nhập" : "Đã lưu tài khoản");
+      showToast("success", "Đã xóa lịch sử", `${toNumber(result?.deletedCount, 0)} giao dịch đã được xóa khỏi ứng dụng.`);
     } catch (error) {
-      showToast("error", "Không thể lưu tài khoản", error.message);
+      showToast("error", "Không thể xóa lịch sử", error.message);
     }
   });
 }
@@ -4455,69 +3526,27 @@ async function handleAccountSubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
   const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  const payload = {
-    id: data.get("id") || null,
-    expectedRevision: toOptionalNumber(data.get("expectedRevision")),
-    displayName: data.get("displayName"),
-    username: data.get("username"),
-    role: data.get("role"),
-    status: data.get("status") || ACCOUNT_STATUSES.active,
-    scopeMode: data.get("scopeMode") || "all",
-    categoryPermissions: readAccountCategoryPermissions(form),
-    password: data.get("password"),
-    passwordConfirm: data.get("passwordConfirm"),
-  };
-  const existing = payload.id ? appState.cache.accounts.find((account) => account.id === payload.id) : null;
-  let normalizedUsername;
-  try {
-    normalizedUsername = validateUsername(payload.username);
-  } catch (error) {
-    showToast("error", "Tên đăng nhập không hợp lệ", error.message);
-    return;
-  }
-  payload.username = normalizedUsername;
-  const usernameChanged = Boolean(existing && normalizedUsername !== normalizeText(existing.username).replace(/\s+/g, ""));
-  if (!usernameChanged) {
-    await saveAccountFromPayload(payload, submitButton);
-    return;
-  }
-  openConfirm({
-    title: "Đổi tên đăng nhập?",
-    message: `Đổi từ “${existing.username}” thành “${normalizedUsername}”? Tài khoản này sẽ bị đăng xuất khỏi tất cả thiết bị và tên cũ không thể dùng lại.`,
-    confirmLabel: "Đổi tên",
-    onConfirm: async (confirmButton) => {
-      await saveAccountFromPayload(payload, confirmButton);
-    },
-  });
-}
-
-function openDeleteAccountConfirm(accountId) {
-  const account = appState.cache.accounts.find((item) => item.id === accountId);
-  if (!account || !canManageAccount(account)) return showToast("error", "Không có quyền xóa tài khoản");
-  if (account.id === appState.currentUser.id) return showToast("warning", "Không thể tự xóa tài khoản đang đăng nhập");
-  openConfirm({
-    title: "Xóa tài khoản?",
-    message: `Tài khoản “${account.username}” chưa phát sinh hoạt động sẽ bị xóa vĩnh viễn. Nếu đã có lịch sử, hệ thống sẽ chỉ chuyển tài khoản sang ngừng sử dụng.`,
-    confirmLabel: "Xác nhận",
-    danger: true,
-    onConfirm: async (confirmButton) => {
-      await withActionLock(`delete-account:${account.id}`, confirmButton, async () => {
-        try {
-          const result = await dataService.deleteAccount(account.id, account.revision ?? null);
-          await loadAccountData({ render: false });
-          closeModal(true);
-          renderApp();
-          if (result?.action === "deleted") {
-            showToast("success", "Đã xóa tài khoản", `Tên đăng nhập ${account.username} được giữ trong lịch sử và không thể dùng lại.`);
-          } else {
-            showToast("success", "Đã ngừng sử dụng", "Tài khoản đã có hoạt động nên không bị xóa khỏi lịch sử.");
-          }
-        } catch (error) {
-          closeModal(true);
-          showToast("error", "Không thể xóa tài khoản", error.message);
-        }
+  await withActionLock("save-account", submitButton, async () => {
+    try {
+      await dataService.saveAccount({
+        id: data.get("id") || null,
+        expectedRevision: toOptionalNumber(data.get("expectedRevision")),
+        displayName: data.get("displayName"),
+        username: data.get("username"),
+        role: data.get("role"),
+        status: data.get("status") || ACCOUNT_STATUSES.active,
+        scopeMode: data.get("scopeMode") || "all",
+        categoryPermissions: readAccountCategoryPermissions(form),
+        password: data.get("password"),
+        passwordConfirm: data.get("passwordConfirm"),
       });
-    },
+      await loadAccountData({ render: false });
+      closeModal(true);
+      renderApp();
+      showToast("success", "Đã lưu tài khoản");
+    } catch (error) {
+      showToast("error", "Không thể lưu tài khoản", error.message);
+    }
   });
 }
 
@@ -4539,41 +3568,6 @@ async function handleCategorySubmit(event, form) {
     } catch (error) {
       showToast("error", "Không thể lưu nhóm", error.message);
     }
-  });
-}
-
-async function handleDeleteCategorySubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const categoryId = String(data.get("categoryId") || "");
-  const expectedRevision = toOptionalNumber(data.get("expectedRevision"));
-  const reason = String(data.get("reason") || "").trim();
-  const category = categoryById(categoryId);
-  if (reason.length < 5) return showToast("error", "Lý do chưa hợp lệ", "Lý do cần có ít nhất 5 ký tự.");
-
-  openConfirm({
-    title: "Xác nhận xử lý nhóm?",
-    message: `Bạn có chắc muốn xử lý nhóm “${category?.name || categoryId}”? Nhóm trống sẽ bị xóa; nhóm đã có dữ liệu sẽ chuyển sang ngừng sử dụng.`,
-    confirmLabel: "Xác nhận",
-    danger: true,
-    onConfirm: async (confirmButton) => {
-      await withActionLock("delete-category", confirmButton, async () => {
-        try {
-          const result = await dataService.deleteCategory({ categoryId, expectedRevision, reason });
-          await refreshInventoryAndHistory({ render: false });
-          if (appState.cache.loaded.accounts) await loadAccountData({ render: false });
-          closeModal(true);
-          renderApp();
-          const deleted = result?.action === "deleted";
-          showToast("success", deleted ? "Đã xóa nhóm" : "Đã ngừng sử dụng nhóm", deleted
-            ? "Nhóm trống đã được xóa hoàn toàn."
-            : `Nhóm có ${toNumber(result?.productCount, 0)} vật liệu hoặc lịch sử nên chỉ được ngừng sử dụng.`);
-        } catch (error) {
-          closeModal(true);
-          showToast("error", "Không thể xử lý nhóm", error.message);
-        }
-      });
-    },
   });
 }
 
@@ -4614,29 +3608,18 @@ function bindEvents() {
     });
   });
   on(document, "click", "[data-action='close-modal']", () => closeModal());
-  on(document, "click", "[data-action='toggle-inventory-export']", () => {
-    appState.ui.inventoryExportMode = !appState.ui.inventoryExportMode;
-    if (!appState.ui.inventoryExportMode) appState.ui.inventoryExportIds = [];
-    renderApp();
-  });
-  on(document, "click", "[data-action='select-visible-inventory']", selectVisibleInventoryProducts);
-  on(document, "click", "[data-action='clear-inventory-selection']", clearInventoryExportSelection);
-  on(document, "click", "[data-action='open-inventory-pdf-options']", openInventoryPdfOptions);
   on(document, "click", "[data-action='open-product']", (event, button) => openProductDetail(button.dataset.productId));
   on(document, "click", "[data-action='add-product']", () => openProductForm());
   on(document, "click", "[data-action='edit-product']", (event, button) => openProductForm(button.dataset.productId));
-  on(document, "click", "[data-action='open-transaction']", (event, button) => openTransactionModal(button.dataset.productId || null, button.dataset.transactionType || null));
+  on(document, "click", "[data-action='open-transaction']", (event, button) => openTransactionModal(button.dataset.productId));
   on(document, "click", "[data-action='open-transaction-detail']", (event, button) => openTransactionDetail(button.dataset.transactionId));
   on(document, "click", "[data-action='open-reverse-transaction']", (event, button) => openReverseTransactionModal(button.dataset.transactionId));
   on(document, "click", "[data-action='add-account']", () => openAccountForm());
   on(document, "click", "[data-action='edit-account']", (event, button) => openAccountForm(button.dataset.accountId));
   on(document, "click", "[data-action='open-password-reset']", (event, button) => openPasswordResetForm(button.dataset.accountId));
-  on(document, "click", "[data-action='delete-account']", (event, button) => openDeleteAccountConfirm(button.dataset.accountId));
   on(document, "click", "[data-action='add-category']", () => openCategoryForm());
   on(document, "click", "[data-action='edit-category']", (event, button) => openCategoryForm(button.dataset.categoryId));
-  on(document, "click", "[data-action='open-delete-category']", (event, button) => openDeleteCategoryModal(button.dataset.categoryId));
   on(document, "click", "[data-action='open-history-cleanup']", openHistoryCleanupModal);
-  on(document, "click", "[data-action='open-history-purge']", openHistoryPurgeModal);
 
   on(document, "click", "[data-action='archive-product']", (event, button) => {
     const product = productById(button.dataset.productId);
@@ -4778,13 +3761,12 @@ function bindEvents() {
   });
 
   on(document, "change", "#history-cleanup-scope", updateHistoryCleanupFields);
-  on(document, "change", "#history-purge-scope", updateHistoryPurgeFields);
 
   document.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     const formId = form.getAttribute("id") || "";
-    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "history-purge-form", "account-form", "password-reset-form", "category-form", "delete-category-form", "inventory-pdf-form"]);
+    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "account-form", "password-reset-form", "category-form"]);
     if (!handledForms.has(formId)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -4794,12 +3776,9 @@ function bindEvents() {
     if (formId === "transaction-form") handleTransactionSubmit(event, form);
     if (formId === "reverse-transaction-form") handleReverseTransactionSubmit(event, form);
     if (formId === "history-cleanup-form") handleHistoryCleanupSubmit(event, form);
-    if (formId === "history-purge-form") handleHistoryPurgeSubmit(event, form);
     if (formId === "account-form") handleAccountSubmit(event, form);
     if (formId === "password-reset-form") handlePasswordResetSubmit(event, form);
     if (formId === "category-form") handleCategorySubmit(event, form);
-    if (formId === "delete-category-form") handleDeleteCategorySubmit(event, form);
-    if (formId === "inventory-pdf-form") handleInventoryPdfSubmit(event, form);
   }, true);
 
   document.addEventListener("input", (event) => {
@@ -4807,6 +3786,10 @@ function bindEvents() {
     if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) return;
     if (target.id === "inventory-search") {
       appState.filters.inventory.search = target.value;
+      debouncedInventoryFilter();
+    }
+    if (target.id === "inventory-quantity-below") {
+      appState.filters.inventory.quantityBelow = target.value;
       debouncedInventoryFilter();
     }
     if (target.id === "history-search") {
@@ -4820,9 +3803,6 @@ function bindEvents() {
   document.addEventListener("change", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
-    if (target.classList.contains("inventory-select-checkbox")) {
-      toggleInventoryExportSelection(target.dataset.productId, target.checked);
-    }
     if (target.id === "inventory-category") {
       appState.filters.inventory.category = target.value;
       updateInventoryListOnly();
