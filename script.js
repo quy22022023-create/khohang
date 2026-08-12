@@ -1,4324 +1,13054 @@
 "use strict";
 
-/*
- * Kho Khuôn Bế 2.0.2
- * Frontend HTML/CSS/JavaScript thuần kết nối Supabase qua RPC.
- * Không đặt service-role/secret key trong frontend.
- */
+// =====================================================
+// OT PRO V8.7 SETTINGS TABS
+// Giữ nguyên users, work_logs và extra_shifts.
+// Cài đặt lương, ngày nghỉ và bảng lương đồng bộ với Supabase,
+// đồng thời giữ localStorage làm bộ nhớ dự phòng.
+// =====================================================
 
-const APP_VERSION = "2.0.2";
-const BUILD_ID = "20260812-test-product-delete";
-const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-${BUILD_ID}`;
-const DATA_FORMAT_VERSION = 5;
 
-const STORAGE_KEYS = Object.freeze({
-  theme: "kho_v2_theme",
-  demoData: "kho_v2_demo_data",
-  demoRole: "kho_v2_demo_role",
-  demoAccount: "kho_v2_demo_account",
-  authSession: "kho_v2_auth_session",
-  rollback: "kho_v2_demo_rollback",
-});
+const APP_VERSION = "OT Pro V8.7 Settings Tabs";
 
-const SCREENS = Object.freeze({
-  dashboard: "dashboard",
-  inventory: "inventory",
-  history: "history",
-  manage: "manage",
-});
+const SB_URL =
+  "https://dtdknettwfgilklaqeae.supabase.co";
 
-const MANAGE_TABS = Object.freeze({
-  accounts: "accounts",
-  categories: "categories",
-  access: "access",
-  data: "data",
-});
+const SB_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0ZGtuZXR0d2ZnaWxrbGFxZWFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ2NzEzMTgsImV4cCI6MjA5MDI0NzMxOH0.qDvvZHNyNPh4QxpD6fDkR4Jr1xUnLSzCm79bsKI6ILk";
 
-const TRANSACTION_TYPES = Object.freeze({
-  initial: "initial",
-  import: "import",
-  export: "export",
-  adjust: "adjust",
-  reverse: "reverse",
-});
+const supabaseClient =
+  supabase.createClient(
+    SB_URL,
+    SB_KEY
+  );
 
-const TRANSACTION_LABELS = Object.freeze({
-  initial: "Khởi tạo",
-  import: "Nhập kho",
-  export: "Xuất kho",
-  adjust: "Điều chỉnh tồn",
-  reverse: "Đảo giao dịch",
-});
+const NOTE_META_MARKER =
+  "[[OTPRO_META]]";
 
-const ACCOUNT_STATUSES = Object.freeze({
-  active: "active",
-  locked: "locked",
-  disabled: "disabled",
-});
+const LEGACY_NOTE_META_MARKER =
+  "[[OT_PRO_META]]";
 
-const ACCOUNT_STATUS_LABELS = Object.freeze({
-  [ACCOUNT_STATUSES.active]: "Hoạt động",
-  [ACCOUNT_STATUSES.locked]: "Đã khóa",
-  [ACCOUNT_STATUSES.disabled]: "Ngừng sử dụng",
-});
+const DEFAULT_MEAL_THRESHOLDS =
+  Object.freeze([
+    { time: "18:30", count: 1 },
+    { time: "20:30", count: 2 }
+  ]);
 
-const PERMISSIONS = Object.freeze({
-  viewInventory: "view_inventory",
-  viewQuantity: "view_quantity",
-  viewDetail: "view_detail",
-  viewHistory: "view_history",
-  importInventory: "import_inventory",
-  exportInventory: "export_inventory",
-  countInventory: "count_inventory",
-  reverseTransaction: "reverse_transaction",
-  addProduct: "add_product",
-  editProduct: "edit_product",
-  archiveProduct: "archive_product",
-  manageSchema: "manage_schema",
-  manageAccounts: "manage_accounts",
-  lockAccounts: "lock_accounts",
-  resetAccountPassword: "reset_account_password",
-  manageData: "manage_data",
-});
+const ALLOWANCE_MODES =
+  Object.freeze([
+    "fixed",
+    "proportional",
+    "monthly",
+    "disabled"
+  ]);
 
-const ROLE_LABELS = Object.freeze({
-  viewer: "Chỉ xem",
-  warehouse_staff: "Nhân viên kho",
-  group_manager: "Quản lý nhóm",
-  warehouse_manager: "Quản lý kho",
-  auditor: "Kiểm kê / đối soát",
-  admin: "Admin",
-  superadmin: "Super Admin",
-});
+const INSURANCE_MODES =
+  Object.freeze([
+    "percentage",
+    "fixed",
+    "disabled"
+  ]);
 
-const ROLE_PRESETS = Object.freeze({
-  viewer: [
-    PERMISSIONS.viewInventory,
-    PERMISSIONS.viewQuantity,
-    PERMISSIONS.viewDetail,
-  ],
-  warehouse_staff: [
-    PERMISSIONS.viewInventory,
-    PERMISSIONS.viewQuantity,
-    PERMISSIONS.viewDetail,
-    PERMISSIONS.viewHistory,
-    PERMISSIONS.importInventory,
-    PERMISSIONS.exportInventory,
-  ],
-  group_manager: [
-    PERMISSIONS.viewInventory,
-    PERMISSIONS.viewQuantity,
-    PERMISSIONS.viewDetail,
-    PERMISSIONS.viewHistory,
-    PERMISSIONS.importInventory,
-    PERMISSIONS.exportInventory,
-    PERMISSIONS.addProduct,
-    PERMISSIONS.editProduct,
-  ],
-  warehouse_manager: [
-    PERMISSIONS.viewInventory,
-    PERMISSIONS.viewQuantity,
-    PERMISSIONS.viewDetail,
-    PERMISSIONS.viewHistory,
-    PERMISSIONS.importInventory,
-    PERMISSIONS.exportInventory,
-    PERMISSIONS.countInventory,
-    PERMISSIONS.reverseTransaction,
-    PERMISSIONS.addProduct,
-    PERMISSIONS.editProduct,
-    PERMISSIONS.archiveProduct,
-    PERMISSIONS.manageSchema,
-  ],
-  auditor: [
-    PERMISSIONS.viewInventory,
-    PERMISSIONS.viewQuantity,
-    PERMISSIONS.viewDetail,
-    PERMISSIONS.viewHistory,
-    PERMISSIONS.countInventory,
-  ],
-  admin: [
-    PERMISSIONS.viewInventory,
-    PERMISSIONS.viewQuantity,
-    PERMISSIONS.viewDetail,
-    PERMISSIONS.viewHistory,
-    PERMISSIONS.importInventory,
-    PERMISSIONS.exportInventory,
-    PERMISSIONS.countInventory,
-    PERMISSIONS.reverseTransaction,
-    PERMISSIONS.addProduct,
-    PERMISSIONS.editProduct,
-    PERMISSIONS.archiveProduct,
-    PERMISSIONS.manageSchema,
-    PERMISSIONS.manageData,
-  ],
-  superadmin: ["*"],
-});
-
-const PERMISSION_META = Object.freeze({
-  [PERMISSIONS.viewInventory]: ["Xem kho", "Truy cập danh sách vật liệu."],
-  [PERMISSIONS.viewQuantity]: ["Xem số lượng", "Xem tồn hiện tại và mức cảnh báo."],
-  [PERMISSIONS.viewDetail]: ["Xem chi tiết", "Mở thông tin đầy đủ của vật liệu."],
-  [PERMISSIONS.viewHistory]: ["Xem lịch sử", "Xem giao dịch nhập, xuất, điều chỉnh tồn và giao dịch đảo."],
-  [PERMISSIONS.importInventory]: ["Nhập kho", "Tăng tồn bằng một giao dịch nhập kho."],
-  [PERMISSIONS.exportInventory]: ["Xuất kho", "Giảm tồn nhưng không được làm tồn âm."],
-  [PERMISSIONS.countInventory]: ["Điều chỉnh tồn", "Đặt tồn kho về số thực tế."],
-  [PERMISSIONS.reverseTransaction]: ["Đảo giao dịch", "Đảo giao dịch mới nhất của vật liệu thay vì sửa hoặc xóa lịch sử."],
-  [PERMISSIONS.addProduct]: ["Thêm vật liệu", "Tạo quy cách vật liệu mới."],
-  [PERMISSIONS.editProduct]: ["Sửa vật liệu", "Sửa thông tin, không sửa trực tiếp số tồn."],
-  [PERMISSIONS.archiveProduct]: ["Lưu trữ vật liệu", "Ẩn vật liệu nhưng giữ lịch sử."],
-  [PERMISSIONS.manageSchema]: ["Quản lý danh mục", "Quản lý nhóm và thuộc tính nhận diện."],
-  [PERMISSIONS.manageAccounts]: ["Quản lý tài khoản", "Tạo, sửa vai trò và phạm vi nhóm vật liệu."],
-  [PERMISSIONS.lockAccounts]: ["Khóa tài khoản", "Khóa hoặc ngừng sử dụng tài khoản theo cấp quản trị."],
-  [PERMISSIONS.resetAccountPassword]: ["Đặt lại mật khẩu", "Super Admin đặt mật khẩu mới cho tài khoản; không bắt buộc đổi ở lần đăng nhập đầu."],
-  [PERMISSIONS.manageData]: ["Quản lý dữ liệu", "Quản lý sao lưu và dọn lịch sử kho."],
-});
-
-const CATEGORY_SCOPED_PERMISSIONS = Object.freeze([
-  PERMISSIONS.viewInventory,
-  PERMISSIONS.viewQuantity,
-  PERMISSIONS.viewDetail,
-  PERMISSIONS.viewHistory,
-  PERMISSIONS.importInventory,
-  PERMISSIONS.exportInventory,
-  PERMISSIONS.countInventory,
-  PERMISSIONS.reverseTransaction,
-  PERMISSIONS.addProduct,
-  PERMISSIONS.editProduct,
-  PERMISSIONS.archiveProduct,
+const INCOME_POLICY_NUMERIC_FIELDS = Object.freeze([
+  "baseSalary",
+  "standardWorkDays",
+  "standardHours",
+  "otMultiplier",
+  "mainAllowance",
+  "otherAllowance",
+  "attendanceAllowance",
+  "responsibilityAllowance",
+  "fuelRate",
+  "insuranceBase",
+  "insuranceRate",
+  "insuranceFixedAmount"
 ]);
 
-const CATEGORY_SCOPED_PERMISSION_SET = new Set(CATEGORY_SCOPED_PERMISSIONS);
-
-const ROLE_LEVELS = Object.freeze({
-  viewer: 10,
-  warehouse_staff: 20,
-  auditor: 20,
-  group_manager: 30,
-  warehouse_manager: 40,
-  admin: 80,
-  superadmin: 100,
-});
-
-const DEFAULT_SCHEMA = Object.freeze({
-  version: 1,
-  categories: [
-    {
-      id: "dao",
-      name: "Dao",
-      icon: "╱",
-      units: ["m", "cuộn"],
-      defaultUnit: "m",
-      warningDefault: 20,
-      active: true,
-      attributes: [
-        { id: "dao-loai", name: "Loại dao", type: "select", options: ["Dao cắt", "Dao cấn", "Dao răng", "Dao đứt đoạn"], unit: "", required: true, identity: true, list: true, active: true },
-        { id: "dao-chieu-cao", name: "Chiều cao", type: "number", options: [], unit: "mm", required: true, identity: true, list: true, active: true },
-        { id: "dao-do-day", name: "Độ dày", type: "number", options: [], unit: "mm", required: true, identity: true, list: true, active: true },
-        { id: "dao-kieu-luoi", name: "Kiểu lưỡi", type: "select", options: ["Lưỡi giữa", "Lưỡi lệch", "Một bên"], unit: "", required: false, identity: true, list: true, active: true },
-      ],
-    },
-    {
-      id: "van-bang",
-      name: "Ván bằng",
-      icon: "▭",
-      units: ["tấm"],
-      defaultUnit: "tấm",
-      warningDefault: 3,
-      active: true,
-      attributes: [
-        { id: "vb-chieu-dai", name: "Chiều dài", type: "number", options: [], unit: "mm", required: true, identity: true, list: true, active: true },
-        { id: "vb-chieu-rong", name: "Chiều rộng", type: "number", options: [], unit: "mm", required: true, identity: true, list: true, active: true },
-        { id: "vb-do-day", name: "Độ dày", type: "number", options: [], unit: "mm", required: true, identity: true, list: true, active: true },
-        { id: "vb-loai", name: "Loại ván", type: "text", options: [], unit: "", required: false, identity: true, list: true, active: true },
-      ],
-    },
-    {
-      id: "van-tron",
-      name: "Ván tròn",
-      icon: "◯",
-      units: ["bộ", "tấm"],
-      defaultUnit: "bộ",
-      warningDefault: 1,
-      active: true,
-      attributes: [
-        { id: "vt-loai", name: "Loại hoặc máy", type: "text", options: [], unit: "", required: true, identity: true, list: true, active: true },
-        { id: "vt-duong-kinh", name: "Đường kính", type: "number", options: [], unit: "mm", required: true, identity: true, list: true, active: true },
-        { id: "vt-chieu-rong", name: "Chiều rộng", type: "number", options: [], unit: "mm", required: false, identity: true, list: true, active: true },
-        { id: "vt-do-day", name: "Độ dày", type: "number", options: [], unit: "mm", required: false, identity: true, list: true, active: true },
-      ],
-    },
-    {
-      id: "phu-lieu",
-      name: "Phụ liệu",
-      icon: "◇",
-      units: ["cái", "hộp", "m", "tấm"],
-      defaultUnit: "cái",
-      warningDefault: 5,
-      active: true,
-      attributes: [
-        { id: "pl-ten", name: "Tên vật liệu", type: "text", options: [], unit: "", required: true, identity: true, list: true, active: true },
-        { id: "pl-quy-cach", name: "Quy cách", type: "text", options: [], unit: "", required: false, identity: true, list: true, active: true },
-      ],
-    },
-  ],
-});
-
-const DEFAULT_DEMO_PASSWORD = "Demo@1234";
-const DEFAULT_DEMO_PASSWORD_RECORD = Object.freeze({
-  passwordSalt: "a2hvLWtodW9uLWJlLXByZXZpZXc2",
-  passwordHash: "9NmaTCPyGVjg9sBrfd7DEUZAhRxxSHgXx3jKgUmt73A=",
-  passwordIterations: 120000,
-  passwordUpdatedAt: "2026-07-22T00:00:00.000Z",
-});
-
-const DEFAULT_ACCOUNTS = Object.freeze([
-  { id: "acc-superadmin", username: "superadmin-demo", displayName: "Super Admin thử nghiệm", role: "superadmin", status: ACCOUNT_STATUSES.active, active: true, scopeMode: "all", categoryPermissions: {}, ...DEFAULT_DEMO_PASSWORD_RECORD, createdAt: "2026-07-20T07:50:00.000Z", updatedAt: "2026-07-20T07:50:00.000Z" },
-  { id: "acc-admin", username: "admin-demo", displayName: "Quản trị thử nghiệm", role: "admin", status: ACCOUNT_STATUSES.active, active: true, scopeMode: "all", categoryPermissions: {}, ...DEFAULT_DEMO_PASSWORD_RECORD, createdAt: "2026-07-20T08:00:00.000Z", updatedAt: "2026-07-20T08:00:00.000Z" },
-  { id: "acc-warehouse", username: "kho-demo", displayName: "Nhân viên kho", role: "warehouse_staff", status: ACCOUNT_STATUSES.active, active: true, scopeMode: "all", categoryPermissions: {}, ...DEFAULT_DEMO_PASSWORD_RECORD, createdAt: "2026-07-20T08:10:00.000Z", updatedAt: "2026-07-20T08:10:00.000Z" },
-  { id: "acc-auditor", username: "kiemke-demo", displayName: "Nhân viên kiểm kê", role: "auditor", status: ACCOUNT_STATUSES.active, active: true, scopeMode: "all", categoryPermissions: {}, ...DEFAULT_DEMO_PASSWORD_RECORD, createdAt: "2026-07-20T08:20:00.000Z", updatedAt: "2026-07-20T08:20:00.000Z" },
-  { id: "acc-group", username: "nhom-dao-demo", displayName: "Quản lý nhóm Dao", role: "group_manager", status: ACCOUNT_STATUSES.active, active: true, scopeMode: "custom", categoryPermissions: { dao: [...ROLE_PRESETS.group_manager] }, ...DEFAULT_DEMO_PASSWORD_RECORD, createdAt: "2026-07-20T08:30:00.000Z", updatedAt: "2026-07-20T08:30:00.000Z" },
+const INCOME_POLICY_MODE_FIELDS = Object.freeze([
+  "mainAllowanceMode",
+  "otherAllowanceMode",
+  "attendanceAllowanceMode",
+  "responsibilityAllowanceMode",
+  "insuranceMode"
 ]);
 
-const DEFAULT_PRODUCTS = Object.freeze([
-  {
-    id: "prd-dao-001",
-    categoryId: "dao",
-    name: "Dao cắt 23.8 × 0.71 mm · Lưỡi giữa",
-    unit: "m",
-    warningLevel: 20,
-    quantity: 42,
-    attributes: { "dao-loai": "Dao cắt", "dao-chieu-cao": 23.8, "dao-do-day": 0.71, "dao-kieu-luoi": "Lưỡi giữa" },
-    signature: "dao|dao-loai=dao cat|dao-chieu-cao=23.8|dao-do-day=0.71|dao-kieu-luoi=luoi giua",
-    note: "Cuộn đang sử dụng cho máy bế phẳng.",
-    archived: false,
-    createdAt: "2026-07-18T02:30:00.000Z",
-    updatedAt: "2026-07-21T03:20:00.000Z",
-  },
-  {
-    id: "prd-dao-002",
-    categoryId: "dao",
-    name: "Dao cấn 23.8 × 0.71 mm",
-    unit: "m",
-    warningLevel: 20,
-    quantity: 12,
-    attributes: { "dao-loai": "Dao cấn", "dao-chieu-cao": 23.8, "dao-do-day": 0.71, "dao-kieu-luoi": "" },
-    signature: "dao|dao-loai=dao can|dao-chieu-cao=23.8|dao-do-day=0.71|dao-kieu-luoi=",
-    note: "",
-    archived: false,
-    createdAt: "2026-07-18T02:35:00.000Z",
-    updatedAt: "2026-07-21T02:00:00.000Z",
-  },
-  {
-    id: "prd-vb-001",
-    categoryId: "van-bang",
-    name: "Ván bằng 1220 × 2440 × 18 mm · Birch",
-    unit: "tấm",
-    warningLevel: 3,
-    quantity: 8,
-    attributes: { "vb-chieu-dai": 1220, "vb-chieu-rong": 2440, "vb-do-day": 18, "vb-loai": "Birch" },
-    signature: "van-bang|vb-chieu-dai=1220|vb-chieu-rong=2440|vb-do-day=18|vb-loai=birch",
-    note: "",
-    archived: false,
-    createdAt: "2026-07-18T02:40:00.000Z",
-    updatedAt: "2026-07-20T09:00:00.000Z",
-  },
-  {
-    id: "prd-vt-001",
-    categoryId: "van-tron",
-    name: "Ván tròn Bobst · Ø 520 × 15 mm",
-    unit: "bộ",
-    warningLevel: 1,
-    quantity: 1,
-    attributes: { "vt-loai": "Bobst", "vt-duong-kinh": 520, "vt-chieu-rong": "", "vt-do-day": 15 },
-    signature: "van-tron|vt-loai=bobst|vt-duong-kinh=520|vt-chieu-rong=|vt-do-day=15",
-    note: "Cần kiểm tra trước khi giao sản xuất.",
-    archived: false,
-    createdAt: "2026-07-18T02:45:00.000Z",
-    updatedAt: "2026-07-21T05:15:00.000Z",
-  },
-  {
-    id: "prd-pl-001",
-    categoryId: "phu-lieu",
-    name: "Cao su đẩy giấy · 7 × 10 mm",
-    unit: "m",
-    warningLevel: 10,
-    quantity: 0,
-    attributes: { "pl-ten": "Cao su đẩy giấy", "pl-quy-cach": "7 × 10 mm" },
-    signature: "phu-lieu|pl-ten=cao su day giay|pl-quy-cach=7 x 10 mm",
-    note: "Đang chờ nhập thêm.",
-    archived: false,
-    createdAt: "2026-07-18T02:50:00.000Z",
-    updatedAt: "2026-07-21T06:00:00.000Z",
-  },
+const INCOME_POLICY_FIELDS = Object.freeze([
+  ...INCOME_POLICY_NUMERIC_FIELDS,
+  ...INCOME_POLICY_MODE_FIELDS
 ]);
 
-const DEFAULT_TRANSACTIONS = Object.freeze([
-  { id: "txn-005", productId: "prd-pl-001", productName: "Cao su đẩy giấy · 7 × 10 mm", categoryId: "phu-lieu", type: "export", amount: 6, beforeQuantity: 6, afterQuantity: 0, unit: "m", note: "Xuất cho lệnh sản xuất KB-0721", actor: "Nhân viên kho", createdAt: "2026-07-21T06:00:00.000Z" },
-  { id: "txn-004", productId: "prd-vt-001", productName: "Ván tròn Bobst · Ø 520 × 15 mm", categoryId: "van-tron", type: "adjust", amount: 1, beforeQuantity: 2, afterQuantity: 1, unit: "bộ", note: "Kiểm kê thực tế cuối ca", actor: "Nhân viên kiểm kê", createdAt: "2026-07-21T05:15:00.000Z" },
-  { id: "txn-003", productId: "prd-dao-001", productName: "Dao cắt 23.8 × 0.71 mm · Lưỡi giữa", categoryId: "dao", type: "import", amount: 30, beforeQuantity: 12, afterQuantity: 42, unit: "m", note: "Nhập từ nhà cung cấp", actor: "Nhân viên kho", createdAt: "2026-07-21T03:20:00.000Z" },
-  { id: "txn-002", productId: "prd-dao-002", productName: "Dao cấn 23.8 × 0.71 mm", categoryId: "dao", type: "export", amount: 8, beforeQuantity: 20, afterQuantity: 12, unit: "m", note: "Xuất cho tổ khuôn", actor: "Nhân viên kho", createdAt: "2026-07-21T02:00:00.000Z" },
-  { id: "txn-001", productId: "prd-vb-001", productName: "Ván bằng 1220 × 2440 × 18 mm · Birch", categoryId: "van-bang", type: "initial", amount: 8, beforeQuantity: 0, afterQuantity: 8, unit: "tấm", note: "Khởi tạo dữ liệu thử nghiệm", actor: "Quản trị thử nghiệm", createdAt: "2026-07-20T09:00:00.000Z" },
-]);
-
-
-const memoryStorage = new Map();
-const safeStorage = Object.freeze({
-  getItem(key) {
-    try {
-      return globalThis.localStorage?.getItem(key) ?? memoryStorage.get(key) ?? null;
-    } catch {
-      return memoryStorage.get(key) ?? null;
-    }
-  },
-  setItem(key, value) {
-    const stringValue = String(value);
-    memoryStorage.set(key, stringValue);
-    try {
-      globalThis.localStorage?.setItem(key, stringValue);
-    } catch {
-      // Chế độ riêng tư hoặc file:// có thể chặn localStorage; dùng bộ nhớ tạm.
-    }
-  },
-  removeItem(key) {
-    memoryStorage.delete(key);
-    try {
-      globalThis.localStorage?.removeItem(key);
-    } catch {
-      // Không cần xử lý thêm.
-    }
-  },
+const INCOME_POLICY_META = Object.freeze({
+  baseSalary: { label: "Lương cơ bản", unit: "đ", kind: "money" },
+  standardWorkDays: { label: "Ngày công tiêu chuẩn", unit: "công", kind: "number" },
+  standardHours: { label: "Giờ tiêu chuẩn/ngày", unit: "giờ", kind: "number" },
+  otMultiplier: { label: "Hệ số OT", unit: "lần", kind: "number" },
+  mainAllowance: { label: "Phụ cấp", unit: "đ", kind: "money" },
+  otherAllowance: { label: "Phụ cấp khác", unit: "đ", kind: "money" },
+  attendanceAllowance: { label: "Phụ cấp chuyên cần", unit: "đ", kind: "money" },
+  responsibilityAllowance: { label: "Phụ cấp trách nhiệm", unit: "đ", kind: "money" },
+  fuelRate: { label: "Đơn giá giao hàng", unit: "đ/km", kind: "money-rate" },
+  insuranceBase: { label: "Mức lương đóng bảo hiểm", unit: "đ", kind: "money" },
+  insuranceRate: { label: "Tỷ lệ bảo hiểm", unit: "%", kind: "number" },
+  insuranceFixedAmount: { label: "Bảo hiểm cố định", unit: "đ", kind: "money" },
+  mainAllowanceMode: { label: "Cách tính phụ cấp", unit: "", kind: "mode" },
+  otherAllowanceMode: { label: "Cách tính phụ cấp khác", unit: "", kind: "mode" },
+  attendanceAllowanceMode: { label: "Cách tính chuyên cần", unit: "", kind: "mode" },
+  responsibilityAllowanceMode: { label: "Cách tính trách nhiệm", unit: "", kind: "mode" },
+  insuranceMode: { label: "Cách tính bảo hiểm", unit: "", kind: "mode" }
 });
+
+const SETTINGS_TABS =
+  Object.freeze([
+    "general",
+    "income",
+    "benefits",
+    "account"
+  ]);
 
 const appState = {
-  auth: { status: "checking" },
-  currentUser: null,
-  screen: SCREENS.dashboard,
-  manageTab: MANAGE_TABS.accounts,
-  theme: safeStorage.getItem(STORAGE_KEYS.theme) === "dark" ? "dark" : "light",
-  loading: {},
-  actionLocks: new Set(),
-  requestIds: {},
-  cache: {
-    schema: null,
-    products: [],
-    transactions: [],
-    accounts: [],
-    accountAudit: [],
-    loaded: { bootstrap: false, transactions: false, accounts: false, accountAudit: false },
-  },
-  filters: {
-    inventory: { search: "", category: "all", status: "all", quantityBelow: "" },
-    history: { search: "", type: "all", from: "", to: "" },
-  },
-  ui: {
-    modalName: null,
-    modalBusy: false,
-    modalLastFocus: null,
-    categoryDraft: null,
-    confirmCallbackId: null,
-    bootstrapError: null,
-    initialized: null,
-  },
-  realtime: {
-    status: navigator.onLine ? "idle" : "offline",
-    unsubscribe: null,
-    refreshTimer: null,
-    refreshInFlight: false,
-    refreshPending: false,
-    hasSubscribed: false,
-    reconnectTimer: null,
-    stopping: false,
-  },
+  currentUser:
+    localStorage.getItem(
+      "ot_user"
+    ) || null,
+
+  workLogs: [],
+  extraShifts: [],
+  extraTableAvailable: true,
+
+  loadedMonths:
+    new Set(),
+
+  monthRequestTokens: {},
+
+  actionLocks:
+    new Set(),
+
+  historyDate:
+    new Date(),
+
+  salaryDate:
+    new Date(),
+
+  mealDate:
+    new Date(),
+
+  historyView:
+    "calendar",
+
+  selectedDate:
+    null,
+
+  editingExtraId:
+    null,
+
+  loadingCount:
+    0,
+
+  settings:
+    null,
+
+  leaveRecords: [],
+  leaveDraft: null,
+  payrollMonths: {},
+  payrollDrafts: {},
+
+  payrollSupabaseAvailable: null,
+  payrollDataLoaded: false,
+  settingsSyncTimer: null,
+  settingsSyncing: false,
+  suppressSettingsRemoteSave: false,
+  activeSettingsTab: "general",
+  settingsDirty: false,
+  settingsClosing: false,
+  settingsOpenSnapshot: null,
+  activePayrollInlineEditor: null,
+
+  salaryRevealed: false,
+  salaryRevealToken: 0,
+  salaryComparison: null,
+  salaryChartYear: new Date().getFullYear(),
+  salaryChartMetric: "ot-hours",
+  salaryChartData: null,
+  salaryChartSelectedIndex: null,
+
+  mealReportRowsByMonth: {},
+  mealReportLoadedMonths: new Set(),
+  mealReportRequestTokens: {},
+  mealReceipts: {},
+  mealReceiptSupabaseAvailable: null,
+  selectedMealReceiptWeek: null,
+
+  pendingSalaryRevisions: [],
+
+  endShiftNoteContext: null,
+
+  hrOtDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+  advancedUnlockTapCount: 0,
+  advancedUnlockTimer: null
 };
 
-const $ = (selector, root = document) => root.querySelector(selector);
-const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+const $ =
+  selector =>
+    document.querySelector(
+      selector
+    );
 
-function on(root, eventName, selector, handler) {
-  root.addEventListener(eventName, (event) => {
-    const target = event.target.closest(selector);
-    if (!target || !root.contains(target)) return;
-    handler(event, target);
+const $$ =
+  selector =>
+    Array.from(
+      document.querySelectorAll(
+        selector
+      )
+    );
+
+
+// =====================================================
+// KHỞI TẠO
+// =====================================================
+
+document.addEventListener(
+  "DOMContentLoaded",
+  async () => {
+    document.title =
+      `⏱️ ${APP_VERSION}`;
+
+    setText(
+      "#authTitle",
+      "OT Pro"
+    );
+
+    setText(
+      "#appVersionDisplay",
+      `Phiên bản: ${APP_VERSION}`
+    );
+
+    setText(
+      "#menuVersionDisplay",
+      `Phiên bản: ${APP_VERSION}`
+    );
+
+    setText(
+      "#settingsVersion",
+      APP_VERSION
+    );
+
+    loadSettings();
+
+    loadPayrollLocalData();
+
+    loadMealReceiptLocalData();
+
+    applySettings();
+
+    bindEvents();
+
+    updateClock();
+
+    window.setInterval(
+      updateClock,
+      1000
+    );
+
+    refreshIcons();
+
+    registerServiceWorker();
+
+    if (
+      appState.currentUser
+    ) {
+      showApplication();
+
+      await Promise.allSettled([
+        refreshData(true),
+        initializePayrollSupabase()
+      ]);
+    } else {
+      showAuthentication();
+    }
+  }
+);
+
+
+function bindEvents() {
+  on(
+    "#loginButton",
+    "click",
+    () =>
+      handleAuth(
+        "login"
+      )
+  );
+
+  on(
+    "#registerButton",
+    "click",
+    () =>
+      handleAuth(
+        "register"
+      )
+  );
+
+  on(
+    "#passwordToggle",
+    "click",
+    togglePassword
+  );
+
+  on(
+    "#username",
+    "keydown",
+    event => {
+      if (
+        event.key ===
+        "Enter"
+      ) {
+        $("#password")
+          ?.focus();
+      }
+    }
+  );
+
+  on(
+    "#password",
+    "keydown",
+    event => {
+      if (
+        event.key ===
+        "Enter"
+      ) {
+        handleAuth(
+          "login"
+        );
+      }
+    }
+  );
+
+  on(
+    "#logoutButton",
+    "click",
+    logout
+  );
+
+  on(
+    "#settingsLogoutButton",
+    "click",
+    () => requestCloseSettings({ afterClose: logout })
+  );
+
+  on(
+    "#menuButton",
+    "click",
+    openAppMenu
+  );
+
+  on(
+    "#menuCloseButton",
+    "click",
+    closeAppMenu
+  );
+
+  on(
+    "#menuBackdrop",
+    "click",
+    closeAppMenu
+  );
+
+  on(
+    "#mainStartBtn",
+    "click",
+    () => runLockedAction(
+      "mainStart",
+      ["#mainStartBtn"],
+      startMainShift
+    )
+  );
+
+  on(
+    "#mainEndBtn",
+    "click",
+    () => runLockedAction(
+      "mainEnd",
+      ["#mainEndBtn"],
+      endMainShift
+    )
+  );
+
+  on(
+    "#extraStartBtn",
+    "click",
+    () => runLockedAction(
+      "extraStart",
+      ["#extraStartBtn"],
+      startExtraShift
+    )
+  );
+
+  on(
+    "#extraEndBtn",
+    "click",
+    () => runLockedAction(
+      "extraEnd",
+      ["#extraEndBtn"],
+      endExtraShift
+    )
+  );
+
+  on(
+    "#historyButton",
+    "click",
+    () => {
+      closeAppMenu();
+
+      openHistory(
+        "calendar"
+      );
+    }
+  );
+
+  on(
+    "#salaryButton",
+    "click",
+    () => {
+      closeAppMenu();
+
+      openSalary();
+    }
+  );
+
+  on(
+    "#mealButton",
+    "click",
+    () => {
+      closeModal(
+        "salaryModal"
+      );
+
+      openMeal();
+    }
+  );
+
+  on(
+    "#settingsButton",
+    "click",
+    openSettings
+  );
+
+  on(
+    "#hrOtButton",
+    "click",
+    openHrOt
+  );
+
+  on(
+    "#hrOtPrevMonth",
+    "click",
+    () => changeHrOtMonth(-1)
+  );
+
+  on(
+    "#hrOtNextMonth",
+    "click",
+    () => changeHrOtMonth(1)
+  );
+
+  on(
+    "#hrOtTableBody",
+    "input",
+    handleHrOtCellInput
+  );
+
+  on(
+    "#hrOtTableBody",
+    "focusin",
+    event => {
+      if (event.target.matches(".hr-ot-input")) {
+        window.requestAnimationFrame(() => event.target.select());
+      }
+    }
+  );
+
+  on(
+    "#historyPrevMonth",
+    "click",
+    () =>
+      changeHistoryMonth(
+        -1
+      )
+  );
+
+  on(
+    "#historyNextMonth",
+    "click",
+    () =>
+      changeHistoryMonth(
+        1
+      )
+  );
+
+  $$(
+    "[data-history-view]"
+  ).forEach(
+    button => {
+      button.addEventListener(
+        "click",
+        () => {
+          setHistoryView(
+            button.dataset
+              .historyView
+          );
+        }
+      );
+    }
+  );
+
+  on(
+    "#salaryPrevMonth",
+    "click",
+    () =>
+      changeSalaryMonth(
+        -1
+      )
+  );
+
+  on(
+    "#salaryNextMonth",
+    "click",
+    () =>
+      changeSalaryMonth(
+        1
+      )
+  );
+
+  on(
+    "#baseSalaryInput",
+    "input",
+    handleReportSalaryInput
+  );
+
+  on(
+    "#mealPrevMonth",
+    "click",
+    () =>
+      changeMealMonth(
+        -1
+      )
+  );
+
+  on(
+    "#mealNextMonth",
+    "click",
+    () =>
+      changeMealMonth(
+        1
+      )
+  );
+
+  on(
+    "#mealPriceInput",
+    "input",
+    handleReportMealPriceInput
+  );
+
+  on(
+    "#revealSalaryButton",
+    "click",
+    () => runLockedAction(
+      "revealSalary",
+      ["#revealSalaryButton"],
+      revealSalary
+    )
+  );
+
+  on(
+    "#mealWeekList",
+    "click",
+    event => {
+      const button = event.target.closest("[data-meal-receipt-action]");
+
+      if (!button) {
+        return;
+      }
+
+      openMealReceiptConfirmation(button.dataset.weekStart || "");
+    }
+  );
+
+  on(
+    "#cancelMealReceiptConfirmButton",
+    "click",
+    () => closeModal("mealReceiptConfirmModal")
+  );
+
+  on(
+    "#confirmMealReceiptActionButton",
+    "click",
+    () => {
+      const weekStart = appState.selectedMealReceiptWeek?.weekStart || "unknown";
+
+      runLockedAction(
+        `mealReceipt:${weekStart}`,
+        ["#confirmMealReceiptActionButton"],
+        confirmMealReceiptAction
+      );
+    }
+  );
+
+  on(
+    "#detailHasMainShift",
+    "change",
+    handleMainShiftToggle
+  );
+
+  on(
+    "#detailStartTime",
+    "input",
+    () => {
+      calculateDetailMainOT();
+
+      suggestMealCount(
+        $("#detailEndTime")
+          ?.value || ""
+      );
+    }
+  );
+
+  on(
+    "#detailEndTime",
+    "input",
+    () => {
+      calculateDetailMainOT();
+
+      suggestMealCount(
+        $("#detailEndTime")
+          ?.value || ""
+      );
+    }
+  );
+
+  on(
+    "#detailLunchChecked",
+    "change",
+    calculateDetailMainOT
+  );
+
+  on(
+    "#detailMainOT",
+    "input",
+    renderDetailSummary
+  );
+
+  on(
+    "#saveDayButton",
+    "click",
+    () => runLockedAction(
+      "saveDay",
+      ["#saveDayButton"],
+      saveDayDetails
+    )
+  );
+
+  on(
+    "#deleteDayButton",
+    "click",
+    () => runLockedAction(
+      "deleteDay",
+      ["#deleteDayButton"],
+      deleteSelectedDay
+    )
+  );
+
+  on(
+    "#saveExtraEditorButton",
+    "click",
+    () => runLockedAction(
+      "saveExtraEditor",
+      ["#saveExtraEditorButton"],
+      saveExtraEditor
+    )
+  );
+
+  on(
+    "#cancelExtraEditButton",
+    "click",
+    resetExtraEditor
+  );
+
+  on(
+    "#saveEndShiftNoteButton",
+    "click",
+    () => runLockedAction(
+      "saveEndShiftNote",
+      ["#saveEndShiftNoteButton", "#cancelEndShiftNoteButton"],
+      saveEndShiftNote
+    )
+  );
+
+  on(
+    "#cancelEndShiftNoteButton",
+    "click",
+    () => closeModal("endShiftNoteModal")
+  );
+
+  $$(
+    "[data-close-modal]"
+  ).forEach(
+    element => {
+      element.addEventListener(
+        "click",
+        () => {
+          closeModal(
+            element.dataset
+              .closeModal
+          );
+        }
+      );
+    }
+  );
+
+  bindSettingsEvents();
+
+  bindPayrollEvents();
+
+  document.addEventListener(
+    "keydown",
+    event => {
+      if (
+        event.key !==
+        "Escape"
+      ) {
+        return;
+      }
+
+      if (
+        $("#appMenu")
+          ?.classList
+          .contains(
+            "show"
+          )
+      ) {
+        closeAppMenu();
+
+        return;
+      }
+
+      const openModals =
+        $$(".modal.show");
+
+      const topModal =
+        openModals.at(
+          -1
+        );
+
+      if (
+        topModal?.id
+      ) {
+        closeModal(
+          topModal.id
+        );
+      }
+    }
+  );
+}
+
+
+function bindSettingsEvents() {
+  const tabButtons =
+    $$('[data-settings-tab]');
+
+  tabButtons.forEach((button, index) => {
+    button.addEventListener("click", () => {
+      setSettingsTab(
+        button.dataset.settingsTab || "general",
+        { focus: false }
+      );
+    });
+
+    button.addEventListener("keydown", event => {
+      handleSettingsTabKeydown(
+        event,
+        index,
+        tabButtons
+      );
+    });
+  });
+
+  on("#settingsSyncButton", "click", () =>
+    runLockedAction(
+      "settingsSupabaseSync",
+      ["#settingsSyncButton"],
+      syncSettingsManually
+    )
+  );
+
+  on("#themeModeSelect", "change", event => {
+    appState.settings.themeMode =
+      event.target.value === "dark"
+        ? "dark"
+        : "light";
+    saveSettings();
+    applySettings();
+  });
+
+  on("#fontSizeSelect", "change", event => {
+    appState.settings.fontSize = event.target.value;
+    saveSettings();
+    applySettings();
+  });
+
+  on("#showSecondsToggle", "change", event => {
+    appState.settings.showSeconds = event.target.checked;
+    saveSettings();
+    updateClock();
+  });
+
+  on("#promptNoteAfterShiftEndToggle", "change", event => {
+    appState.settings.promptNoteAfterShiftEnd = event.target.checked;
+    saveSettings();
+  });
+
+  on("#settingsVersionRow", "click", handleSettingsVersionTap);
+
+  on("#hrOtFeatureToggle", "change", event => {
+    setHrOtFeatureEnabled(event.target.checked);
+    refreshAdvancedFeatureUI();
+
+    showToast(
+      event.target.checked
+        ? "Đã bật Bảng OT HR."
+        : "Đã ẩn Bảng OT HR khỏi Menu."
+    );
+  });
+
+  on("#hideAdvancedFeaturesButton", "click", () => {
+    setAdvancedFeaturesUnlocked(false);
+    refreshAdvancedFeatureUI();
+    showToast("Đã ẩn tính năng nâng cao.");
+  });
+
+  ["#defaultShiftStart", "#defaultShiftEnd"].forEach(selector => {
+    on(selector, "change", event => {
+      if (!isValidTime(event.target.value)) {
+        syncSettingsUI();
+        return;
+      }
+
+      const key =
+        selector === "#defaultShiftStart"
+          ? "defaultShiftStart"
+          : "defaultShiftEnd";
+
+      appState.settings[key] = event.target.value;
+      saveSettings();
+      applySettings();
+      refreshOpenDetailDefaults();
+    });
+  });
+
+  const numericSettings = {
+    "#settingsBaseSalary": "baseSalary",
+    "#settingsStandardWorkDays": "standardWorkDays",
+    "#settingsStandardHours": "standardHours",
+    "#settingsOTMultiplier": "otMultiplier",
+    "#settingsMainAllowance": "mainAllowance",
+    "#settingsOtherAllowance": "otherAllowance",
+    "#settingsAttendanceAllowance": "attendanceAllowance",
+    "#settingsResponsibilityAllowance": "responsibilityAllowance",
+    "#settingsFuelRate": "fuelRate",
+    "#settingsMonthlyLeaveAccrual": "monthlyLeaveAccrual",
+    "#settingsInitialLeaveBalance": "initialLeaveBalance",
+    "#settingsInsuranceBase": "insuranceBase",
+    "#settingsInsuranceRate": "insuranceRate",
+    "#settingsInsuranceFixedAmount": "insuranceFixedAmount",
+    "#settingsMealPrice": "mealPrice"
+  };
+
+  Object.entries(numericSettings).forEach(([selector, key]) => {
+    on(selector, "input", event => {
+      const raw = event.target.value;
+      const previousValue = appState.settings[key];
+
+      if (["standardWorkDays", "standardHours", "otMultiplier"].includes(key)) {
+        appState.settings[key] =
+          sanitizePositiveNumber(
+            raw,
+            getDefaultSettings()[key]
+          );
+      } else if (["monthlyLeaveAccrual", "initialLeaveBalance"].includes(key)) {
+        appState.settings[key] =
+          sanitizeHalfDayNumber(
+            raw,
+            getDefaultSettings()[key]
+          );
+      } else {
+        appState.settings[key] =
+          sanitizeNonNegativeNumber(raw);
+      }
+
+      if (
+        key === "baseSalary" &&
+        !sanitizeSalaryHistory(appState.settings.salaryHistory).length &&
+        !hasGeneralIncomeHistory(appState.settings)
+      ) {
+        appState.settings.salaryHistoryBaseAmount =
+          appState.settings.baseSalary;
+      }
+
+      trackCurrentIncomePolicySettingChange(key, appState.settings[key], previousValue);
+      saveSettings();
+
+      if (key === "mealPrice") {
+        syncMealPriceInputs("settings");
+        renderMeal();
+      } else {
+        syncSalaryInputs("settings");
+        resetUnsavedPayrollDraftDefaults();
+        renderSalary();
+        renderLeaveDetail();
+      }
+
+      if (key.startsWith("insurance")) {
+        updateInsuranceSettingsVisibility();
+      }
+
+      renderDashboard();
+    });
+  });
+
+  const selectSettings = {
+    "#settingsMainAllowanceMode": "mainAllowanceMode",
+    "#settingsOtherAllowanceMode": "otherAllowanceMode",
+    "#settingsAttendanceAllowanceMode": "attendanceAllowanceMode",
+    "#settingsResponsibilityAllowanceMode": "responsibilityAllowanceMode",
+    "#settingsInsuranceMode": "insuranceMode"
+  };
+
+  Object.entries(selectSettings).forEach(([selector, key]) => {
+    on(selector, "change", event => {
+      const previousValue = appState.settings[key];
+      appState.settings[key] = event.target.value;
+      trackCurrentIncomePolicySettingChange(key, appState.settings[key], previousValue);
+      saveSettings();
+      resetUnsavedPayrollDraftDefaults();
+      updateInsuranceSettingsVisibility();
+      renderSalary();
+    });
+  });
+
+  on("#settingsLeaveStartMonth", "change", event => {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(event.target.value)) {
+      syncSettingsUI();
+      return;
+    }
+
+    appState.settings.leaveStartMonth = event.target.value;
+    saveSettings();
+    renderLeaveDetail();
+    renderSalary();
+  });
+
+  on("#addMealThresholdButton", "click", addMealThreshold);
+  on("#resetMealThresholdsButton", "click", resetMealThresholds);
+  on("#checkConnectionButton", "click", checkSupabaseConnection);
+  on("#changePasswordButton", "click", changeCurrentPassword);
+  on("#addIncomeHistoryButton", "click", addIncomeHistoryEntry);
+  on("#incomeHistoryField", "change", updateIncomeHistoryEditor);
+  on("#salaryHistoryResolveButton", "click", openSalaryRevisionModalIfNeeded);
+
+  on("#salaryHistoryList", "click", event => {
+    const button = event.target.closest("[data-delete-income-history]");
+
+    if (!button) {
+      return;
+    }
+
+    deleteIncomeHistoryEntry(button.dataset.deleteIncomeHistory || "");
+  });
+
+  on("#salaryRevisionLaterButton", "click", () => {
+    closeModal("salaryRevisionModal");
+  });
+
+  on("#salaryRevisionUpdatePastButton", "click", () =>
+    runLockedAction(
+      "salaryRevisionUpdatePast",
+      ["#salaryRevisionUpdatePastButton", "#salaryRevisionCarryForwardButton"],
+      applySalaryRevisionToSavedMonths
+    )
+  );
+
+  on("#salaryRevisionCarryForwardButton", "click", () =>
+    runLockedAction(
+      "salaryRevisionCarryForward",
+      ["#salaryRevisionUpdatePastButton", "#salaryRevisionCarryForwardButton"],
+      carrySalaryRevisionToCurrentMonth
+    )
+  );
+
+  on("#openSalaryCompareButton", "click", openSalaryCompare);
+  on("#openSalaryChartButton", "click", openSalaryChart);
+  on("#salaryChartCloseButton", "click", () => closeModal("salaryChartModal"));
+  on("#salaryChartPrevYear", "click", () => changeSalaryChartYear(-1));
+  on("#salaryChartNextYear", "click", () => changeSalaryChartYear(1));
+
+  $$('[data-salary-chart-metric]').forEach(button => {
+    button.addEventListener("click", () => {
+      setSalaryChartMetric(button.dataset.salaryChartMetric || "ot-hours");
+    });
+  });
+
+  on("#salaryChartCanvas", "click", event => {
+    const point = event.target.closest("[data-salary-chart-index]");
+    if (point) {
+      selectSalaryChartPoint(Number(point.dataset.salaryChartIndex));
+    }
+  });
+
+  on("#salaryChartCanvas", "keydown", event => {
+    const point = event.target.closest("[data-salary-chart-index]");
+    if (!point || !["Enter", " "].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    selectSalaryChartPoint(Number(point.dataset.salaryChartIndex));
+  });
+
+  on("#salaryCompareCloseButton", "click", () => closeModal("salaryCompareModal"));
+  on("#salaryCompareRunButton", "click", () =>
+    runLockedAction(
+      "salaryCompare",
+      ["#salaryCompareRunButton"],
+      runSalaryComparison
+    )
+  );
+  on("#salaryCompareChangedOnly", "change", renderLastSalaryComparison);
+  on("#salaryCompareMonth", "change", () => {
+    appState.salaryComparison = null;
+  });
+
+  on("#mealThresholdList", "click", event => {
+    const deleteButton =
+      event.target.closest("[data-delete-meal-threshold]");
+
+    if (deleteButton) {
+      deleteMealThreshold(
+        deleteButton.closest("[data-threshold-row]")
+      );
+    }
+  });
+
+  on("#mealThresholdList", "change", event => {
+    if (
+      event.target.matches(".meal-threshold-time") ||
+      event.target.matches(".meal-threshold-count")
+    ) {
+      commitMealThresholdsFromUI();
+    }
   });
 }
 
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
+
+function bindPayrollEvents() {
+  on("#leaveFullDayButton", "click", () => {
+    setLeaveDraftAmount(1);
+  });
+
+  on("#leaveHalfDayButton", "click", () => {
+    setLeaveDraftAmount(0.5);
+  });
+
+  on("#leaveMorningButton", "click", () => {
+    setLeaveDraftSession("morning");
+  });
+
+  on("#leaveAfternoonButton", "click", () => {
+    setLeaveDraftSession("afternoon");
+  });
+
+  on("#detailLeaveNote", "input", event => {
+    if (!appState.leaveDraft) {
+      return;
+    }
+
+    appState.leaveDraft.note = event.target.value;
+  });
+
+  on("#cancelLeaveButton", "click", () => {
+    appState.leaveDraft = null;
+    renderLeaveDetail();
+  });
+
+  on("#salaryReportBody", "click", event => {
+    const toggle = event.target.closest("[data-payroll-editor-toggle]");
+    const cancel = event.target.closest("[data-payroll-editor-cancel]");
+    const apply = event.target.closest("[data-payroll-editor-apply]");
+
+    if (toggle) {
+      togglePayrollInlineEditor(toggle.dataset.payrollEditorToggle);
+      return;
+    }
+
+    if (cancel) {
+      closePayrollInlineEditor(cancel.dataset.payrollEditorCancel, true);
+      return;
+    }
+
+    if (apply) {
+      applyPayrollInlineEditor(apply.dataset.payrollEditorApply);
+    }
+  });
+
+  $$(".payroll-money-input").forEach(input => {
+    input.addEventListener("input", () => {
+      formatPayrollMoneyInput(input);
+      updateFuelPayrollEditorPreview();
+      updateInsurancePayrollEditorPreview();
+    });
+
+    input.addEventListener("focus", () => {
+      window.requestAnimationFrame(() => input.select());
+    });
+
+    input.addEventListener("blur", () => {
+      formatPayrollMoneyInput(input);
+    });
+  });
+
+  on("#payrollMonthlyKmInput", "input", updateFuelPayrollEditorPreview);
+  on("#payrollInsuranceModeInput", "change", () => {
+    updateInsurancePayrollEditorVisibility();
+    updateInsurancePayrollEditorPreview();
+  });
+  on("#payrollInsuranceRateInput", "input", updateInsurancePayrollEditorPreview);
+
+  on("#openFuelPayrollEditorButton", "click", openFuelPayrollEditor);
+  on("#applyFuelPayrollEditorButton", "click", applyFuelPayrollEditor);
+  on("#resetFuelPayrollEditorButton", "click", resetFuelPayrollEditor);
+
+  on("#openInsurancePayrollEditorButton", "click", openInsurancePayrollEditor);
+  on("#applyInsurancePayrollEditorButton", "click", applyInsurancePayrollEditor);
+  on("#resetInsurancePayrollEditorButton", "click", resetInsurancePayrollEditor);
+
+  on("#savePayrollMonthButton", "click", () =>
+    runLockedAction(
+      "savePayrollMonth",
+      ["#savePayrollMonthButton", "#resetPayrollMonthButton"],
+      savePayrollMonth
+    )
+  );
+
+  on("#resetPayrollMonthButton", "click", () =>
+    runLockedAction(
+      "resetPayrollMonth",
+      ["#resetPayrollMonthButton", "#savePayrollMonthButton"],
+      resetPayrollMonth
+    )
+  );
+
+  on("#openMealFromSalaryButton", "click", () => {
+    closeModal("salaryModal");
+    openMeal();
+  });
 }
 
-function escapeHTML(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+
+function parsePayrollMoney(value) {
+  const digits = String(value ?? "").replace(/[^0-9]/g, "");
+  return digits ? sanitizeNonNegativeNumber(Number(digits)) : 0;
 }
 
-function normalizeText(value) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "D")
-    .toLowerCase()
+
+function formatPayrollMoney(value) {
+  return `${new Intl.NumberFormat("vi-VN").format(Math.round(Number(value) || 0))}₫`;
+}
+
+
+function formatPayrollMoneyInputValue(value) {
+  const number = Math.round(Number(value) || 0);
+  return number > 0 ? new Intl.NumberFormat("vi-VN").format(number) : "";
+}
+
+
+function formatPayrollMoneyInput(input) {
+  if (!input) {
+    return;
+  }
+
+  const value = parsePayrollMoney(input.value);
+  input.value = value > 0 ? formatPayrollMoneyInputValue(value) : "";
+}
+
+
+function setPayrollMoneyInput(selector, value) {
+  const input = $(selector);
+
+  if (!input || document.activeElement === input) {
+    return;
+  }
+
+  input.value = formatPayrollMoneyInputValue(value);
+}
+
+
+function parsePayrollDecimal(value) {
+  const normalized = String(value ?? "")
     .trim()
-    .replace(/×/g, "x")
-    .replace(/\s+/g, " ");
+    .replace(/\s/g, "")
+    .replace(/,/g, ".")
+    .replace(/[^0-9.]/g, "");
+
+  const parts = normalized.split(".");
+  const safe = parts.length > 1
+    ? `${parts.shift()}.${parts.join("")}`
+    : normalized;
+
+  return sanitizeNonNegativeNumber(Number(safe));
 }
 
-function normalizeSearchText(value) {
-  let normalized = normalizeText(value)
-    .replace(/(\d),(\d)/g, "$1.$2")
-    .replace(/(\d)\s*x\s*(?=\d)/g, "$1 ")
-    .replace(/[·•∙⋅・‧‣◦▪●○◆◇|/\\;:_=+\-–—()[\]{}<>!?"'“”‘’]/g, " ")
-    .replace(/,/g, " ");
 
-  normalized = normalized.replace(/\./g, (character, offset, source) => {
-    const previous = source[offset - 1] || "";
-    const next = source[offset + 1] || "";
-    return /\d/.test(previous) && /\d/.test(next) ? character : " ";
+function getPayrollDraftForCurrentMonth() {
+  return ensurePayrollDraft(getMonthKey(appState.salaryDate));
+}
+
+
+function getPayrollDraftSettings(draft = getPayrollDraftForCurrentMonth()) {
+  return sanitizeSettings(draft.settingsSnapshot || appState.settings);
+}
+
+
+function getPayrollAllowanceValue(draft, key) {
+  const settings = getPayrollDraftSettings(draft);
+  const map = {
+    "main-allowance": ["mainAllowanceOverride", "mainAllowance"],
+    "other-allowance": ["otherAllowanceOverride", "otherAllowance"],
+    "attendance-allowance": ["attendanceAllowanceOverride", "attendanceAllowance"],
+    "responsibility-allowance": ["responsibilityAllowanceOverride", "responsibilityAllowance"]
+  };
+  const [overrideKey, settingKey] = map[key] || [];
+
+  if (!overrideKey) {
+    return 0;
+  }
+
+  return draft[overrideKey] == null
+    ? sanitizeNonNegativeNumber(settings[settingKey])
+    : sanitizeNonNegativeNumber(draft[overrideKey]);
+}
+
+
+function getPayrollInlineEditorConfig(key) {
+  const configs = {
+    "base-salary": {
+      editorId: "baseSalaryInlineEditor",
+      fields: [
+        { selector: "#baseSalaryInput", draftKey: "baseSalary", type: "money" }
+      ]
+    },
+    "main-allowance": {
+      editorId: "mainAllowanceInlineEditor",
+      fields: [
+        { selector: "#payrollMainAllowanceInput", draftKey: "mainAllowanceOverride", type: "money", allowanceKey: key }
+      ]
+    },
+    "other-allowance": {
+      editorId: "otherAllowanceInlineEditor",
+      fields: [
+        { selector: "#payrollOtherAllowanceInput", draftKey: "otherAllowanceOverride", type: "money", allowanceKey: key }
+      ]
+    },
+    "attendance-allowance": {
+      editorId: "attendanceAllowanceInlineEditor",
+      fields: [
+        { selector: "#payrollAttendanceAllowanceInput", draftKey: "attendanceAllowanceOverride", type: "money", allowanceKey: key }
+      ]
+    },
+    "responsibility-allowance": {
+      editorId: "responsibilityAllowanceInlineEditor",
+      fields: [
+        { selector: "#payrollResponsibilityAllowanceInput", draftKey: "responsibilityAllowanceOverride", type: "money", allowanceKey: key }
+      ]
+    },
+    "other-income": {
+      editorId: "otherIncomeInlineEditor",
+      fields: [
+        { selector: "#payrollOtherIncomeInput", draftKey: "otherIncome", type: "money" },
+        { selector: "#payrollOtherIncomeNote", draftKey: "otherIncomeNote", type: "text" }
+      ]
+    },
+    advance: {
+      editorId: "advanceInlineEditor",
+      fields: [
+        { selector: "#payrollAdvanceInput", draftKey: "advance", type: "money" }
+      ]
+    },
+    "other-deduction": {
+      editorId: "otherDeductionInlineEditor",
+      fields: [
+        { selector: "#payrollOtherDeductionInput", draftKey: "otherDeduction", type: "money" },
+        { selector: "#payrollOtherDeductionNote", draftKey: "otherDeductionNote", type: "text" }
+      ]
+    }
+  };
+
+  return configs[key] || null;
+}
+
+
+function closeAllPayrollInlineEditors(exceptKey = null) {
+  $$('[data-payroll-editor-toggle]').forEach(button => {
+    const key = button.dataset.payrollEditorToggle;
+
+    if (key === exceptKey) {
+      return;
+    }
+
+    button.setAttribute("aria-expanded", "false");
+    const editorId = button.getAttribute("aria-controls");
+    const editor = editorId ? document.getElementById(editorId) : null;
+
+    if (editor) {
+      editor.hidden = true;
+    }
   });
 
-  return normalized.replace(/\s+/g, " ").trim();
+  if (!exceptKey) {
+    appState.activePayrollInlineEditor = null;
+  }
 }
 
-function searchTokens(value) {
-  const normalized = normalizeSearchText(value);
-  return normalized ? [...new Set(normalized.split(" ").filter(Boolean))] : [];
+
+function populatePayrollInlineEditor(key) {
+  const config = getPayrollInlineEditorConfig(key);
+  const draft = getPayrollDraftForCurrentMonth();
+
+  if (!config) {
+    return;
+  }
+
+  config.fields.forEach(field => {
+    const input = $(field.selector);
+
+    if (!input) {
+      return;
+    }
+
+    let value = field.allowanceKey
+      ? getPayrollAllowanceValue(draft, field.allowanceKey)
+      : draft[field.draftKey];
+
+    if (field.type === "money") {
+      input.value = formatPayrollMoneyInputValue(value);
+    } else {
+      input.value = String(value || "");
+    }
+  });
 }
 
-function productSearchText(product, category) {
-  const parts = [productDisplayName(product), product?.name, product?.customName, product?.note, category?.name];
 
-  if (product?.categoryId && hasPermission(PERMISSIONS.viewDetail, product.categoryId)) {
-    for (const attribute of orderedCategoryAttributes(category)) {
-      const value = product?.attributes?.[attribute.id];
-      if (value === "" || value === null || value === undefined) continue;
-      parts.push(attribute.name, attributeDisplayValue(attribute, value));
+function togglePayrollInlineEditor(key) {
+  const config = getPayrollInlineEditorConfig(key);
+
+  if (!config) {
+    return;
+  }
+
+  const button = $(`[data-payroll-editor-toggle="${key}"]`);
+  const editor = document.getElementById(config.editorId);
+
+  if (!button || !editor) {
+    return;
+  }
+
+  const willOpen = editor.hidden;
+  closeAllPayrollInlineEditors(willOpen ? key : null);
+
+  if (willOpen) {
+    populatePayrollInlineEditor(key);
+    editor.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    appState.activePayrollInlineEditor = key;
+
+    window.requestAnimationFrame(() => {
+      editor.querySelector("input, select, textarea")?.focus();
+    });
+  } else {
+    editor.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    appState.activePayrollInlineEditor = null;
+  }
+}
+
+
+function closePayrollInlineEditor(key, restore = false) {
+  const config = getPayrollInlineEditorConfig(key);
+
+  if (!config) {
+    return;
+  }
+
+  if (restore) {
+    populatePayrollInlineEditor(key);
+  }
+
+  const button = $(`[data-payroll-editor-toggle="${key}"]`);
+  const editor = document.getElementById(config.editorId);
+
+  if (editor) {
+    editor.hidden = true;
+  }
+
+  button?.setAttribute("aria-expanded", "false");
+
+  if (appState.activePayrollInlineEditor === key) {
+    appState.activePayrollInlineEditor = null;
+  }
+}
+
+
+function applyPayrollInlineEditor(key) {
+  const config = getPayrollInlineEditorConfig(key);
+  const draft = getPayrollDraftForCurrentMonth();
+
+  if (!config) {
+    return;
+  }
+
+  let changed = false;
+
+  config.fields.forEach(field => {
+    const input = $(field.selector);
+
+    if (!input) {
+      return;
+    }
+
+    const value = field.type === "money"
+      ? parsePayrollMoney(input.value)
+      : String(input.value || "").trim();
+
+    if (draft[field.draftKey] !== value) {
+      draft[field.draftKey] = value;
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    draft.dirty = true;
+  }
+
+  closePayrollInlineEditor(key);
+  renderSalary();
+}
+
+
+function openFuelPayrollEditor() {
+  const draft = getPayrollDraftForCurrentMonth();
+  closeAllPayrollInlineEditors();
+  setValue("#payrollMonthlyKmInput", draft.monthlyKm || "");
+  setPayrollMoneyInput("#payrollFuelRateInput", draft.fuelRate);
+  updateFuelPayrollEditorPreview();
+  openModal("fuelPayrollEditorModal");
+}
+
+
+function updateFuelPayrollEditorPreview() {
+  const km = parsePayrollDecimal($("#payrollMonthlyKmInput")?.value);
+  const rate = parsePayrollMoney($("#payrollFuelRateInput")?.value);
+  setText("#payrollFuelEditorPreview", formatPayrollMoney(km * rate));
+}
+
+
+function applyFuelPayrollEditor() {
+  const draft = getPayrollDraftForCurrentMonth();
+  const monthlyKm = parsePayrollDecimal($("#payrollMonthlyKmInput")?.value);
+  const fuelRate = parsePayrollMoney($("#payrollFuelRateInput")?.value);
+
+  if (draft.monthlyKm !== monthlyKm || draft.fuelRate !== fuelRate) {
+    draft.monthlyKm = monthlyKm;
+    draft.fuelRate = fuelRate;
+    draft.dirty = true;
+  }
+
+  closeModal("fuelPayrollEditorModal");
+  renderSalary();
+}
+
+
+function resetFuelPayrollEditor() {
+  const settings = getPayrollDraftSettings();
+  setValue("#payrollMonthlyKmInput", "");
+  setPayrollMoneyInput("#payrollFuelRateInput", settings.fuelRate);
+  updateFuelPayrollEditorPreview();
+}
+
+
+function getEffectiveInsuranceValues(draft = getPayrollDraftForCurrentMonth()) {
+  const settings = getPayrollDraftSettings(draft);
+
+  return {
+    mode: draft.insuranceModeOverride || settings.insuranceMode,
+    base: draft.insuranceBaseOverride == null
+      ? settings.insuranceBase
+      : sanitizeNonNegativeNumber(draft.insuranceBaseOverride),
+    rate: draft.insuranceRateOverride == null
+      ? settings.insuranceRate
+      : sanitizeNonNegativeNumber(draft.insuranceRateOverride),
+    fixed: draft.insuranceFixedOverride == null
+      ? settings.insuranceFixedAmount
+      : sanitizeNonNegativeNumber(draft.insuranceFixedOverride)
+  };
+}
+
+
+function openInsurancePayrollEditor() {
+  const values = getEffectiveInsuranceValues();
+  closeAllPayrollInlineEditors();
+  setValue("#payrollInsuranceModeInput", values.mode);
+  setPayrollMoneyInput("#payrollInsuranceBaseInput", values.base);
+  setValue("#payrollInsuranceRateInput", values.rate || "");
+  setPayrollMoneyInput("#payrollInsuranceFixedInput", values.fixed);
+  updateInsurancePayrollEditorVisibility();
+  updateInsurancePayrollEditorPreview();
+  openModal("insurancePayrollEditorModal");
+}
+
+
+function updateInsurancePayrollEditorVisibility() {
+  const mode = $("#payrollInsuranceModeInput")?.value || "disabled";
+
+  $$('[data-payroll-insurance-field]').forEach(field => {
+    field.hidden = field.dataset.payrollInsuranceField !== mode;
+  });
+}
+
+
+function updateInsurancePayrollEditorPreview() {
+  const mode = $("#payrollInsuranceModeInput")?.value || "disabled";
+  const base = parsePayrollMoney($("#payrollInsuranceBaseInput")?.value);
+  const rate = sanitizeNonNegativeNumber($("#payrollInsuranceRateInput")?.value);
+  const fixed = parsePayrollMoney($("#payrollInsuranceFixedInput")?.value);
+  const amount = mode === "percentage"
+    ? base * rate / 100
+    : mode === "fixed"
+      ? fixed
+      : 0;
+
+  setText("#payrollInsuranceEditorPreview", formatPayrollMoney(amount));
+}
+
+
+function applyInsurancePayrollEditor() {
+  const draft = getPayrollDraftForCurrentMonth();
+  const mode = $("#payrollInsuranceModeInput")?.value || "disabled";
+  const base = parsePayrollMoney($("#payrollInsuranceBaseInput")?.value);
+  const rate = sanitizeNonNegativeNumber($("#payrollInsuranceRateInput")?.value);
+  const fixed = parsePayrollMoney($("#payrollInsuranceFixedInput")?.value);
+
+  const changed =
+    draft.insuranceModeOverride !== mode ||
+    draft.insuranceBaseOverride !== base ||
+    draft.insuranceRateOverride !== rate ||
+    draft.insuranceFixedOverride !== fixed;
+
+  draft.insuranceModeOverride = mode;
+  draft.insuranceBaseOverride = base;
+  draft.insuranceRateOverride = rate;
+  draft.insuranceFixedOverride = fixed;
+
+  if (changed) {
+    draft.dirty = true;
+  }
+
+  closeModal("insurancePayrollEditorModal");
+  renderSalary();
+}
+
+
+function resetInsurancePayrollEditor() {
+  const settings = getPayrollDraftSettings();
+  setValue("#payrollInsuranceModeInput", settings.insuranceMode);
+  setPayrollMoneyInput("#payrollInsuranceBaseInput", settings.insuranceBase);
+  setValue("#payrollInsuranceRateInput", settings.insuranceRate || "");
+  setPayrollMoneyInput("#payrollInsuranceFixedInput", settings.insuranceFixedAmount);
+  updateInsurancePayrollEditorVisibility();
+  updateInsurancePayrollEditorPreview();
+}
+
+
+function on(
+  selector,
+  eventName,
+  handler
+) {
+  $(selector)
+    ?.addEventListener(
+      eventName,
+      handler
+    );
+}
+
+
+function setText(
+  selector,
+  value
+) {
+  const element =
+    $(selector);
+
+  if (
+    element
+  ) {
+    element.textContent =
+      value;
+  }
+}
+
+
+function setValue(
+  selector,
+  value
+) {
+  const element =
+    $(selector);
+
+  if (
+    element &&
+    document.activeElement !==
+      element
+  ) {
+    element.value =
+      value;
+  }
+}
+
+
+function setChecked(
+  selector,
+  checked
+) {
+  const element =
+    $(selector);
+
+  if (
+    element
+  ) {
+    element.checked =
+      Boolean(
+        checked
+      );
+  }
+}
+
+
+function registerServiceWorker() {
+  if (
+    !(
+      "serviceWorker" in
+      navigator
+    )
+  ) {
+    return;
+  }
+
+  window.addEventListener(
+    "load",
+    () => {
+      navigator
+        .serviceWorker
+        .register(
+          "./service-worker.js"
+        )
+        .catch(
+          () => {
+            // Ứng dụng vẫn hoạt động khi service worker chưa sẵn sàng.
+          }
+        );
+    }
+  );
+}
+
+
+function refreshIcons() {
+  if (
+    window.lucide
+      ?.createIcons
+  ) {
+    window.lucide
+      .createIcons();
+  }
+}
+
+
+// =====================================================
+// CÀI ĐẶT + BỘ NHỚ DỰ PHÒNG
+// =====================================================
+
+
+function sanitizeSalaryHistory(value) {
+  const unique = new Map();
+
+  (Array.isArray(value) ? value : []).forEach(item => {
+    const effectiveMonth = String(
+      item?.effectiveMonth || item?.effectiveDate || ""
+    ).slice(0, 7);
+    const amount = sanitizeNonNegativeNumber(item?.amount, -1);
+
+    if (
+      !/^\d{4}-(0[1-9]|1[0-2])$/.test(effectiveMonth) ||
+      amount < 0
+    ) {
+      return;
+    }
+
+    unique.set(effectiveMonth, {
+      effectiveMonth,
+      amount,
+      createdAt: item?.createdAt || null
+    });
+  });
+
+  return Array.from(unique.values())
+    .sort((a, b) => a.effectiveMonth.localeCompare(b.effectiveMonth));
+}
+
+
+
+
+function sanitizeIncomePolicyValue(key, value, fallback = 0) {
+  if (INCOME_POLICY_MODE_FIELDS.includes(key)) {
+    if (key === "insuranceMode") {
+      return INSURANCE_MODES.includes(value) ? value : "percentage";
+    }
+    return ALLOWANCE_MODES.includes(value) ? value : "fixed";
+  }
+
+  if (["standardWorkDays", "standardHours", "otMultiplier"].includes(key)) {
+    return sanitizePositiveNumber(value, sanitizePositiveNumber(fallback, 1));
+  }
+
+  return sanitizeNonNegativeNumber(value, sanitizeNonNegativeNumber(fallback));
+}
+
+
+function getRawIncomePolicyFromSettings(settings = {}) {
+  const defaults = getDefaultSettings();
+  const result = {};
+
+  INCOME_POLICY_FIELDS.forEach(key => {
+    result[key] = sanitizeIncomePolicyValue(
+      key,
+      settings?.[key],
+      defaults[key]
+    );
+  });
+
+  return result;
+}
+
+
+function sanitizeIncomeHistoryBase(value, fallbackSettings = {}) {
+  const fallback = getRawIncomePolicyFromSettings(fallbackSettings);
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+  const result = {};
+
+  INCOME_POLICY_FIELDS.forEach(key => {
+    result[key] = sanitizeIncomePolicyValue(
+      key,
+      source[key],
+      fallback[key]
+    );
+  });
+
+  return result;
+}
+
+
+function sanitizeIncomeHistory(value) {
+  const unique = new Map();
+
+  (Array.isArray(value) ? value : []).forEach(item => {
+    const effectiveMonth = String(
+      item?.effectiveMonth || item?.effectiveDate || ""
+    ).slice(0, 7);
+
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(effectiveMonth)) {
+      return;
+    }
+
+    const rawChanges = item?.changes && typeof item.changes === "object"
+      ? item.changes
+      : {};
+    const changes = {};
+
+    INCOME_POLICY_FIELDS.forEach(key => {
+      if (!Object.prototype.hasOwnProperty.call(rawChanges, key)) {
+        return;
+      }
+
+      changes[key] = sanitizeIncomePolicyValue(key, rawChanges[key]);
+    });
+
+    if (!Object.keys(changes).length) {
+      return;
+    }
+
+    const previous = unique.get(effectiveMonth);
+    unique.set(effectiveMonth, {
+      effectiveMonth,
+      changes: {
+        ...(previous?.changes || {}),
+        ...changes
+      },
+      createdAt: item?.createdAt || previous?.createdAt || null
+    });
+  });
+
+  return Array.from(unique.values())
+    .sort((a, b) => a.effectiveMonth.localeCompare(b.effectiveMonth));
+}
+
+
+function normalizeIncomeHistoryAgainstBase(value, baseSettings = appState.settings?.incomeHistoryBase) {
+  const history = sanitizeIncomeHistory(value);
+  const fallback = getRawIncomePolicyFromSettings(appState.settings || {});
+  const policy = sanitizeIncomeHistoryBase(baseSettings, fallback);
+  const normalized = [];
+
+  history.forEach(item => {
+    const changes = {};
+
+    Object.entries(item.changes || {}).forEach(([key, rawValue]) => {
+      if (!INCOME_POLICY_FIELDS.includes(key)) {
+        return;
+      }
+
+      const value = sanitizeIncomePolicyValue(key, rawValue, policy[key]);
+      const isSame = INCOME_POLICY_MODE_FIELDS.includes(key)
+        ? String(value) === String(policy[key])
+        : Math.abs(Number(value || 0) - Number(policy[key] || 0)) <= 0.0001;
+
+      if (!isSame) {
+        changes[key] = value;
+      }
+
+      policy[key] = value;
+    });
+
+    if (Object.keys(changes).length) {
+      normalized.push({
+        effectiveMonth: item.effectiveMonth,
+        changes,
+        createdAt: item.createdAt || null
+      });
+    }
+  });
+
+  return normalized;
+}
+
+
+function hasGeneralIncomeHistory(settings = appState.settings) {
+  return sanitizeIncomeHistory(settings?.incomeHistory).length > 0;
+}
+
+
+function getIncomePolicyForMonth(monthKey, settings = appState.settings) {
+  const raw = getRawIncomePolicyFromSettings(settings || {});
+  const history = sanitizeIncomeHistory(settings?.incomeHistory);
+
+  if (history.length) {
+    const policy = sanitizeIncomeHistoryBase(settings?.incomeHistoryBase, raw);
+
+    history.forEach(item => {
+      if (item.effectiveMonth <= monthKey) {
+        Object.entries(item.changes).forEach(([key, value]) => {
+          policy[key] = sanitizeIncomePolicyValue(key, value, policy[key]);
+        });
+      }
+    });
+
+    return policy;
+  }
+
+  // Tương thích dữ liệu cũ: lịch sử mức lương chỉ tác động lương cơ bản.
+  const legacySalaryHistory = sanitizeSalaryHistory(settings?.salaryHistory);
+
+  if (legacySalaryHistory.length) {
+    raw.baseSalary = resolveSalaryForMonth(
+      monthKey,
+      legacySalaryHistory,
+      sanitizeNonNegativeNumber(
+        settings?.salaryHistoryBaseAmount,
+        raw.baseSalary
+      )
+    );
+  }
+
+  return raw;
+}
+
+
+function getPolicyBeforeIncomeHistoryMonth(effectiveMonth, settings = appState.settings) {
+  const raw = getRawIncomePolicyFromSettings(settings || {});
+  const history = sanitizeIncomeHistory(settings?.incomeHistory);
+
+  if (!history.length) {
+    if (
+      settings?.incomeHistoryBase &&
+      typeof settings.incomeHistoryBase === "object" &&
+      !Array.isArray(settings.incomeHistoryBase)
+    ) {
+      return sanitizeIncomeHistoryBase(settings.incomeHistoryBase, raw);
+    }
+
+    const legacy = sanitizeSalaryHistory(settings?.salaryHistory);
+    const previousMonthDate = new Date(`${effectiveMonth}-01T00:00:00`);
+    previousMonthDate.setMonth(previousMonthDate.getMonth() - 1);
+    return getIncomePolicyForMonth(getMonthKey(previousMonthDate), settings);
+  }
+
+  const policy = sanitizeIncomeHistoryBase(settings?.incomeHistoryBase, raw);
+
+  history.forEach(item => {
+    if (item.effectiveMonth < effectiveMonth) {
+      Object.entries(item.changes).forEach(([key, value]) => {
+        policy[key] = sanitizeIncomePolicyValue(key, value, policy[key]);
+      });
+    }
+  });
+
+  return policy;
+}
+
+
+function ensureIncomeHistoryInitialized() {
+  if (hasGeneralIncomeHistory(appState.settings)) {
+    return;
+  }
+
+  const raw = getRawIncomePolicyFromSettings(appState.settings || {});
+  const legacy = sanitizeSalaryHistory(appState.settings?.salaryHistory);
+  const existingBase =
+    appState.settings?.incomeHistoryBase &&
+    typeof appState.settings.incomeHistoryBase === "object" &&
+    !Array.isArray(appState.settings.incomeHistoryBase)
+      ? sanitizeIncomeHistoryBase(appState.settings.incomeHistoryBase, raw)
+      : null;
+  const base = existingBase || { ...raw };
+  const history = [];
+
+  if (legacy.length) {
+    base.baseSalary = sanitizeNonNegativeNumber(
+      appState.settings?.salaryHistoryBaseAmount,
+      raw.baseSalary
+    );
+
+    legacy.forEach(item => {
+      history.push({
+        effectiveMonth: item.effectiveMonth,
+        changes: { baseSalary: item.amount },
+        createdAt: item.createdAt || new Date().toISOString()
+      });
+    });
+  }
+
+  appState.settings.incomeHistoryBase = base;
+  appState.settings.incomeHistory = sanitizeIncomeHistory(history);
+
+  // Sau khi đã chuyển dữ liệu lương cũ sang cấu trúc mới, không dùng lại
+  // salaryHistory để tránh các mốc cũ xuất hiện lần hai khi xóa/sửa lịch sử mới.
+  if (legacy.length) {
+    appState.settings.salaryHistory = [];
+  }
+}
+
+
+function applyCurrentIncomePolicyToSettings(settings = appState.settings) {
+  if (!settings || !sanitizeIncomeHistory(settings.incomeHistory).length) {
+    return settings;
+  }
+
+  const policy = getIncomePolicyForMonth(getMonthKey(new Date()), settings);
+
+  INCOME_POLICY_FIELDS.forEach(key => {
+    settings[key] = policy[key];
+  });
+
+  return settings;
+}
+
+
+function upsertIncomeHistoryChange(effectiveMonth, key, value) {
+  if (!INCOME_POLICY_FIELDS.includes(key)) {
+    return false;
+  }
+
+  ensureIncomeHistoryInitialized();
+
+  // Nếu chỉ vừa khởi tạo từ cấu hình hiện tại mà chưa có event nào,
+  // base là trạng thái trước thay đổi đầu tiên.
+  if (!appState.settings.incomeHistoryBase) {
+    appState.settings.incomeHistoryBase = getRawIncomePolicyFromSettings(appState.settings);
+  }
+
+  const history = sanitizeIncomeHistory(appState.settings.incomeHistory);
+  const previousPolicy = getPolicyBeforeIncomeHistoryMonth(effectiveMonth, {
+    ...appState.settings,
+    incomeHistory: history
+  });
+  const normalizedValue = sanitizeIncomePolicyValue(key, value, previousPolicy[key]);
+  const index = history.findIndex(item => item.effectiveMonth === effectiveMonth);
+  const entry = index >= 0
+    ? { ...history[index], changes: { ...history[index].changes } }
+    : { effectiveMonth, changes: {}, createdAt: new Date().toISOString() };
+
+  if (String(normalizedValue) === String(previousPolicy[key])) {
+    delete entry.changes[key];
+  } else {
+    entry.changes[key] = normalizedValue;
+  }
+
+  if (index >= 0) {
+    history.splice(index, 1);
+  }
+
+  if (Object.keys(entry.changes).length) {
+    history.push(entry);
+  }
+
+  appState.settings.incomeHistory = normalizeIncomeHistoryAgainstBase(
+    history,
+    appState.settings.incomeHistoryBase
+  );
+  applyCurrentIncomePolicyToSettings(appState.settings);
+  return true;
+}
+
+
+function trackCurrentIncomePolicySettingChange(key, value, previousValue = value) {
+  if (!INCOME_POLICY_FIELDS.includes(key)) {
+    return false;
+  }
+
+  const hasHistory = hasGeneralIncomeHistory(appState.settings);
+  const hasLegacyHistory =
+    sanitizeSalaryHistory(appState.settings?.salaryHistory).length > 0;
+
+  // Nếu người dùng sửa mức hiện tại trước rồi mới khai báo tháng hiệu lực,
+  // giữ lại cấu hình TRƯỚC lần sửa đầu tiên làm mốc gốc. Nhờ đó các tháng
+  // cũ không bị hiểu nhầm là đã dùng mức mới.
+  if (!hasHistory && !hasLegacyHistory) {
+    if (
+      !appState.settings?.incomeHistoryBase ||
+      typeof appState.settings.incomeHistoryBase !== "object" ||
+      Array.isArray(appState.settings.incomeHistoryBase)
+    ) {
+      const base = getRawIncomePolicyFromSettings(appState.settings || {});
+      base[key] = sanitizeIncomePolicyValue(key, previousValue, base[key]);
+      appState.settings.incomeHistoryBase = sanitizeIncomeHistoryBase(base, base);
+    }
+
+    return false;
+  }
+
+  // Khi lần đầu nâng từ lịch sử lương cũ sang lịch sử thu nhập,
+  // phải chụp giá trị TRƯỚC khi người dùng vừa sửa khoản hiện tại.
+  if (!hasHistory) {
+    const latestValue = appState.settings[key];
+    appState.settings[key] = previousValue;
+    ensureIncomeHistoryInitialized();
+    appState.settings[key] = latestValue;
+  }
+
+  return upsertIncomeHistoryChange(getMonthKey(new Date()), key, value);
+}
+
+
+function getTrackedIncomePolicyFieldsForMonth(monthKey, settings = appState.settings) {
+  const history = sanitizeIncomeHistory(settings?.incomeHistory);
+
+  if (history.length) {
+    return Array.from(new Set(
+      history
+        .filter(item => item.effectiveMonth <= monthKey)
+        .flatMap(item => Object.keys(item.changes || {}))
+    ));
+  }
+
+  const legacy = sanitizeSalaryHistory(settings?.salaryHistory);
+  return legacy.some(item => item.effectiveMonth <= monthKey)
+    ? ["baseSalary"]
+    : [];
+}
+
+
+function getIncomePolicySignatureForMonth(monthKey, settings = appState.settings) {
+  const policy = getIncomePolicyForMonth(monthKey, settings);
+  return INCOME_POLICY_FIELDS
+    .map(key => `${key}:${policy[key]}`)
+    .join("|");
+}
+
+
+function formatIncomePolicyValue(key, value) {
+  const meta = INCOME_POLICY_META[key] || { unit: "", kind: "number" };
+
+  if (meta.kind === "money") {
+    return formatPayrollMoney(value);
+  }
+
+  if (meta.kind === "money-rate") {
+    return `${formatPayrollMoney(value)}/km`;
+  }
+
+  if (meta.kind === "mode") {
+    const labels = {
+      fixed: "Cố định",
+      proportional: "Theo công",
+      monthly: "Theo tháng",
+      disabled: "Không áp dụng",
+      percentage: "Theo tỷ lệ"
+    };
+    return labels[value] || String(value || "");
+  }
+
+  return `${formatNumber(value)}${meta.unit ? ` ${meta.unit}` : ""}`;
+}
+
+
+function getIncomeHistoryDisplayEntries(settings = appState.settings) {
+  const general = sanitizeIncomeHistory(settings?.incomeHistory);
+
+  if (general.length) {
+    return general;
+  }
+
+  return sanitizeSalaryHistory(settings?.salaryHistory).map(item => ({
+    effectiveMonth: item.effectiveMonth,
+    changes: { baseSalary: item.amount },
+    createdAt: item.createdAt || null
+  }));
+}
+
+
+function sanitizeSalaryCarryForwards(value) {
+  const unique = new Map();
+
+  (Array.isArray(value) ? value : []).forEach(item => {
+    const id = String(item?.id || "").trim();
+    const targetMonth = String(item?.targetMonth || "").slice(0, 7);
+    const amount = Number(item?.amount);
+
+    if (
+      !id ||
+      !/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth) ||
+      !Number.isFinite(amount) ||
+      Math.abs(amount) < 0.01
+    ) {
+      return;
+    }
+
+    unique.set(id, {
+      id,
+      targetMonth,
+      amount,
+      note: String(item?.note || ""),
+      sourceMonths: Array.isArray(item?.sourceMonths)
+        ? item.sourceMonths
+            .map(month => String(month || "").slice(0, 7))
+            .filter(month => /^\d{4}-(0[1-9]|1[0-2])$/.test(month))
+        : [],
+      createdAt: item?.createdAt || null
+    });
+  });
+
+  return Array.from(unique.values())
+    .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+}
+
+
+function getSalaryCarryForwardsForMonth(monthKey, settings = appState.settings) {
+  return sanitizeSalaryCarryForwards(settings?.salaryCarryForwards)
+    .filter(item => item.targetMonth === monthKey);
+}
+
+
+function applySalaryCarryForwardsToDraft(
+  draft,
+  monthKey,
+  { markDirty = false } = {}
+) {
+  const entries = getSalaryCarryForwardsForMonth(monthKey);
+  const appliedIds = new Set(
+    Array.isArray(draft.appliedSalaryCarryForwardIds)
+      ? draft.appliedSalaryCarryForwardIds
+      : []
+  );
+  let changed = false;
+
+  entries.forEach(entry => {
+    if (appliedIds.has(entry.id)) {
+      return;
+    }
+
+    if (entry.amount > 0) {
+      draft.otherIncome =
+        sanitizeNonNegativeNumber(draft.otherIncome) + entry.amount;
+      draft.otherIncomeNote = [draft.otherIncomeNote, entry.note]
+        .filter(Boolean)
+        .join(" • ");
+    } else {
+      draft.otherDeduction =
+        sanitizeNonNegativeNumber(draft.otherDeduction) + Math.abs(entry.amount);
+      draft.otherDeductionNote = [draft.otherDeductionNote, entry.note]
+        .filter(Boolean)
+        .join(" • ");
+    }
+
+    appliedIds.add(entry.id);
+    changed = true;
+  });
+
+  draft.appliedSalaryCarryForwardIds = Array.from(appliedIds);
+
+  if (changed && markDirty) {
+    draft.dirty = true;
+  }
+
+  return changed;
+}
+
+
+function resolveSalaryForMonth(monthKey, history, baseAmount) {
+  let amount = sanitizeNonNegativeNumber(baseAmount);
+
+  sanitizeSalaryHistory(history).forEach(item => {
+    if (item.effectiveMonth <= monthKey) {
+      amount = item.amount;
+    }
+  });
+
+  return amount;
+}
+
+
+function getEffectiveSalaryForMonth(monthKey, settings = appState.settings) {
+  return sanitizeNonNegativeNumber(
+    getIncomePolicyForMonth(monthKey, settings).baseSalary
+  );
+}
+
+
+function getSalaryHistorySignature(settings = appState.settings) {
+  const history = sanitizeSalaryHistory(settings?.salaryHistory);
+  const base = sanitizeNonNegativeNumber(
+    settings?.salaryHistoryBaseAmount,
+    settings?.baseSalary || 0
+  );
+
+  return `${base}|${history
+    .map(item => `${item.effectiveMonth}:${item.amount}`)
+    .join("|")}`;
+}
+
+
+function getDefaultSettings() {
+  const now = new Date();
+
+  return {
+    themeMode: "light",
+    fontSize: "medium",
+    showSeconds: true,
+    promptNoteAfterShiftEnd: true,
+    defaultShiftStart: "07:45",
+    defaultShiftEnd: "17:00",
+
+    baseSalary: 0,
+    salaryHistoryBaseAmount: 0,
+    salaryHistory: [],
+    incomeHistoryBase: null,
+    incomeHistory: [],
+    salaryCarryForwards: [],
+    standardWorkDays: 26,
+    standardHours: 8,
+    otMultiplier: 2,
+
+    mainAllowance: 0,
+    mainAllowanceMode: "fixed",
+    otherAllowance: 0,
+    otherAllowanceMode: "fixed",
+    attendanceAllowance: 0,
+    attendanceAllowanceMode: "fixed",
+    responsibilityAllowance: 0,
+    responsibilityAllowanceMode: "fixed",
+
+    fuelRate: 0,
+
+    monthlyLeaveAccrual: 1,
+    initialLeaveBalance: 0,
+    leaveStartMonth:
+      `${now.getFullYear()}-${pad(now.getMonth() + 1)}`,
+
+    insuranceMode: "percentage",
+    insuranceBase: 0,
+    insuranceRate: 10.5,
+    insuranceFixedAmount: 0,
+
+    mealPrice: 30000,
+    mealThresholds: cloneDefaultMealThresholds()
+  };
+}
+
+
+function cloneDefaultMealThresholds() {
+  return DEFAULT_MEAL_THRESHOLDS
+    .map(
+      item => ({
+        ...item
+      })
+    );
+}
+
+
+function getSettingsKey() {
+  return (
+    `ot_settings_${
+      appState.currentUser ||
+      "guest"
+    }`
+  );
+}
+
+
+function loadSettings() {
+  const defaults = getDefaultSettings();
+  let stored = {};
+
+  try {
+    stored = JSON.parse(
+      localStorage.getItem(getSettingsKey()) || "{}"
+    ) || {};
+  } catch {
+    stored = {};
+  }
+
+  const legacySalary = appState.currentUser
+    ? Number(localStorage.getItem(`salary_${appState.currentUser}`))
+    : 0;
+
+  const legacyMealPrice = appState.currentUser
+    ? Number(localStorage.getItem(`meal_price_${appState.currentUser}`))
+    : 0;
+
+  appState.settings = sanitizeSettings({
+    ...defaults,
+    ...stored,
+    baseSalary:
+      stored.baseSalary ??
+      (Number.isFinite(legacySalary) && legacySalary > 0
+        ? legacySalary
+        : defaults.baseSalary),
+    mealPrice:
+      stored.mealPrice ??
+      (Number.isFinite(legacyMealPrice) && legacyMealPrice > 0
+        ? legacyMealPrice
+        : defaults.mealPrice)
+  });
+
+  applyCurrentIncomePolicyToSettings(appState.settings);
+
+  localStorage.setItem(
+    getSettingsKey(),
+    JSON.stringify(appState.settings)
+  );
+}
+
+
+function sanitizeSettings(value) {
+  const defaults =
+    getDefaultSettings();
+
+  let themeMode =
+    ["light", "dark"].includes(
+      value.themeMode
+    )
+      ? value.themeMode
+      : defaults.themeMode;
+
+  if (
+    value.themeMode ===
+    "system"
+  ) {
+    themeMode =
+      window.matchMedia?.(
+        "(prefers-color-scheme: dark)"
+      ).matches
+        ? "dark"
+        : "light";
+  }
+
+  const fontSize =
+    ["small", "medium", "large"].includes(
+      value.fontSize
+    )
+      ? value.fontSize
+      : defaults.fontSize;
+
+  const allowanceMode = mode =>
+    ALLOWANCE_MODES.includes(mode)
+      ? mode
+      : "fixed";
+
+  const insuranceMode =
+    INSURANCE_MODES.includes(
+      value.insuranceMode
+    )
+      ? value.insuranceMode
+      : defaults.insuranceMode;
+
+  const leaveStartMonth =
+    /^\d{4}-(0[1-9]|1[0-2])$/.test(
+      String(value.leaveStartMonth || "")
+    )
+      ? value.leaveStartMonth
+      : defaults.leaveStartMonth;
+
+  const salaryHistory =
+    sanitizeSalaryHistory(value.salaryHistory);
+
+  const incomeHistory =
+    sanitizeIncomeHistory(value.incomeHistory);
+
+  const hasIncomeHistoryBase =
+    value.incomeHistoryBase &&
+    typeof value.incomeHistoryBase === "object" &&
+    !Array.isArray(value.incomeHistoryBase);
+
+  const incomeHistoryBase =
+    (incomeHistory.length || hasIncomeHistoryBase)
+      ? sanitizeIncomeHistoryBase(value.incomeHistoryBase, value)
+      : null;
+
+  const salaryCarryForwards =
+    sanitizeSalaryCarryForwards(value.salaryCarryForwards);
+
+  const rawBaseSalary =
+    sanitizeNonNegativeNumber(value.baseSalary);
+
+  const salaryHistoryBaseAmount =
+    salaryHistory.length
+      ? sanitizeNonNegativeNumber(
+          value.salaryHistoryBaseAmount,
+          rawBaseSalary
+        )
+      : rawBaseSalary;
+
+  const currentSalary =
+    incomeHistory.length
+      ? rawBaseSalary
+      : salaryHistory.length
+        ? resolveSalaryForMonth(
+            getMonthKey(new Date()),
+            salaryHistory,
+            salaryHistoryBaseAmount
+          )
+        : rawBaseSalary;
+
+  return {
+    themeMode,
+    fontSize,
+
+    showSeconds:
+      value.showSeconds !== false,
+
+    promptNoteAfterShiftEnd:
+      value.promptNoteAfterShiftEnd !== false,
+
+    defaultShiftStart:
+      isValidTime(value.defaultShiftStart)
+        ? value.defaultShiftStart
+        : defaults.defaultShiftStart,
+
+    defaultShiftEnd:
+      isValidTime(value.defaultShiftEnd)
+        ? value.defaultShiftEnd
+        : defaults.defaultShiftEnd,
+
+    baseSalary: currentSalary,
+    salaryHistoryBaseAmount,
+    salaryHistory,
+    incomeHistoryBase,
+    incomeHistory,
+    salaryCarryForwards,
+
+    standardWorkDays:
+      sanitizePositiveNumber(
+        value.standardWorkDays,
+        defaults.standardWorkDays
+      ),
+
+    standardHours:
+      sanitizePositiveNumber(
+        value.standardHours,
+        defaults.standardHours
+      ),
+
+    otMultiplier:
+      sanitizePositiveNumber(
+        value.otMultiplier,
+        defaults.otMultiplier
+      ),
+
+    mainAllowance:
+      sanitizeNonNegativeNumber(value.mainAllowance),
+    mainAllowanceMode:
+      allowanceMode(value.mainAllowanceMode),
+
+    otherAllowance:
+      sanitizeNonNegativeNumber(value.otherAllowance),
+    otherAllowanceMode:
+      allowanceMode(value.otherAllowanceMode),
+
+    attendanceAllowance:
+      sanitizeNonNegativeNumber(value.attendanceAllowance),
+    attendanceAllowanceMode:
+      allowanceMode(value.attendanceAllowanceMode),
+
+    responsibilityAllowance:
+      sanitizeNonNegativeNumber(value.responsibilityAllowance),
+    responsibilityAllowanceMode:
+      allowanceMode(value.responsibilityAllowanceMode),
+
+    fuelRate:
+      sanitizeNonNegativeNumber(value.fuelRate),
+
+    monthlyLeaveAccrual:
+      sanitizeHalfDayNumber(
+        value.monthlyLeaveAccrual,
+        defaults.monthlyLeaveAccrual
+      ),
+
+    initialLeaveBalance:
+      sanitizeHalfDayNumber(
+        value.initialLeaveBalance,
+        defaults.initialLeaveBalance
+      ),
+
+    leaveStartMonth,
+
+    insuranceMode,
+    insuranceBase:
+      sanitizeNonNegativeNumber(value.insuranceBase),
+    insuranceRate:
+      sanitizeNonNegativeNumber(
+        value.insuranceRate,
+        defaults.insuranceRate
+      ),
+    insuranceFixedAmount:
+      sanitizeNonNegativeNumber(value.insuranceFixedAmount),
+
+    mealPrice:
+      sanitizeNonNegativeNumber(
+        value.mealPrice,
+        defaults.mealPrice
+      ),
+
+    mealThresholds:
+      sanitizeMealThresholds(value.mealThresholds)
+  };
+}
+
+
+function saveSettings() {
+  appState.settings =
+    sanitizeSettings(
+      appState.settings ||
+      {}
+    );
+
+  applyCurrentIncomePolicyToSettings(appState.settings);
+
+  localStorage.setItem(
+    getSettingsKey(),
+    JSON.stringify(
+      appState.settings
+    )
+  );
+
+  localStorage.setItem(
+    `${getSettingsKey()}_modified_at`,
+    new Date().toISOString()
+  );
+
+  if (
+    appState.currentUser
+  ) {
+    localStorage.setItem(
+      `salary_${appState.currentUser}`,
+      String(
+        appState.settings
+          .baseSalary
+      )
+    );
+
+    localStorage.setItem(
+      `meal_price_${appState.currentUser}`,
+      String(
+        appState.settings
+          .mealPrice
+      )
+    );
+
+    if (!appState.suppressSettingsRemoteSave) {
+      if (isSettingsModalOpen()) {
+        markSettingsDirty();
+      } else {
+        scheduleSettingsSupabaseSave();
+      }
     }
   }
 
-  return normalizeSearchText(parts.filter(Boolean).join(" "));
+  updateSettingsCategorySummaries();
 }
 
-function slugify(value) {
-  return normalizeText(value)
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || `item-${Date.now()}`;
-}
 
-function makeId(prefix) {
-  const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `${prefix}-${randomPart}`;
-}
+function applySettings() {
+  const settings =
+    appState.settings ||
+    getDefaultSettings();
 
-function bytesToBase64(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
+  const root =
+    document.documentElement;
 
-function base64ToBytes(value) {
-  const binary = atob(String(value || ""));
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
+  root.dataset.theme =
+    settings.themeMode === "dark"
+      ? "dark"
+      : "light";
 
-function validateUsername(value) {
-  const username = normalizeText(value);
-  if (/\s/.test(username) || !/^[a-z0-9._-]{3,32}$/.test(username)) {
-    throw new Error("Tên đăng nhập phải dài 3–32 ký tự và chỉ gồm chữ không dấu, số, dấu chấm, gạch dưới hoặc gạch ngang.");
-  }
-  return username;
-}
+  root.dataset.fontSize =
+    settings.fontSize;
 
-function validatePassword(value) {
-  const password = String(value || "");
-  if (password.length < 8 || password.length > 128) throw new Error("Mật khẩu phải dài từ 8 đến 128 ký tự.");
-  if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) throw new Error("Mật khẩu phải có ít nhất một chữ cái và một chữ số.");
-  return password;
-}
-
-async function derivePasswordHash(password, saltBase64, iterations = 120000) {
-  if (!globalThis.crypto?.subtle) throw new Error("Trình duyệt không hỗ trợ mã hóa mật khẩu cho bản preview.");
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(password),
-    "PBKDF2",
-    false,
-    ["deriveBits"]
+  updateThemeColor(
+    settings.themeMode
   );
-  const bits = await crypto.subtle.deriveBits({
-    name: "PBKDF2",
-    hash: "SHA-256",
-    salt: base64ToBytes(saltBase64),
-    iterations,
-  }, keyMaterial, 256);
-  return bytesToBase64(new Uint8Array(bits));
+
+  setText(
+    "#mainShiftSchedule",
+    `${settings.defaultShiftStart} – ${settings.defaultShiftEnd}`
+  );
+
+  syncSettingsUI();
 }
 
-async function createPasswordRecord(password) {
-  const normalized = validatePassword(password);
-  const salt = crypto.getRandomValues(new Uint8Array(18));
-  const passwordSalt = bytesToBase64(salt);
-  const passwordIterations = 120000;
-  const passwordHash = await derivePasswordHash(normalized, passwordSalt, passwordIterations);
-  return { passwordSalt, passwordHash, passwordIterations, passwordUpdatedAt: new Date().toISOString() };
+
+function updateThemeColor(themeMode) {
+  const meta =
+    $('meta[name="theme-color"]');
+
+  if (!meta) {
+    return;
+  }
+
+  meta.content =
+    themeMode === "dark"
+      ? "#0d0f13"
+      : "#f4f6f9";
 }
 
-async function verifyPassword(password, account) {
-  if (!account?.passwordSalt || !account?.passwordHash) return false;
-  const actual = await derivePasswordHash(String(password || ""), account.passwordSalt, toNumber(account.passwordIterations, 120000));
-  if (actual.length !== account.passwordHash.length) return false;
-  let difference = 0;
-  for (let index = 0; index < actual.length; index += 1) difference |= actual.charCodeAt(index) ^ account.passwordHash.charCodeAt(index);
-  return difference === 0;
+
+function syncSettingsUI() {
+  const settings =
+    appState.settings ||
+    getDefaultSettings();
+
+  setValue("#themeModeSelect", settings.themeMode);
+  setValue("#fontSizeSelect", settings.fontSize);
+  setChecked("#showSecondsToggle", settings.showSeconds);
+  setChecked("#promptNoteAfterShiftEndToggle", settings.promptNoteAfterShiftEnd);
+  setValue("#defaultShiftStart", settings.defaultShiftStart);
+  setValue("#defaultShiftEnd", settings.defaultShiftEnd);
+
+  setValue("#settingsBaseSalary", settings.baseSalary || "");
+  renderSalaryHistorySettings();
+  setValue("#settingsStandardWorkDays", settings.standardWorkDays);
+  setValue("#settingsStandardHours", settings.standardHours);
+  setValue("#settingsOTMultiplier", settings.otMultiplier);
+
+  setValue("#settingsMainAllowance", settings.mainAllowance || "");
+  setValue("#settingsMainAllowanceMode", settings.mainAllowanceMode);
+  setValue("#settingsOtherAllowance", settings.otherAllowance || "");
+  setValue("#settingsOtherAllowanceMode", settings.otherAllowanceMode);
+  setValue("#settingsAttendanceAllowance", settings.attendanceAllowance || "");
+  setValue("#settingsAttendanceAllowanceMode", settings.attendanceAllowanceMode);
+  setValue("#settingsResponsibilityAllowance", settings.responsibilityAllowance || "");
+  setValue("#settingsResponsibilityAllowanceMode", settings.responsibilityAllowanceMode);
+
+  setValue("#settingsFuelRate", settings.fuelRate || "");
+  setValue("#settingsMonthlyLeaveAccrual", settings.monthlyLeaveAccrual);
+  setValue("#settingsInitialLeaveBalance", settings.initialLeaveBalance);
+  setValue("#settingsLeaveStartMonth", settings.leaveStartMonth);
+
+  setValue("#settingsInsuranceMode", settings.insuranceMode);
+  setValue("#settingsInsuranceBase", settings.insuranceBase || "");
+  setValue("#settingsInsuranceRate", settings.insuranceRate);
+  setValue("#settingsInsuranceFixedAmount", settings.insuranceFixedAmount || "");
+
+  setValue("#settingsMealPrice", settings.mealPrice);
+
+  setText("#settingsUsername", appState.currentUser || "Người dùng");
+  setText("#settingsVersion", APP_VERSION);
+
+  refreshAdvancedFeatureUI();
+  renderMealThresholdSettings();
+  syncSalaryInputs("settings");
+  syncMealPriceInputs("settings");
+  updateInsuranceSettingsVisibility();
+  updateSettingsCategorySummaries();
 }
 
-function readAuthSession() {
-  try {
-    const raw = safeStorage.getItem(STORAGE_KEYS.authSession);
-    if (!raw) return null;
-    const session = JSON.parse(raw);
-    return session && typeof session.accountId === "string" ? session : null;
-  } catch {
+
+
+function formatSalaryHistoryMonth(monthKey) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || ""));
+
+  return match
+    ? `Tháng ${Number(match[2])}/${match[1]}`
+    : String(monthKey || "");
+}
+
+
+function updateIncomeHistoryEditor() {
+  const field = $("#incomeHistoryField")?.value || "baseSalary";
+  const meta = INCOME_POLICY_META[field] || INCOME_POLICY_META.baseSalary;
+  const unit = $("#incomeHistoryValueUnit");
+  const input = $("#incomeHistoryValue");
+  const monthKey = $("#salaryHistoryEffectiveMonth")?.value || getMonthKey(new Date());
+  const currentValue = getIncomePolicyForMonth(monthKey)[field];
+
+  if (unit) {
+    unit.textContent = meta.unit || "";
+  }
+
+  if (input) {
+    input.step = ["standardWorkDays", "standardHours", "otMultiplier", "insuranceRate"].includes(field)
+      ? "0.1"
+      : "1000";
+    input.placeholder = `Hiện tại: ${formatIncomePolicyValue(field, currentValue)}`;
+  }
+}
+
+
+function renderSalaryHistorySettings() {
+  const settings = appState.settings || getDefaultSettings();
+  const history = getIncomeHistoryDisplayEntries(settings);
+  const list = $("#salaryHistoryList");
+  const currentMonth = getMonthKey(new Date());
+  const currentPolicy = getIncomePolicyForMonth(currentMonth, settings);
+  const effectiveMonthInput = $("#salaryHistoryEffectiveMonth");
+
+  if (effectiveMonthInput && !effectiveMonthInput.value) {
+    effectiveMonthInput.value = currentMonth;
+  }
+
+  const trackedFieldCount = new Set(
+    history.flatMap(item => Object.keys(item.changes || {}))
+  ).size;
+
+  setText(
+    "#salaryHistoryCurrentValue",
+    history.length
+      ? `${trackedFieldCount} khoản • ${history.length} mốc`
+      : "Chưa thiết lập"
+  );
+
+  setText(
+    "#salaryHistoryBaseHint",
+    history.length
+      ? `Hiện tại: lương cơ bản ${formatPayrollMoney(currentPolicy.baseSalary)}, hệ số OT ${formatNumber(currentPolicy.otMultiplier)}, đơn giá giao hàng ${formatPayrollMoney(currentPolicy.fuelRate)}/km.`
+      : "Chưa có lịch sử. Khi có thay đổi, chọn khoản, tháng hiệu lực và giá trị mới; dữ liệu cũ vẫn được giữ nguyên."
+  );
+
+  if (list) {
+    if (!history.length) {
+      list.innerHTML = `
+        <div class="salary-history-empty">
+          <i data-lucide="history"></i>
+          <span>
+            <strong>Chưa có mốc thay đổi thu nhập</strong>
+            <small>Bạn có thể ghi lương, phụ cấp, hệ số OT, đơn giá giao hàng hoặc bảo hiểm theo tháng hiệu lực.</small>
+          </span>
+        </div>
+      `;
+    } else {
+      list.innerHTML = history
+        .slice()
+        .reverse()
+        .map(item => {
+          const previousPolicy = getPolicyBeforeIncomeHistoryMonth(
+            item.effectiveMonth,
+            settings
+          );
+          const lines = Object.entries(item.changes || {})
+            .map(([key, value]) => {
+              const meta = INCOME_POLICY_META[key] || { label: key };
+              const before = previousPolicy[key];
+              const numeric = Number(value) - Number(before);
+              const diff = Number.isFinite(numeric) && meta.kind !== "mode"
+                ? `<em class="${numeric >= 0 ? "positive" : "negative"}">${numeric >= 0 ? "+" : "−"}${formatIncomePolicyValue(key, Math.abs(numeric))}</em>`
+                : "";
+
+              return `
+                <div class="income-history-change-line">
+                  <span>
+                    <strong>${escapeHTML(meta.label)}</strong>
+                    <small>${escapeHTML(formatIncomePolicyValue(key, before))} → ${escapeHTML(formatIncomePolicyValue(key, value))}</small>
+                  </span>
+                  ${diff}
+                </div>
+              `;
+            })
+            .join("");
+
+          return `
+            <div class="salary-history-row income-history-row">
+              <div class="income-history-row-head">
+                <span class="salary-history-date">
+                  <small>HIỆU LỰC</small>
+                  <strong>${formatSalaryHistoryMonth(item.effectiveMonth)}</strong>
+                </span>
+                <span class="income-history-count">${Object.keys(item.changes || {}).length} khoản thay đổi</span>
+                <button
+                  class="salary-history-delete"
+                  type="button"
+                  data-delete-income-history="${item.effectiveMonth}"
+                  aria-label="Xóa thay đổi thu nhập ${item.effectiveMonth}"
+                >
+                  <i data-lucide="trash-2"></i>
+                </button>
+              </div>
+              <div class="income-history-change-list">${lines}</div>
+            </div>
+          `;
+        })
+        .join("");
+    }
+  }
+
+  const pending = getPendingSalaryRevisions();
+  const impact = $("#salaryHistoryImpactStatus");
+
+  if (impact) {
+    impact.classList.toggle("hidden", !pending.length);
+    setText(
+      "#salaryHistoryImpactText",
+      pending.length
+        ? `${pending.length} bảng lương đã lưu đang dùng cấu hình thu nhập cũ và cần xử lý chênh lệch.`
+        : ""
+    );
+  }
+
+  updateIncomeHistoryEditor();
+  refreshIcons();
+}
+
+
+function applyIncomePolicyToDraft(draft, monthKey, { markDirty = false } = {}) {
+  if (!draft) {
+    return false;
+  }
+
+  const expected = getIncomePolicyForMonth(monthKey);
+  const oldSettings = sanitizeSettings(draft.settingsSnapshot || appState.settings);
+  const oldPolicy = getRawIncomePolicyFromSettings(oldSettings);
+  const baseWasPolicy = Math.abs(Number(draft.baseSalary || 0) - Number(oldPolicy.baseSalary || 0)) <= 0.5;
+  const fuelWasPolicy = Math.abs(Number(draft.fuelRate || 0) - Number(oldPolicy.fuelRate || 0)) <= 0.5;
+  let changed = false;
+
+  INCOME_POLICY_FIELDS.forEach(key => {
+    if (String(oldPolicy[key]) !== String(expected[key])) {
+      changed = true;
+    }
+    oldSettings[key] = expected[key];
+  });
+
+  if (baseWasPolicy && Math.abs(Number(draft.baseSalary || 0) - Number(expected.baseSalary || 0)) > 0.5) {
+    draft.baseSalary = expected.baseSalary;
+    changed = true;
+  }
+
+  if (fuelWasPolicy && Math.abs(Number(draft.fuelRate || 0) - Number(expected.fuelRate || 0)) > 0.5) {
+    draft.fuelRate = expected.fuelRate;
+    changed = true;
+  }
+
+  draft.settingsSnapshot = oldSettings;
+
+  if (changed && markDirty) {
+    draft.dirty = true;
+  }
+
+  return changed;
+}
+
+
+function refreshPayrollDraftsAfterSalaryHistoryChange() {
+  const currentMonth = getMonthKey(new Date());
+
+  Object.keys(appState.payrollDrafts).forEach(monthKey => {
+    const draft = appState.payrollDrafts[monthKey];
+    const saved = appState.payrollMonths[monthKey];
+
+    if (!saved && !draft?.dirty) {
+      delete appState.payrollDrafts[monthKey];
+      return;
+    }
+
+    if (monthKey === currentMonth && draft) {
+      applyIncomePolicyToDraft(draft, monthKey, { markDirty: Boolean(saved) });
+    }
+  });
+}
+
+
+function updateCurrentBaseSalaryFromHistory() {
+  applyCurrentIncomePolicyToSettings(appState.settings);
+}
+
+
+function addIncomeHistoryEntry() {
+  const monthInput = $("#salaryHistoryEffectiveMonth");
+  const fieldInput = $("#incomeHistoryField");
+  const valueInput = $("#incomeHistoryValue");
+  const effectiveMonth = String(monthInput?.value || "");
+  const key = String(fieldInput?.value || "baseSalary");
+  const rawValue = valueInput?.value;
+
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(effectiveMonth)) {
+    showToast("Hãy chọn tháng bắt đầu áp dụng thay đổi.", true);
+    monthInput?.focus();
+    return;
+  }
+
+  if (!INCOME_POLICY_NUMERIC_FIELDS.includes(key)) {
+    showToast("Khoản thay đổi chưa hợp lệ.", true);
+    return;
+  }
+
+  if (rawValue === "" || rawValue == null || !Number.isFinite(Number(rawValue))) {
+    showToast("Hãy nhập giá trị mới.", true);
+    valueInput?.focus();
+    return;
+  }
+
+  const value = sanitizeIncomePolicyValue(key, Number(rawValue));
+
+  if (["baseSalary", "standardWorkDays", "standardHours", "otMultiplier"].includes(key) && !(value > 0)) {
+    showToast("Giá trị này phải lớn hơn 0.", true);
+    valueInput?.focus();
+    return;
+  }
+
+  const previousPolicy = getPolicyBeforeIncomeHistoryMonth(effectiveMonth);
+  upsertIncomeHistoryChange(effectiveMonth, key, value);
+  saveSettings();
+  refreshPayrollDraftsAfterSalaryHistoryChange();
+  syncSettingsUI();
+  renderDashboard();
+  renderSalary();
+
+  if (valueInput) {
+    valueInput.value = "";
+  }
+
+  const meta = INCOME_POLICY_META[key] || { label: key };
+  showToast(
+    `${meta.label}: ${formatIncomePolicyValue(key, previousPolicy[key])} → ${formatIncomePolicyValue(key, value)} từ ${formatSalaryHistoryMonth(effectiveMonth)}.`
+  );
+
+  openSalaryRevisionModalIfNeeded();
+}
+
+
+function deleteIncomeHistoryEntry(effectiveMonth) {
+  const history = sanitizeIncomeHistory(appState.settings?.incomeHistory);
+  const legacyOnly = !history.length && sanitizeSalaryHistory(appState.settings?.salaryHistory).length;
+
+  if (legacyOnly) {
+    ensureIncomeHistoryInitialized();
+  }
+
+  const currentHistory = sanitizeIncomeHistory(appState.settings?.incomeHistory);
+  const entry = currentHistory.find(item => item.effectiveMonth === effectiveMonth);
+
+  if (!entry) {
+    return;
+  }
+
+  if (!confirm(`Xóa toàn bộ ${Object.keys(entry.changes).length} thay đổi có hiệu lực từ ${formatSalaryHistoryMonth(effectiveMonth)}?`)) {
+    return;
+  }
+
+  appState.settings.incomeHistory = normalizeIncomeHistoryAgainstBase(
+    currentHistory.filter(
+      item => item.effectiveMonth !== effectiveMonth
+    ),
+    appState.settings.incomeHistoryBase
+  );
+
+  if (appState.settings.incomeHistory.length) {
+    applyCurrentIncomePolicyToSettings(appState.settings);
+  } else if (appState.settings.incomeHistoryBase) {
+    const restoredBase = sanitizeIncomeHistoryBase(
+      appState.settings.incomeHistoryBase,
+      appState.settings
+    );
+
+    INCOME_POLICY_FIELDS.forEach(key => {
+      appState.settings[key] = restoredBase[key];
+    });
+  }
+
+  saveSettings();
+  refreshPayrollDraftsAfterSalaryHistoryChange();
+  syncSettingsUI();
+  renderDashboard();
+  renderSalary();
+  showToast("Đã xóa mốc thay đổi thu nhập.");
+  openSalaryRevisionModalIfNeeded();
+}
+
+
+function getSavedIncomePolicy(saved) {
+  const sourceSettings = sanitizeSettings(
+    saved?.settingsSnapshot || saved?.calculatedSnapshot?.settings || appState.settings
+  );
+  const policy = getRawIncomePolicyFromSettings(sourceSettings);
+
+  if (saved?.baseSalary != null) {
+    policy.baseSalary = sanitizeNonNegativeNumber(saved.baseSalary);
+  } else if (saved?.calculatedSnapshot?.baseSalary != null) {
+    policy.baseSalary = sanitizeNonNegativeNumber(saved.calculatedSnapshot.baseSalary);
+  }
+
+  return policy;
+}
+
+
+function getChangedIncomePolicyFields(savedPolicy, expectedPolicy) {
+  return INCOME_POLICY_FIELDS.filter(key => {
+    if (INCOME_POLICY_MODE_FIELDS.includes(key)) {
+      return String(savedPolicy[key]) !== String(expectedPolicy[key]);
+    }
+
+    return Math.abs(Number(savedPolicy[key] || 0) - Number(expectedPolicy[key] || 0)) > 0.0001;
+  });
+}
+
+
+function recalculateSavedPayrollWithIncomePolicy(saved, expectedPolicy) {
+  const snapshot = saved?.calculatedSnapshot;
+
+  if (!isPayrollSnapshotUsable(snapshot)) {
     return null;
   }
+
+  const oldSettings = sanitizeSettings(saved.settingsSnapshot || snapshot.settings || {});
+  const oldPolicy = getRawIncomePolicyFromSettings(oldSettings);
+  const nextSettings = sanitizeSettings({
+    ...oldSettings,
+    ...expectedPolicy
+  });
+
+  INCOME_POLICY_FIELDS.forEach(key => {
+    nextSettings[key] = expectedPolicy[key];
+  });
+
+  const standardDays = sanitizePositiveNumber(expectedPolicy.standardWorkDays, snapshot.standardDays || 26);
+  const standardHours = sanitizePositiveNumber(expectedPolicy.standardHours, snapshot.standardHours || 8);
+  const otMultiplier = sanitizePositiveNumber(expectedPolicy.otMultiplier, snapshot.otMultiplier || 2);
+  const leave = { ...(snapshot.leave || {}) };
+  const unpaid = sanitizeNonNegativeNumber(leave.unpaid);
+  const paidDays = Math.max(0, standardDays - unpaid);
+  const totalOT = sanitizeNonNegativeNumber(snapshot.totalOT);
+
+  const savedBase = sanitizeNonNegativeNumber(saved.baseSalary ?? snapshot.baseSalary);
+  const baseWasPolicy = Math.abs(savedBase - sanitizeNonNegativeNumber(oldPolicy.baseSalary)) <= 0.5;
+  const baseSalary = baseWasPolicy
+    ? sanitizeNonNegativeNumber(expectedPolicy.baseSalary)
+    : savedBase;
+
+  const workingSalary = baseSalary / standardDays * paidDays;
+  const overtimeMoney =
+    baseSalary / standardDays / standardHours * otMultiplier * totalOT;
+
+  const allowances = {
+    main: allowanceResult(
+      expectedPolicy.mainAllowance,
+      expectedPolicy.mainAllowanceMode,
+      paidDays,
+      standardDays,
+      saved.mainAllowanceOverride
+    ),
+    other: allowanceResult(
+      expectedPolicy.otherAllowance,
+      expectedPolicy.otherAllowanceMode,
+      paidDays,
+      standardDays,
+      saved.otherAllowanceOverride
+    ),
+    attendance: allowanceResult(
+      expectedPolicy.attendanceAllowance,
+      expectedPolicy.attendanceAllowanceMode,
+      paidDays,
+      standardDays,
+      saved.attendanceAllowanceOverride
+    ),
+    responsibility: allowanceResult(
+      expectedPolicy.responsibilityAllowance,
+      expectedPolicy.responsibilityAllowanceMode,
+      paidDays,
+      standardDays,
+      saved.responsibilityAllowanceOverride
+    )
+  };
+  const allowanceTotal = Object.values(allowances)
+    .reduce((sum, item) => sum + sanitizeNonNegativeNumber(item.value), 0);
+
+  const monthlyKm = sanitizeNonNegativeNumber(saved.monthlyKm ?? snapshot.monthlyKm);
+  const savedFuelRate = sanitizeNonNegativeNumber(saved.fuelRate ?? snapshot.fuelRate);
+  const fuelWasPolicy = Math.abs(savedFuelRate - sanitizeNonNegativeNumber(oldPolicy.fuelRate)) <= 0.5;
+  const fuelRate = fuelWasPolicy
+    ? sanitizeNonNegativeNumber(expectedPolicy.fuelRate)
+    : savedFuelRate;
+  const fuelMoney = monthlyKm * fuelRate;
+  const fuelEnabled = expectedPolicy.fuelRate > 0 || fuelRate > 0 || monthlyKm > 0;
+
+  const otherIncome = sanitizeNonNegativeNumber(saved.otherIncome ?? snapshot.otherIncome);
+  const advance = sanitizeNonNegativeNumber(saved.advance ?? snapshot.advance);
+  const otherDeduction = sanitizeNonNegativeNumber(saved.otherDeduction ?? snapshot.otherDeduction);
+
+  const insuranceMode = INSURANCE_MODES.includes(saved.insuranceModeOverride)
+    ? saved.insuranceModeOverride
+    : expectedPolicy.insuranceMode;
+  const insuranceBase = saved.insuranceBaseOverride == null
+    ? sanitizeNonNegativeNumber(expectedPolicy.insuranceBase)
+    : sanitizeNonNegativeNumber(saved.insuranceBaseOverride);
+  const insuranceRate = saved.insuranceRateOverride == null
+    ? sanitizeNonNegativeNumber(expectedPolicy.insuranceRate)
+    : sanitizeNonNegativeNumber(saved.insuranceRateOverride);
+  const insuranceFixed = saved.insuranceFixedOverride == null
+    ? sanitizeNonNegativeNumber(expectedPolicy.insuranceFixedAmount)
+    : sanitizeNonNegativeNumber(saved.insuranceFixedOverride);
+
+  let insuranceMoney = 0;
+  let insuranceDescription = "Không khấu trừ bảo hiểm";
+
+  if (insuranceMode === "percentage") {
+    insuranceMoney = insuranceBase * insuranceRate / 100;
+    insuranceDescription = `${formatPayrollMoney(insuranceBase)} × ${formatNumber(insuranceRate)}%`;
+  } else if (insuranceMode === "fixed") {
+    insuranceMoney = insuranceFixed;
+    insuranceDescription = "Số tiền bảo hiểm cố định";
+  }
+
+  const totalIncome =
+    workingSalary + overtimeMoney + allowanceTotal + fuelMoney + otherIncome;
+  const totalDeductions = insuranceMoney + advance + otherDeduction;
+  const netSalary = totalIncome - totalDeductions;
+
+  return {
+    snapshot: {
+      ...snapshot,
+      settings: nextSettings,
+      standardDays,
+      standardHours,
+      otMultiplier,
+      paidDays,
+      baseSalary,
+      workingSalary,
+      overtimeMoney,
+      allowances,
+      monthlyKm,
+      fuelRate,
+      fuelMoney,
+      fuelEnabled,
+      otherIncome,
+      insuranceMode,
+      insuranceMoney,
+      insuranceDescription,
+      advance,
+      otherDeduction,
+      totalIncome,
+      totalDeductions,
+      netSalary,
+      unpaidLeaveReduction: baseSalary / standardDays * unpaid
+    },
+    topLevel: {
+      baseSalary,
+      fuelRate,
+      settingsSnapshot: nextSettings
+    }
+  };
 }
 
-function saveAuthSession(accountId) {
-  safeStorage.setItem(STORAGE_KEYS.authSession, JSON.stringify({ accountId, signedInAt: new Date().toISOString() }));
+
+function isSalaryRevisionResolved(saved, monthKey) {
+  const signature = getIncomePolicySignatureForMonth(monthKey);
+  const resolution = saved?.incomeRevisionResolution;
+
+  if (resolution?.policySignature === signature) {
+    return true;
+  }
+
+  // Tương thích bản trước chỉ theo dõi lương cơ bản.
+  const legacy = saved?.salaryRevisionResolution;
+  const resolvedPolicy = getIncomePolicyForMonth(monthKey);
+  const savedPolicy = getSavedIncomePolicy(saved);
+  const expectedPolicy = { ...savedPolicy };
+  getTrackedIncomePolicyFieldsForMonth(monthKey).forEach(key => {
+    expectedPolicy[key] = resolvedPolicy[key];
+  });
+  const changed = getChangedIncomePolicyFields(savedPolicy, expectedPolicy);
+
+  return Boolean(
+    legacy &&
+    changed.length === 1 &&
+    changed[0] === "baseSalary" &&
+    Math.abs(Number(legacy.expectedSalary || 0) - Number(expectedPolicy.baseSalary || 0)) <= 0.5
+  );
 }
 
-function clearAuthSession() {
-  safeStorage.removeItem(STORAGE_KEYS.authSession);
-  safeStorage.removeItem(STORAGE_KEYS.demoAccount);
-  safeStorage.removeItem(STORAGE_KEYS.demoRole);
+
+function getPreviouslyCarriedRevisionDifference(saved) {
+  if (saved?.incomeRevisionResolution?.action === "carried-forward") {
+    return Number(saved.incomeRevisionResolution.difference || 0);
+  }
+
+  if (saved?.salaryRevisionResolution?.action === "carried-forward") {
+    return Number(saved.salaryRevisionResolution.difference || 0);
+  }
+
+  return 0;
 }
 
-function toNumber(value, fallback = 0) {
-  const normalized = String(value ?? "").replace(/\s/g, "").replace(/,/g, ".");
-  const number = Number(normalized);
-  return Number.isFinite(number) ? number : fallback;
+
+function getPendingSalaryRevisions() {
+  const currentMonth = getMonthKey(new Date());
+  const revisions = [];
+
+  Object.keys(appState.payrollMonths || {})
+    .sort()
+    .forEach(monthKey => {
+      if (monthKey >= currentMonth) {
+        return;
+      }
+
+      const saved = appState.payrollMonths[monthKey];
+      const resolvedPolicy = getIncomePolicyForMonth(monthKey);
+      const savedPolicy = getSavedIncomePolicy(saved);
+      const trackedFields = getTrackedIncomePolicyFieldsForMonth(monthKey);
+      const expectedPolicy = { ...savedPolicy };
+
+      trackedFields.forEach(key => {
+        expectedPolicy[key] = resolvedPolicy[key];
+      });
+
+      const changedFields = getChangedIncomePolicyFields(savedPolicy, expectedPolicy);
+      const previousHandledDifference =
+        getPreviouslyCarriedRevisionDifference(saved);
+
+      if (isSalaryRevisionResolved(saved, monthKey)) {
+        return;
+      }
+
+      // Nếu mốc tăng đã bị xóa/đưa về mức cũ, changedFields có thể rỗng.
+      // Tuy nhiên khoản truy lĩnh đã chuyển sang tháng khác vẫn phải được
+      // hoàn tác, nếu không thu nhập sẽ còn dư khoản cũ.
+      if (
+        !changedFields.length &&
+        Math.abs(previousHandledDifference) <= 0.5
+      ) {
+        return;
+      }
+
+      const recalculated = recalculateSavedPayrollWithIncomePolicy(
+        saved,
+        expectedPolicy
+      );
+
+      if (!recalculated) {
+        return;
+      }
+
+      const oldNet = Number(saved.calculatedSnapshot?.netSalary || 0);
+      const rawDifference =
+        Number(recalculated.snapshot.netSalary || 0) - oldNet;
+      const difference = rawDifference - previousHandledDifference;
+
+      if (Math.abs(difference) <= 0.5) {
+        return;
+      }
+
+      revisions.push({
+        monthKey,
+        saved,
+        savedPolicy,
+        expectedPolicy,
+        changedFields,
+        revisedSnapshot: recalculated.snapshot,
+        topLevelUpdates: recalculated.topLevel,
+        rawDifference,
+        previousHandledDifference,
+        difference,
+        reversalOnly:
+          !changedFields.length &&
+          Math.abs(previousHandledDifference) > 0.5,
+        policySignature: getIncomePolicySignatureForMonth(monthKey)
+      });
+    });
+
+  return revisions;
 }
 
-function toOptionalNumber(value) {
-  if (value === null || value === undefined || value === "") return null;
+
+function renderSalaryRevisionModal(revisions) {
+  const list = $("#salaryRevisionList");
+  const totalDifference = revisions.reduce(
+    (sum, item) => sum + item.difference,
+    0
+  );
+
+  appState.pendingSalaryRevisions = revisions;
+
+  setText(
+    "#salaryRevisionSummary",
+    `${revisions.length} tháng đã chốt có chênh lệch cấu hình hoặc khoản truy lĩnh cũ cần xử lý. App sẽ không tự sửa lịch sử cho đến khi bạn chọn cách xử lý.`
+  );
+
+  setText(
+    "#salaryRevisionTotal",
+    `${totalDifference >= 0 ? "+" : "−"}${formatPayrollMoney(Math.abs(totalDifference))}`
+  );
+
+  setText(
+    "#salaryRevisionCarryForwardText",
+    totalDifference >= 0
+      ? `Ghi ${formatPayrollMoney(totalDifference)} vào khoản cộng của ${formatSalaryHistoryMonth(getMonthKey(new Date()))}.`
+      : `Ghi ${formatPayrollMoney(Math.abs(totalDifference))} vào khoản trừ của ${formatSalaryHistoryMonth(getMonthKey(new Date()))}.`
+  );
+
+  if (list) {
+    list.innerHTML = revisions
+      .map(item => {
+        const labels = item.reversalOnly
+          ? ["Hoàn tác khoản truy lĩnh cũ"]
+          : item.changedFields
+              .slice(0, 3)
+              .map(key => INCOME_POLICY_META[key]?.label || key);
+        const extra = item.changedFields.length > 3
+          ? ` +${item.changedFields.length - 3} khoản`
+          : "";
+
+        return `
+          <div class="salary-revision-row">
+            <span>
+              <strong>${formatSalaryHistoryMonth(item.monthKey)}</strong>
+              <small>${escapeHTML(labels.join(", "))}${escapeHTML(extra)}</small>
+            </span>
+            <strong class="${item.difference >= 0 ? "positive" : "negative"}">
+              ${item.difference >= 0 ? "+" : "−"}${formatPayrollMoney(Math.abs(item.difference))}
+            </strong>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  refreshIcons();
+}
+
+
+function openSalaryRevisionModalIfNeeded() {
+  const revisions = getPendingSalaryRevisions();
+  renderSalaryHistorySettings();
+
+  if (!revisions.length) {
+    appState.pendingSalaryRevisions = [];
+    return;
+  }
+
+  renderSalaryRevisionModal(revisions);
+  openModal("salaryRevisionModal");
+}
+
+
+function hashRevisionText(value) {
+  let hash = 2166136261;
+
+  for (const char of String(value || "")) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(36);
+}
+
+
+function getSalaryRevisionBatchId(revisions, targetMonth, purpose) {
+  const payload = revisions
+    .map(item => [
+      item.monthKey,
+      item.policySignature,
+      Number(item.rawDifference || 0).toFixed(2),
+      Number(item.previousHandledDifference || 0).toFixed(2)
+    ].join(":"))
+    .join("|");
+
+  return `${purpose}-${targetMonth}-${hashRevisionText(payload)}`;
+}
+
+
+function addSalaryRevisionCarryEntry({
+  id,
+  targetMonth,
+  amount,
+  note,
+  sourceMonths
+}) {
+  if (Math.abs(Number(amount || 0)) <= 0.5) {
+    return null;
+  }
+
+  const entry = {
+    id,
+    targetMonth,
+    amount: Number(amount),
+    note: String(note || ""),
+    sourceMonths: Array.from(new Set(sourceMonths || [])),
+    createdAt: new Date().toISOString()
+  };
+
+  appState.settings.salaryCarryForwards = sanitizeSalaryCarryForwards([
+    ...(appState.settings.salaryCarryForwards || []),
+    entry
+  ]);
+
+  const draft = ensurePayrollDraft(targetMonth);
+  applySalaryCarryForwardsToDraft(draft, targetMonth, { markDirty: true });
+
+  return entry;
+}
+
+
+async function persistSettingsBeforePayrollRevision() {
+  saveSettings();
+
+  if (appState.settingsSyncTimer) {
+    window.clearTimeout(appState.settingsSyncTimer);
+    appState.settingsSyncTimer = null;
+  }
+
+  if (!appState.currentUser || appState.payrollSupabaseAvailable === false) {
+    return { saved: false, localOnly: true };
+  }
+
+  try {
+    const result = await saveSettingsToSupabase({ quiet: true });
+
+    if (result?.saved) {
+      appState.settingsDirty = false;
+      appState.settingsOpenSnapshot = getSettingsSnapshot();
+      setSettingsAutosaveStatus(
+        "saved",
+        "Đã đồng bộ cấu hình thu nhập trước khi cập nhật bảng lương."
+      );
+    }
+
+    return result;
+  } catch (error) {
+    // Nếu backend chưa có nhóm bảng payroll thì toàn bộ dữ liệu lương đang
+    // chạy local-only; trong trường hợp đó vẫn cho phép thao tác cục bộ.
+    if (appState.payrollSupabaseAvailable === false) {
+      return { saved: false, localOnly: true };
+    }
+
+    const syncError = new Error(
+      "Chưa thể đồng bộ lịch sử thu nhập lên Supabase nên app chưa cập nhật bảng lương. Hãy kiểm tra mạng rồi thử lại."
+    );
+    syncError.cause = error;
+    throw syncError;
+  }
+}
+
+
+async function syncPayrollMonthsByKeys(monthKeys) {
+  const keys = Array.from(new Set(monthKeys)).filter(Boolean);
+
+  if (
+    !keys.length ||
+    appState.payrollSupabaseAvailable !== true ||
+    !appState.currentUser
+  ) {
+    return;
+  }
+
+  const rows = keys
+    .map(monthKey => ({
+      username: appState.currentUser,
+      payroll_month: `${monthKey}-01`,
+      payroll_data: appState.payrollMonths[monthKey]
+    }))
+    .filter(row => row.payroll_data);
+
+  if (!rows.length) {
+    return;
+  }
+
+  const { error } = await supabaseClient
+    .from("payroll_months")
+    .upsert(rows, { onConflict: "username,payroll_month" });
+
+  if (error) {
+    throw error;
+  }
+}
+
+
+async function applySalaryRevisionToSavedMonths() {
+  const revisions = getPendingSalaryRevisions();
+
+  if (!revisions.length) {
+    closeModal("salaryRevisionModal");
+    showToast("Không còn bảng lương cũ cần cập nhật.");
+    return;
+  }
+
+  const currentMonth = getMonthKey(new Date());
+  const previousCarryTotal = revisions.reduce(
+    (sum, item) => sum + Number(item.previousHandledDifference || 0),
+    0
+  );
+
+  // Nếu các tháng này trước đây đã được truy lĩnh sang tháng khác,
+  // việc chuyển sang "cập nhật tháng cũ" phải hoàn tác phần đã chuyển.
+  if (Math.abs(previousCarryTotal) > 0.5) {
+    const sourceMonths = revisions.map(item => item.monthKey);
+    const affectedMonths = sourceMonths
+      .map(month => formatSalaryHistoryMonth(month).replace("Tháng ", "T"))
+      .join(", ");
+
+    addSalaryRevisionCarryEntry({
+      id: getSalaryRevisionBatchId(
+        revisions,
+        currentMonth,
+        "income-revision-reversal"
+      ),
+      targetMonth: currentMonth,
+      amount: -previousCarryTotal,
+      note: `Hoàn tác truy lĩnh cũ khi cập nhật lại ${affectedMonths}`,
+      sourceMonths
+    });
+  }
+
+  // Luôn đồng bộ lịch sử/cấu hình trước khi ghi payroll_months để tránh
+  // Supabase có bảng lương mới nhưng settings vẫn là phiên bản cũ.
+  await persistSettingsBeforePayrollRevision();
+
+  const resolvedAt = new Date().toISOString();
+
+  revisions.forEach(item => {
+    const saved = item.saved;
+
+    appState.payrollMonths[item.monthKey] = {
+      ...saved,
+      ...item.topLevelUpdates,
+      calculatedSnapshot: item.revisedSnapshot,
+      incomeRevisionResolution: {
+        action: "updated-past-month",
+        policySignature: item.policySignature,
+        changedFields: item.changedFields.slice(),
+        difference: item.rawDifference,
+        resolvedAt
+      },
+      savedAt: resolvedAt
+    };
+
+    delete appState.payrollDrafts[item.monthKey];
+  });
+
+  savePayrollMonths();
+  await syncPayrollMonthsByKeys(revisions.map(item => item.monthKey));
+  appState.pendingSalaryRevisions = [];
+  closeModal("salaryRevisionModal");
+  renderSalaryHistorySettings();
+  renderSalary();
+  renderDashboard();
+  showToast(`Đã cập nhật ${revisions.length} bảng lương theo cấu hình thu nhập mới.`);
+}
+
+
+async function carrySalaryRevisionToCurrentMonth() {
+  const revisions = getPendingSalaryRevisions();
+
+  if (!revisions.length) {
+    closeModal("salaryRevisionModal");
+    showToast("Không còn khoản chênh lệch cần xử lý.");
+    return;
+  }
+
+  const currentMonth = getMonthKey(new Date());
+  const totalDifference = revisions.reduce(
+    (sum, item) => sum + item.difference,
+    0
+  );
+  const affectedMonths = revisions
+    .map(item => formatSalaryHistoryMonth(item.monthKey).replace("Tháng ", "T"))
+    .join(", ");
+  const note = totalDifference >= 0
+    ? `Truy lĩnh điều chỉnh thu nhập ${affectedMonths}`
+    : `Truy thu/hoàn tác điều chỉnh thu nhập ${affectedMonths}`;
+
+  addSalaryRevisionCarryEntry({
+    id: getSalaryRevisionBatchId(
+      revisions,
+      currentMonth,
+      "income-revision-carry"
+    ),
+    targetMonth: currentMonth,
+    amount: totalDifference,
+    note,
+    sourceMonths: revisions.map(item => item.monthKey)
+  });
+
+  // salaryCarryForwards cũng nằm trong payroll_settings, vì vậy phải lưu
+  // nó lên Supabase trước khi đánh dấu các tháng nguồn là đã xử lý.
+  await persistSettingsBeforePayrollRevision();
+
+  const resolvedAt = new Date().toISOString();
+
+  revisions.forEach(item => {
+    appState.payrollMonths[item.monthKey] = {
+      ...item.saved,
+      incomeRevisionResolution: {
+        action: "carried-forward",
+        policySignature: item.policySignature,
+        changedFields: item.changedFields.slice(),
+        difference: item.rawDifference,
+        targetMonth: currentMonth,
+        resolvedAt
+      }
+    };
+  });
+
+  savePayrollMonths();
+  await syncPayrollMonthsByKeys(revisions.map(item => item.monthKey));
+  appState.pendingSalaryRevisions = [];
+  closeModal("salaryRevisionModal");
+  renderSalaryHistorySettings();
+  renderSalary();
+  renderDashboard();
+  showToast(
+    totalDifference >= 0
+      ? `Đã thêm ${formatPayrollMoney(totalDifference)} chênh lệch vào bảng lương tháng này.`
+      : `Đã ghi ${formatPayrollMoney(Math.abs(totalDifference))} khoản điều chỉnh giảm vào bảng lương tháng này.`
+  );
+}
+
+
+function sanitizeNonNegativeNumber(
+  value,
+  fallback = 0
+) {
+  const number =
+    Number(
+      value
+    );
+
+  return (
+    Number.isFinite(
+      number
+    ) &&
+    number >= 0
+      ? number
+      : fallback
+  );
+}
+
+
+function sanitizePositiveNumber(
+  value,
+  fallback = 1
+) {
+  const number =
+    Number(
+      value
+    );
+
+  return (
+    Number.isFinite(
+      number
+    ) &&
+    number > 0
+      ? number
+      : fallback
+  );
+}
+
+
+function isValidTime(
+  value
+) {
+  return (
+    /^([01]\d|2[0-3]):[0-5]\d$/
+      .test(
+        String(
+          value ||
+          ""
+        )
+      )
+  );
+}
+
+
+function sanitizeMealThresholds(
+  thresholds
+) {
+  const source =
+    Array.isArray(
+      thresholds
+    )
+      ? thresholds
+      : [];
+
+  const unique =
+    new Map();
+
+  source.forEach(
+    item => {
+      const time =
+        String(
+          item?.time ||
+          ""
+        );
+
+      const count =
+        Math.floor(
+          sanitizeNonNegativeNumber(
+            item?.count
+          )
+        );
+
+      if (
+        isValidTime(
+          time
+        )
+      ) {
+        unique.set(
+          time,
+          {
+            time,
+            count
+          }
+        );
+      }
+    }
+  );
+
+  const result =
+    Array.from(
+      unique.values()
+    ).sort(
+      (
+        a,
+        b
+      ) =>
+        a.time.localeCompare(
+          b.time
+        )
+    );
+
+  return result.length
+    ? result
+    : cloneDefaultMealThresholds();
+}
+
+
+function renderMealThresholdSettings() {
+  const container =
+    $("#mealThresholdList");
+
+  if (
+    !container
+  ) {
+    return;
+  }
+
+  container.innerHTML =
+    appState.settings
+      .mealThresholds
+      .map(
+        item => `
+          <div
+            class="meal-threshold-row"
+            data-threshold-row
+          >
+            <div class="input-shell threshold-time-input">
+              <i data-lucide="clock-3"></i>
+
+              <input
+                type="time"
+                class="meal-threshold-time"
+                value="${escapeHTML(
+                  item.time
+                )}"
+              >
+            </div>
+
+            <div class="input-shell threshold-count-input">
+              <i data-lucide="utensils"></i>
+
+              <input
+                type="number"
+                class="meal-threshold-count"
+                min="0"
+                step="1"
+                inputmode="numeric"
+                value="${item.count}"
+              >
+
+              <small>phần</small>
+            </div>
+
+            <button
+              type="button"
+              class="meal-threshold-delete"
+              data-delete-meal-threshold
+              aria-label="Xóa mốc phần cơm"
+            >
+              <i data-lucide="trash-2"></i>
+            </button>
+          </div>
+        `
+      )
+      .join(
+        ""
+      );
+
+  refreshIcons();
+}
+
+
+function readMealThresholdsFromUI() {
+  return $$(
+    "#mealThresholdList [data-threshold-row]"
+  ).map(
+    row => ({
+      time:
+        row.querySelector(
+          ".meal-threshold-time"
+        )?.value ||
+        "",
+
+      count:
+        Math.floor(
+          sanitizeNonNegativeNumber(
+            row.querySelector(
+              ".meal-threshold-count"
+            )?.value
+          )
+        )
+    })
+  );
+}
+
+
+function commitMealThresholdsFromUI() {
+  const rows =
+    readMealThresholdsFromUI();
+
+  const times =
+    rows
+      .map(
+        item =>
+          item.time
+      )
+      .filter(
+        Boolean
+      );
+
+  if (
+    rows.some(
+      item =>
+        !isValidTime(
+          item.time
+        )
+    )
+  ) {
+    showToast(
+      "Mốc phần cơm có giờ không hợp lệ.",
+      true
+    );
+
+    renderMealThresholdSettings();
+
+    return false;
+  }
+
+  if (
+    new Set(
+      times
+    ).size !==
+    times.length
+  ) {
+    showToast(
+      "Không thể tạo hai mốc phần cơm trùng giờ.",
+      true
+    );
+
+    renderMealThresholdSettings();
+
+    return false;
+  }
+
+  appState.settings
+    .mealThresholds =
+    sanitizeMealThresholds(
+      rows
+    );
+
+  saveSettings();
+
+  renderMealThresholdSettings();
+
+  return true;
+}
+
+
+function addMealThreshold() {
+  if (
+    !commitMealThresholdsFromUI()
+  ) {
+    return;
+  }
+
+  const thresholds =
+    appState.settings
+      .mealThresholds;
+
+  const last =
+    thresholds.at(
+      -1
+    ) || {
+      time: "18:30",
+      count: 0
+    };
+
+  let totalMinutes =
+    timeToMinutes(
+      last.time
+    ) + 120;
+
+  totalMinutes =
+    Math.min(
+      totalMinutes,
+      23 * 60 + 59
+    );
+
+  let time =
+    minutesToTime(
+      totalMinutes
+    );
+
+  while (
+    thresholds.some(
+      item =>
+        item.time ===
+        time
+    ) &&
+    totalMinutes <
+      23 * 60 + 59
+  ) {
+    totalMinutes +=
+      1;
+
+    time =
+      minutesToTime(
+        totalMinutes
+      );
+  }
+
+  if (
+    thresholds.some(
+      item =>
+        item.time ===
+        time
+    )
+  ) {
+    showToast(
+      "Không thể thêm mốc mới vì đã hết khoảng giờ phù hợp.",
+      true
+    );
+
+    return;
+  }
+
+  appState.settings
+    .mealThresholds
+    .push({
+      time,
+
+      count:
+        last.count + 1
+    });
+
+  appState.settings
+    .mealThresholds =
+    sanitizeMealThresholds(
+      appState.settings
+        .mealThresholds
+    );
+
+  saveSettings();
+
+  renderMealThresholdSettings();
+
+  const lastInput =
+    $$(
+      "#mealThresholdList .meal-threshold-time"
+    ).at(
+      -1
+    );
+
+  lastInput
+    ?.focus();
+
+  lastInput
+    ?.scrollIntoView({
+      behavior:
+        "smooth",
+
+      block:
+        "center"
+    });
+}
+
+
+function deleteMealThreshold(
+  row
+) {
+  const rows =
+    $$(
+      "#mealThresholdList [data-threshold-row]"
+    );
+
+  if (
+    rows.length <=
+    1
+  ) {
+    showToast(
+      "Cần giữ lại ít nhất một mốc phần cơm.",
+      true
+    );
+
+    return;
+  }
+
+  row?.remove();
+
+  commitMealThresholdsFromUI();
+}
+
+
+function resetMealThresholds() {
+  appState.settings
+    .mealThresholds =
+    cloneDefaultMealThresholds();
+
+  saveSettings();
+
+  renderMealThresholdSettings();
+
+  showToast(
+    "Đã khôi phục mốc phần cơm mặc định."
+  );
+}
+
+
+function timeToMinutes(
+  time
+) {
+  const [
+    hour,
+    minute
+  ] =
+    String(
+      time
+    )
+      .split(
+        ":"
+      )
+      .map(
+        Number
+      );
+
+  return (
+    hour * 60 +
+    minute
+  );
+}
+
+
+function minutesToTime(
+  totalMinutes
+) {
+  const safe =
+    Math.max(
+      0,
+      Math.min(
+        23 * 60 + 59,
+        totalMinutes
+      )
+    );
+
+  return (
+    `${pad(
+      Math.floor(
+        safe / 60
+      )
+    )}:` +
+    `${pad(
+      safe % 60
+    )}`
+  );
+}
+
+
+function getMealCountForEndTime(
+  endTime,
+  startTime = ""
+) {
+  if (
+    !isValidTime(
+      endTime
+    )
+  ) {
+    return 0;
+  }
+
+  let endMinutes =
+    timeToMinutes(
+      endTime
+    );
+
+  // Nếu giờ kết thúc nhỏ hơn giờ bắt đầu, coi đây là ca qua 0h.
+  // Ví dụ 17:00 -> 00:30 sẽ được hiểu là kết thúc ở phút 1470
+  // thay vì phút 30, nhờ đó vẫn đi qua các mốc cơm 18:30 / 20:30.
+  if (
+    isValidTime(
+      startTime
+    )
+  ) {
+    const startMinutes =
+      timeToMinutes(
+        startTime
+      );
+
+    if (
+      endMinutes <
+      startMinutes
+    ) {
+      endMinutes +=
+        24 * 60;
+    }
+  }
+
+  let count =
+    0;
+
+  appState.settings
+    .mealThresholds
+    .forEach(
+      item => {
+        if (
+          endMinutes >=
+          timeToMinutes(
+            item.time
+          )
+        ) {
+          count =
+            item.count;
+        }
+      }
+    );
+
+  return count;
+}
+
+
+function refreshOpenDetailDefaults() {
+  if (
+    !appState.selectedDate
+  ) {
+    return;
+  }
+
+  const log =
+    getWorkLog(
+      appState.selectedDate
+    );
+
+  if (
+    log?.start_time ||
+    log?.end_time
+  ) {
+    return;
+  }
+
+  setValue(
+    "#detailStartTime",
+    appState.settings
+      .defaultShiftStart
+  );
+
+  setValue(
+    "#detailEndTime",
+    appState.settings
+      .defaultShiftEnd
+  );
+
+  calculateDetailMainOT();
+}
+
+
+// =====================================================
+// ĐĂNG NHẬP
+// =====================================================
+
+function showAuthentication() {
+  $("#authScreen")
+    ?.classList
+    .remove(
+      "hidden"
+    );
+
+  $("#appShell")
+    ?.classList
+    .add(
+      "hidden"
+    );
+
+  refreshIcons();
+}
+
+
+function showApplication() {
+  $("#authScreen")
+    ?.classList
+    .add(
+      "hidden"
+    );
+
+  $("#appShell")
+    ?.classList
+    .remove(
+      "hidden"
+    );
+
+  setText(
+    "#greetingName",
+    appState.currentUser
+  );
+
+  setText(
+    "#displayUser",
+    `User: ${appState.currentUser}`
+  );
+
+  setText(
+    "#menuUserName",
+    appState.currentUser
+  );
+
+  setText(
+    "#settingsUsername",
+    appState.currentUser
+  );
+
+  setText(
+    "#appVersionDisplay",
+    `Phiên bản: ${APP_VERSION}`
+  );
+
+  setText(
+    "#menuVersionDisplay",
+    `Phiên bản: ${APP_VERSION}`
+  );
+
+  setText(
+    "#settingsVersion",
+    APP_VERSION
+  );
+
+  refreshAdvancedFeatureUI();
+  refreshIcons();
+}
+
+
+async function handleAuth(
+  type
+) {
+  const username =
+    $("#username")
+      ?.value
+      .trim() ||
+    "";
+
+  const password =
+    $("#password")
+      ?.value
+      .trim() ||
+    "";
+
+  if (
+    !username ||
+    !password
+  ) {
+    showToast(
+      "Vui lòng nhập đủ tài khoản và mật khẩu.",
+      true
+    );
+
+    return;
+  }
+
+  setLoading(
+    true
+  );
+
+  try {
+    if (
+      type ===
+      "register"
+    ) {
+      const {
+        error
+      } =
+        await supabaseClient
+          .from(
+            "users"
+          )
+          .insert({
+            username,
+            password
+          });
+
+      if (
+        error
+      ) {
+        throw error;
+      }
+
+      showToast(
+        "Đăng ký thành công. Bạn có thể đăng nhập."
+      );
+
+      return;
+    }
+
+    const {
+      data,
+      error
+    } =
+      await supabaseClient
+        .from(
+          "users"
+        )
+        .select(
+          "*"
+        )
+        .eq(
+          "username",
+          username
+        )
+        .eq(
+          "password",
+          password
+        )
+        .limit(
+          1
+        )
+        .maybeSingle();
+
+    if (
+      error ||
+      !data
+    ) {
+      throw new Error(
+        "Sai tài khoản hoặc mật khẩu."
+      );
+    }
+
+    appState.currentUser =
+      username;
+
+    localStorage.setItem(
+      "ot_user",
+      username
+    );
+
+    loadSettings();
+
+    loadPayrollLocalData();
+
+    loadMealReceiptLocalData();
+
+    applySettings();
+
+    showApplication();
+
+    await Promise.allSettled([
+      refreshData(),
+      initializePayrollSupabase()
+    ]);
+
+    showToast(
+      "Đăng nhập thành công."
+    );
+  } catch (
+    error
+  ) {
+    showToast(
+      type ===
+        "register"
+        ? "Tên đăng nhập đã tồn tại hoặc không thể đăng ký."
+        : (
+          error.message ||
+          "Không thể đăng nhập."
+        ),
+      true
+    );
+  } finally {
+    setLoading(
+      false
+    );
+  }
+}
+
+
+function togglePassword() {
+  const input =
+    $("#password");
+
+  const button =
+    $("#passwordToggle");
+
+  if (
+    !input ||
+    !button
+  ) {
+    return;
+  }
+
+  const visible =
+    input.type ===
+    "text";
+
+  input.type =
+    visible
+      ? "password"
+      : "text";
+
+  button.innerHTML =
+    `<i data-lucide="${
+      visible
+        ? "eye"
+        : "eye-off"
+    }"></i>`;
+
+  button.setAttribute(
+    "aria-label",
+    visible
+      ? "Hiện mật khẩu"
+      : "Ẩn mật khẩu"
+  );
+
+  refreshIcons();
+}
+
+
+function logout() {
+  localStorage.removeItem(
+    "ot_user"
+  );
+
+  location.reload();
+}
+
+
+async function changeCurrentPassword() {
+  const currentPassword = $("#currentPasswordInput")?.value || "";
+  const newPassword = $("#newPasswordInput")?.value || "";
+  const confirmation = $("#confirmNewPasswordInput")?.value || "";
+
+  if (!currentPassword || !newPassword || !confirmation) {
+    showToast("Vui lòng nhập đủ ba ô mật khẩu.", true);
+    return;
+  }
+
+  if (newPassword !== confirmation) {
+    showToast("Mật khẩu mới nhập lại chưa khớp.", true);
+    return;
+  }
+
+  if (newPassword === currentPassword) {
+    showToast("Mật khẩu mới phải khác mật khẩu hiện tại.", true);
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const { data, error } =
+      await supabaseClient
+        .from("users")
+        .select("username,password")
+        .eq("username", appState.currentUser)
+        .eq("password", currentPassword)
+        .limit(1)
+        .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      throw new Error("Mật khẩu hiện tại không đúng.");
+    }
+
+    const { error: updateError } =
+      await supabaseClient
+        .from("users")
+        .update({ password: newPassword })
+        .eq("username", appState.currentUser)
+        .eq("password", currentPassword);
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    [
+      "#currentPasswordInput",
+      "#newPasswordInput",
+      "#confirmNewPasswordInput"
+    ].forEach(selector => setValue(selector, ""));
+
+    showToast("Đã cập nhật mật khẩu.");
+  } catch (error) {
+    showToast(
+      error.message || "Không thể đổi mật khẩu.",
+      true
+    );
+  } finally {
+    setLoading(false);
+  }
+}
+
+
+// =====================================================
+// TẢI DATABASE
+// =====================================================
+
+function sanitizeHalfDayNumber(value, fallback = 0) {
   const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+
+  if (!Number.isFinite(number) || number < 0) {
+    return fallback;
+  }
+
+  return Math.round(number * 2) / 2;
 }
 
-const MAX_QUANTITY = 1_000_000_000_000;
-const QUANTITY_DECIMALS = 6;
 
-function normalizeQuantity(value, fallback = Number.NaN) {
-  const number = toNumber(value, fallback);
-  if (!Number.isFinite(number)) return fallback;
-  const rounded = Number(number.toFixed(QUANTITY_DECIMALS));
-  return Object.is(rounded, -0) ? 0 : rounded;
+function getMonthKey(value = new Date()) {
+  if (typeof value === "string") {
+    return value.slice(0, 7);
+  }
+
+  const date = value instanceof Date
+    ? value
+    : new Date(value);
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
 }
 
-function quantitiesEqual(left, right) {
-  return Math.abs(normalizeQuantity(left, 0) - normalizeQuantity(right, 0)) < 10 ** -QUANTITY_DECIMALS;
+
+function getMonthBounds(value) {
+  const monthKey = getMonthKey(value);
+  const [year, month] = monthKey.split("-").map(Number);
+  const lastDay = new Date(year, month, 0).getDate();
+
+  return {
+    monthKey,
+    start: `${monthKey}-01`,
+    end: `${monthKey}-${pad(lastDay)}`
+  };
 }
 
-function formatQuantity(value) {
-  return new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(toNumber(value));
+
+function mergeWorkLogs(monthKey, monthRows, activeRows = []) {
+  const kept = appState.workLogs.filter(
+    item => !String(item.work_date || "").startsWith(monthKey)
+  );
+
+  const map = new Map();
+
+  [...kept, ...(monthRows || []), ...(activeRows || [])].forEach(item => {
+    if (!item?.work_date) {
+      return;
+    }
+
+    if (map.has(item.work_date)) {
+      console.warn(
+        `Phát hiện work_logs trùng ngày ${item.work_date}; giao diện chỉ dùng một bản ghi.`
+      );
+    }
+
+    map.set(item.work_date, item);
+  });
+
+  appState.workLogs = Array.from(map.values());
 }
 
-function formatDateTime(value) {
+
+function mergeExtraShifts(monthKey, monthRows, activeRows = []) {
+  const kept = appState.extraShifts.filter(
+    item => !String(item.work_date || "").startsWith(monthKey)
+  );
+
+  const map = new Map();
+
+  [...kept, ...(monthRows || []), ...(activeRows || [])].forEach(item => {
+    const key = item?.id != null
+      ? String(item.id)
+      : `${item?.work_date}|${item?.start_at}|${item?.end_at}`;
+
+    map.set(key, item);
+  });
+
+  appState.extraShifts = Array.from(map.values());
+}
+
+
+function renderOpenViewsAfterDataLoad() {
+  renderDashboard();
+
+  if ($("#historyModal")?.classList.contains("show")) {
+    renderHistory();
+  }
+
+  if ($("#salaryModal")?.classList.contains("show")) {
+    renderSalary();
+  }
+
+  if ($("#mealModal")?.classList.contains("show")) {
+    renderMeal();
+  }
+
+  if (
+    $("#dayDetailModal")?.classList.contains("show") &&
+    appState.selectedDate
+  ) {
+    renderDayDetail(false);
+  }
+}
+
+
+async function loadMonthData(
+  target,
+  { showLoader = false, force = false } = {}
+) {
+  if (!appState.currentUser) {
+    return;
+  }
+
+  const { monthKey, start, end } = getMonthBounds(target);
+
+  if (appState.loadedMonths.has(monthKey) && !force) {
+    renderOpenViewsAfterDataLoad();
+    return;
+  }
+
+  const token =
+    (appState.monthRequestTokens[monthKey] || 0) + 1;
+
+  appState.monthRequestTokens[monthKey] = token;
+
+  if (showLoader) {
+    setLoading(true);
+  }
+
+  try {
+    const workResult =
+      await supabaseClient
+        .from("work_logs")
+        .select("*")
+        .eq("username", appState.currentUser)
+        .gte("work_date", start)
+        .lte("work_date", end)
+        .order("work_date", { ascending: false });
+
+    if (workResult.error) {
+      throw workResult.error;
+    }
+
+    const activeWorkResult =
+      await supabaseClient
+        .from("work_logs")
+        .select("*")
+        .eq("username", appState.currentUser)
+        .not("start_time", "is", null)
+        .is("end_time", null);
+
+    if (activeWorkResult.error) {
+      throw activeWorkResult.error;
+    }
+
+    const extraResult =
+      await supabaseClient
+        .from("extra_shifts")
+        .select("*")
+        .eq("username", appState.currentUser)
+        .gte("work_date", start)
+        .lte("work_date", end)
+        .order("start_at", { ascending: false });
+
+    let extraRows = [];
+    let activeExtraRows = [];
+
+    if (extraResult.error) {
+      appState.extraTableAvailable = false;
+      console.warn(
+        "extra_shifts chưa sẵn sàng:",
+        extraResult.error.message
+      );
+    } else {
+      appState.extraTableAvailable = true;
+      extraRows = extraResult.data || [];
+
+      const activeExtraResult =
+        await supabaseClient
+          .from("extra_shifts")
+          .select("*")
+          .eq("username", appState.currentUser)
+          .eq("status", "working")
+          .is("end_at", null);
+
+      if (activeExtraResult.error) {
+        throw activeExtraResult.error;
+      }
+
+      activeExtraRows = activeExtraResult.data || [];
+    }
+
+    if (appState.monthRequestTokens[monthKey] !== token) {
+      return;
+    }
+
+    mergeWorkLogs(
+      monthKey,
+      workResult.data || [],
+      activeWorkResult.data || []
+    );
+
+    mergeExtraShifts(
+      monthKey,
+      extraRows,
+      activeExtraRows
+    );
+
+    appState.loadedMonths.add(monthKey);
+    renderOpenViewsAfterDataLoad();
+  } catch (error) {
+    showToast(
+      `Lỗi tải dữ liệu tháng ${monthKey}: ${error.message || "Không xác định"}`,
+      true
+    );
+  } finally {
+    if (showLoader) {
+      setLoading(false);
+    }
+  }
+}
+
+
+async function runLockedAction(key, selectors, task) {
+  if (appState.actionLocks.has(key)) {
+    return;
+  }
+
+  appState.actionLocks.add(key);
+
+  const buttons = selectors
+    .map(selector => $(selector))
+    .filter(Boolean);
+
+  const previous = buttons.map(button => button.disabled);
+  buttons.forEach(button => {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  });
+
+  try {
+    await task();
+  } catch (error) {
+    showToast(
+      error.message || "Không thể hoàn tất thao tác.",
+      true
+    );
+  } finally {
+    appState.actionLocks.delete(key);
+    buttons.forEach((button, index) => {
+      button.disabled = previous[index];
+      button.removeAttribute("aria-busy");
+    });
+    renderDashboard();
+  }
+}
+
+
+function getLeaveStorageKey() {
+  return `ot_leave_records_${appState.currentUser || "guest"}`;
+}
+
+
+function getPayrollStorageKey() {
+  return `ot_payroll_months_${appState.currentUser || "guest"}`;
+}
+
+
+function loadPayrollLocalData() {
+  appState.leaveRecords = [];
+  appState.payrollMonths = {};
+  appState.payrollDrafts = {};
+  appState.leaveDraft = null;
+
+  try {
+    const leaveData = JSON.parse(
+      localStorage.getItem(getLeaveStorageKey()) || "[]"
+    );
+
+    if (Array.isArray(leaveData)) {
+      const unique = new Map();
+
+      leaveData.forEach(item => {
+        const date = String(item?.date || "");
+        const amount = sanitizeHalfDayNumber(item?.amount, 0);
+
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date) && [0.5, 1].includes(amount)) {
+          unique.set(date, {
+            date,
+            amount,
+            session: amount === 0.5 && item?.session === "afternoon"
+              ? "afternoon"
+              : amount === 0.5
+                ? "morning"
+                : "full",
+            note: String(item?.note || ""),
+            updatedAt: item?.updatedAt || null
+          });
+        }
+      });
+
+      appState.leaveRecords = Array.from(unique.values());
+    }
+  } catch {
+    appState.leaveRecords = [];
+  }
+
+  try {
+    const payrollData = JSON.parse(
+      localStorage.getItem(getPayrollStorageKey()) || "{}"
+    );
+
+    if (payrollData && typeof payrollData === "object" && !Array.isArray(payrollData)) {
+      appState.payrollMonths = payrollData;
+    }
+  } catch {
+    appState.payrollMonths = {};
+  }
+}
+
+
+function saveLeaveRecords() {
+  localStorage.setItem(
+    getLeaveStorageKey(),
+    JSON.stringify(appState.leaveRecords)
+  );
+}
+
+
+function savePayrollMonths() {
+  localStorage.setItem(
+    getPayrollStorageKey(),
+    JSON.stringify(appState.payrollMonths)
+  );
+}
+
+
+function isMissingPayrollTableError(error) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "").toLowerCase();
+  const mentionsPayrollTable =
+    message.includes("payroll_settings") ||
+    message.includes("leave_records") ||
+    message.includes("payroll_months");
+
+  return (
+    mentionsPayrollTable &&
+    (
+      code === "42P01" ||
+      code === "PGRST205" ||
+      message.includes("not found") ||
+      message.includes("does not exist")
+    )
+  );
+}
+
+
+function isSettingsModalOpen() {
+  return Boolean(
+    $("#settingsModal")
+      ?.classList
+      .contains("show")
+  );
+}
+
+
+function scrollSettingsToTop() {
+  const list =
+    $("#settingsModal .settings-list");
+
+  list?.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
+}
+
+
+function setSettingsTab(
+  tabName,
+  {
+    focus = false,
+    scroll = true
+  } = {}
+) {
+  const safeTab =
+    SETTINGS_TABS.includes(tabName)
+      ? tabName
+      : "general";
+
+  appState.activeSettingsTab =
+    safeTab;
+
+  $$('[data-settings-tab]').forEach(button => {
+    const active =
+      button.dataset.settingsTab === safeTab;
+
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+
+    if (active && focus) {
+      button.focus({ preventScroll: true });
+    }
+  });
+
+  $$('[data-settings-tab-panel]').forEach(panel => {
+    const active =
+      panel.dataset.settingsTabPanel === safeTab;
+
+    panel.classList.toggle("hidden", !active);
+    panel.classList.toggle("active", active);
+    panel.setAttribute("aria-hidden", String(!active));
+  });
+
+  if (scroll) {
+    scrollSettingsToTop();
+  }
+
+  refreshIcons();
+}
+
+
+function handleSettingsTabKeydown(
+  event,
+  currentIndex,
+  buttons
+) {
+  if (!buttons.length) {
+    return;
+  }
+
+  let nextIndex = null;
+
+  if (
+    event.key === "ArrowRight" ||
+    event.key === "ArrowDown"
+  ) {
+    nextIndex =
+      (currentIndex + 1) % buttons.length;
+  } else if (
+    event.key === "ArrowLeft" ||
+    event.key === "ArrowUp"
+  ) {
+    nextIndex =
+      (currentIndex - 1 + buttons.length) % buttons.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = buttons.length - 1;
+  }
+
+  if (nextIndex === null) {
+    return;
+  }
+
+  event.preventDefault();
+
+  const nextButton =
+    buttons[nextIndex];
+
+  setSettingsTab(
+    nextButton?.dataset.settingsTab || "general",
+    { focus: true }
+  );
+}
+
+
+function setSettingsAutosaveStatus(
+  state,
+  message
+) {
+  const box =
+    $("#settingsAutosaveStatus");
+
+  if (!box) {
+    return;
+  }
+
+  const iconByState = {
+    dirty: "cloud-upload",
+    saving: "loader-circle",
+    saved: "cloud-check",
+    local: "hard-drive",
+    error: "cloud-off"
+  };
+
+  const safeState =
+    state || "saved";
+
+  box.dataset.state =
+    safeState;
+
+  const iconName =
+    iconByState[safeState] ||
+    "cloud-check";
+
+  if (box.dataset.iconState !== iconName) {
+    const icon =
+      box.querySelector("svg, i[data-lucide]");
+
+    if (icon) {
+      icon.outerHTML =
+        `<i data-lucide="${iconName}"></i>`;
+    } else {
+      box.insertAdjacentHTML(
+        "afterbegin",
+        `<i data-lucide="${iconName}"></i>`
+      );
+    }
+
+    box.dataset.iconState =
+      iconName;
+
+    refreshIcons();
+  }
+
+  setText(
+    "#settingsAutosaveText",
+    message
+  );
+}
+
+
+function getSettingsSnapshot() {
+  return JSON.stringify(
+    sanitizeSettings(
+      appState.settings ||
+      {}
+    )
+  );
+}
+
+
+function markSettingsDirty() {
+  if (
+    appState.suppressSettingsRemoteSave ||
+    !isSettingsModalOpen()
+  ) {
+    return;
+  }
+
+  const currentSnapshot =
+    getSettingsSnapshot();
+
+  appState.settingsDirty =
+    currentSnapshot !==
+    appState.settingsOpenSnapshot;
+
+  if (appState.settingsSyncTimer) {
+    window.clearTimeout(
+      appState.settingsSyncTimer
+    );
+
+    appState.settingsSyncTimer = null;
+  }
+
+  if (!appState.settingsDirty) {
+    setSettingsAutosaveStatus(
+      "saved",
+      "Không có thay đổi cần lưu."
+    );
+
+    return;
+  }
+
+  setSettingsAutosaveStatus(
+    "dirty",
+    "Có thay đổi chưa đồng bộ. Bấm X hoặc chạm ra ngoài để lưu và thoát."
+  );
+}
+
+
+function resetSettingsAutosaveState() {
+  appState.settingsDirty = false;
+  appState.settingsClosing = false;
+  appState.settingsOpenSnapshot =
+    getSettingsSnapshot();
+
+  setSettingsAutosaveStatus(
+    "saved",
+    "Thay đổi sẽ tự động lưu khi bạn đóng Cài đặt."
+  );
+}
+
+
+function focusInvalidSetting(
+  tabName,
+  selector,
+  message
+) {
+  setSettingsTab(
+    tabName,
+    { focus: false }
+  );
+
+  window.requestAnimationFrame(() => {
+    const field =
+      $(selector);
+
+    field?.focus();
+    field?.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+  });
+
+  showToast(message, true);
+}
+
+
+function validateSettingsBeforeClose() {
+  const startTime =
+    $("#defaultShiftStart")?.value ||
+    appState.settings.defaultShiftStart;
+
+  const endTime =
+    $("#defaultShiftEnd")?.value ||
+    appState.settings.defaultShiftEnd;
+
+  if (!isValidTime(startTime)) {
+    focusInvalidSetting(
+      "general",
+      "#defaultShiftStart",
+      "Giờ bắt đầu ca không hợp lệ."
+    );
+
+    return false;
+  }
+
+  if (!isValidTime(endTime)) {
+    focusInvalidSetting(
+      "general",
+      "#defaultShiftEnd",
+      "Giờ kết thúc ca không hợp lệ."
+    );
+
+    return false;
+  }
+
+  const leaveStartMonth =
+    $("#settingsLeaveStartMonth")?.value ||
+    appState.settings.leaveStartMonth;
+
+  if (
+    !/^\d{4}-(0[1-9]|1[0-2])$/
+      .test(leaveStartMonth)
+  ) {
+    focusInvalidSetting(
+      "benefits",
+      "#settingsLeaveStartMonth",
+      "Tháng bắt đầu tính phép không hợp lệ."
+    );
+
+    return false;
+  }
+
+  if (!commitMealThresholdsFromUI()) {
+    setSettingsTab(
+      "benefits",
+      { focus: false }
+    );
+
+    return false;
+  }
+
+  appState.settings.defaultShiftStart =
+    startTime;
+
+  appState.settings.defaultShiftEnd =
+    endTime;
+
+  appState.settings.leaveStartMonth =
+    leaveStartMonth;
+
+  saveSettings();
+  syncSettingsUI();
+
+  return true;
+}
+
+
+async function syncSettingsManually() {
+  try {
+    await syncAllPayrollDataToSupabase();
+
+    appState.settingsDirty = false;
+    appState.settingsOpenSnapshot =
+      getSettingsSnapshot();
+
+    setSettingsAutosaveStatus(
+      "saved",
+      "Đã lưu và đồng bộ Cài đặt lên Supabase."
+    );
+  } catch (error) {
+    setSettingsAutosaveStatus(
+      "local",
+      "Dữ liệu đã lưu trên thiết bị nhưng chưa thể đồng bộ Supabase."
+    );
+
+    throw error;
+  }
+}
+
+
+function updateSettingsCategorySummaries() {
+  // Bản V8.7 dùng bốn tab ngang nên không còn thẻ tóm tắt danh mục.
+}
+
+
+async function requestCloseSettings({
+  afterClose = null
+} = {}) {
+  const modal =
+    $("#settingsModal");
+
+  if (
+    !modal?.classList.contains("show")
+  ) {
+    if (typeof afterClose === "function") {
+      afterClose();
+    }
+
+    return;
+  }
+
+  if (appState.settingsClosing) {
+    return;
+  }
+
+  if (!validateSettingsBeforeClose()) {
+    return;
+  }
+
+  if (appState.settingsSyncTimer) {
+    window.clearTimeout(
+      appState.settingsSyncTimer
+    );
+
+    appState.settingsSyncTimer = null;
+  }
+
+  if (!appState.settingsDirty) {
+    closeModal(
+      "settingsModal",
+      { skipSettingsSave: true }
+    );
+
+    if (typeof afterClose === "function") {
+      afterClose();
+    }
+
+    return;
+  }
+
+  appState.settingsClosing = true;
+
+  const sheet =
+    $("#settingsModal .settings-sheet");
+
+  sheet?.classList.add(
+    "is-saving-settings"
+  );
+
+  setSettingsAutosaveStatus(
+    "saving",
+    "Đang lưu Cài đặt..."
+  );
+
+  let remoteSaved = false;
+
+  try {
+    if (
+      appState.currentUser &&
+      appState.payrollSupabaseAvailable !== false
+    ) {
+      const result =
+        await saveSettingsToSupabase({
+          quiet: true
+        });
+
+      remoteSaved =
+        result?.saved === true;
+    }
+
+    appState.settingsDirty = false;
+    appState.settingsOpenSnapshot =
+      getSettingsSnapshot();
+
+    if (remoteSaved) {
+      setSettingsAutosaveStatus(
+        "saved",
+        "Đã lưu và đồng bộ Cài đặt lên Supabase."
+      );
+
+      showToast(
+        "Đã lưu và đồng bộ Cài đặt."
+      );
+    } else {
+      setSettingsAutosaveStatus(
+        "local",
+        "Đã lưu trên thiết bị, chưa đồng bộ Supabase."
+      );
+
+      showToast(
+        "Đã lưu Cài đặt trên thiết bị."
+      );
+    }
+  } catch (error) {
+    console.error(
+      "Không thể đồng bộ Cài đặt khi đóng:",
+      error
+    );
+
+    appState.settingsDirty = false;
+    appState.settingsOpenSnapshot =
+      getSettingsSnapshot();
+
+    setSettingsAutosaveStatus(
+      "local",
+      "Đã lưu trên thiết bị, sẽ đồng bộ lại khi có kết nối."
+    );
+
+    showToast(
+      "Đã lưu trên thiết bị, chưa thể đồng bộ Supabase.",
+      true
+    );
+  } finally {
+    sheet?.classList.remove(
+      "is-saving-settings"
+    );
+
+    appState.settingsClosing = false;
+  }
+
+  closeModal(
+    "settingsModal",
+    { skipSettingsSave: true }
+  );
+
+  if (typeof afterClose === "function") {
+    afterClose();
+  }
+}
+
+
+function setSettingsSyncStatus(state, title, detail) {
+  const iconBox = $("#settingsSyncIcon");
+  const iconByState = {
+    online: "cloud-check",
+    syncing: "cloud-upload",
+    local: "hard-drive",
+    warning: "cloud-alert",
+    error: "cloud-off"
+  };
+
+  if (iconBox) {
+    iconBox.className = `settings-sync-icon ${state || "local"}`;
+    iconBox.innerHTML = `<i data-lucide="${iconByState[state] || "cloud"}"></i>`;
+  }
+
+  setText("#settingsSyncStatus", title);
+  setText("#settingsSyncDetail", detail);
+
+  const button = $("#settingsSyncButton");
+  if (button) {
+    button.disabled = appState.settingsSyncing;
+    button.textContent = appState.settingsSyncing ? "Đang đồng bộ" : "Đồng bộ";
+  }
+
+  updateSettingsCategorySummaries();
+  refreshIcons();
+}
+
+
+function refreshSettingsSyncStatus() {
+  if (appState.settingsSyncing) {
+    setSettingsSyncStatus(
+      "syncing",
+      "Đang đồng bộ Supabase",
+      "Vui lòng giữ ứng dụng mở cho đến khi hoàn tất."
+    );
+    return;
+  }
+
+  if (
+    appState.payrollSupabaseAvailable === true &&
+    appState.mealReceiptSupabaseAvailable === false
+  ) {
+    setSettingsSyncStatus(
+      "warning",
+      "Đã kết nối lương, thiếu bảng tiền cơm",
+      "Chạy file supabase_meal_weekly_receipts.sql để lưu trạng thái nhận tiền theo tuần."
+    );
+    return;
+  }
+
+  if (appState.payrollSupabaseAvailable === true) {
+    setSettingsSyncStatus(
+      "online",
+      appState.mealReceiptSupabaseAvailable === true
+        ? "Đã kết nối đầy đủ"
+        : "Đã kết nối dữ liệu lương",
+      appState.mealReceiptSupabaseAvailable === true
+        ? "Lương, phép năm và nhận tiền cơm đang được lưu trên Supabase."
+        : "Cài đặt, ngày nghỉ và bảng lương đang được lưu trên Supabase."
+    );
+    return;
+  }
+
+  if (appState.payrollSupabaseAvailable === false) {
+    setSettingsSyncStatus(
+      "warning",
+      "Chưa triển khai bảng Supabase",
+      "Chạy file supabase_payroll.sql rồi nhấn Đồng bộ. Dữ liệu hiện vẫn được giữ trên thiết bị."
+    );
+    return;
+  }
+
+  setSettingsSyncStatus(
+    "local",
+    "Đang dùng dữ liệu trên máy",
+    "Ứng dụng chưa kiểm tra các bảng lương và phép trên Supabase."
+  );
+}
+
+
+function cacheSettingsLocally(modifiedAt = new Date().toISOString()) {
+  localStorage.setItem(
+    getSettingsKey(),
+    JSON.stringify(appState.settings)
+  );
+
+  localStorage.setItem(
+    `${getSettingsKey()}_modified_at`,
+    modifiedAt || new Date().toISOString()
+  );
+
+  if (appState.currentUser) {
+    localStorage.setItem(
+      `salary_${appState.currentUser}`,
+      String(appState.settings.baseSalary)
+    );
+    localStorage.setItem(
+      `meal_price_${appState.currentUser}`,
+      String(appState.settings.mealPrice)
+    );
+  }
+}
+
+
+function timestampValue(value) {
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+
+function isLocalRecordNewer(localValue, remoteValue) {
+  return timestampValue(localValue) > timestampValue(remoteValue);
+}
+
+
+function scheduleSettingsSupabaseSave() {
+  if (
+    !appState.currentUser ||
+    appState.payrollSupabaseAvailable !== true ||
+    appState.suppressSettingsRemoteSave ||
+    isSettingsModalOpen()
+  ) {
+    return;
+  }
+
+  if (appState.settingsSyncTimer) {
+    window.clearTimeout(appState.settingsSyncTimer);
+  }
+
+  setSettingsSyncStatus(
+    "syncing",
+    "Có thay đổi đang chờ lưu",
+    "Cài đặt sẽ tự đồng bộ sau khi bạn ngừng nhập."
+  );
+
+  appState.settingsSyncTimer = window.setTimeout(() => {
+    appState.settingsSyncTimer = null;
+
+    saveSettingsToSupabase({ quiet: true }).catch(error => {
+      console.error("Không thể tự đồng bộ cài đặt:", error);
+    });
+  }, 700);
+}
+
+
+async function saveSettingsToSupabase({ quiet = false } = {}) {
+  if (!appState.currentUser) {
+    return { saved: false, reason: "no-user" };
+  }
+
+  if (appState.payrollSupabaseAvailable === false) {
+    if (!quiet) {
+      throw new Error("Chưa có các bảng dữ liệu lương trên Supabase.");
+    }
+
+    return { saved: false, reason: "unavailable" };
+  }
+
+  setSettingsSyncStatus(
+    "syncing",
+    "Đang lưu cài đặt",
+    "Đang cập nhật cấu hình lên Supabase..."
+  );
+
+  const { data, error } = await supabaseClient
+    .from("payroll_settings")
+    .upsert(
+      {
+        username: appState.currentUser,
+        settings: appState.settings
+      },
+      { onConflict: "username" }
+    )
+    .select("updated_at")
+    .single();
+
+  if (error) {
+    if (isMissingPayrollTableError(error)) {
+      appState.payrollSupabaseAvailable = false;
+      refreshSettingsSyncStatus();
+    } else {
+      setSettingsSyncStatus(
+        "error",
+        "Không thể lưu lên Supabase",
+        error.message || "Không xác định được lỗi đồng bộ."
+      );
+    }
+
+    throw error;
+  }
+
+  appState.payrollSupabaseAvailable = true;
+  appState.payrollDataLoaded = true;
+  cacheSettingsLocally(data?.updated_at || new Date().toISOString());
+
+  setSettingsSyncStatus(
+    "online",
+    "Đã đồng bộ Supabase",
+    "Cài đặt mới nhất đã được lưu trên đám mây."
+  );
+
+  if (!quiet) {
+    showToast("Đã đồng bộ cài đặt lên Supabase.");
+  }
+
+  return { saved: true };
+}
+
+
+function mapRemoteLeaveRecord(row) {
+  const date = String(row?.leave_date || "").slice(0, 10);
+  const amount = sanitizeHalfDayNumber(row?.leave_amount, 0);
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || ![0.5, 1].includes(amount)) {
+    return null;
+  }
+
+  return {
+    date,
+    amount,
+    session:
+      amount === 0.5 && row?.leave_session === "afternoon"
+        ? "afternoon"
+        : amount === 0.5
+          ? "morning"
+          : "full",
+    note: String(row?.note || ""),
+    updatedAt: row?.updated_at || null
+  };
+}
+
+
+function mapRemotePayrollMonth(row) {
+  const monthKey = String(row?.payroll_month || "").slice(0, 7);
+
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+    return null;
+  }
+
+  const data = row?.payroll_data;
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return null;
+  }
+
+  return {
+    monthKey,
+    data: {
+      ...data,
+      monthKey,
+      savedAt: data.savedAt || row?.updated_at || null
+    }
+  };
+}
+
+
+async function initializePayrollSupabase({ force = false } = {}) {
+  if (!appState.currentUser) {
+    return;
+  }
+
+  if (appState.settingsSyncing) {
+    return;
+  }
+
+  if (appState.payrollDataLoaded && !force) {
+    refreshSettingsSyncStatus();
+    return;
+  }
+
+  appState.settingsSyncing = true;
+  refreshSettingsSyncStatus();
+
+  try {
+    const [settingsResult, leaveResult, payrollResult] = await Promise.all([
+      supabaseClient
+        .from("payroll_settings")
+        .select("settings,updated_at")
+        .eq("username", appState.currentUser)
+        .maybeSingle(),
+
+      supabaseClient
+        .from("leave_records")
+        .select("leave_date,leave_amount,leave_session,note,updated_at")
+        .eq("username", appState.currentUser)
+        .order("leave_date", { ascending: true }),
+
+      supabaseClient
+        .from("payroll_months")
+        .select("payroll_month,payroll_data,updated_at")
+        .eq("username", appState.currentUser)
+        .order("payroll_month", { ascending: true })
+    ]);
+
+    const firstError =
+      settingsResult.error ||
+      leaveResult.error ||
+      payrollResult.error;
+
+    if (firstError) {
+      if (isMissingPayrollTableError(firstError)) {
+        appState.payrollSupabaseAvailable = false;
+        appState.payrollDataLoaded = false;
+        appState.settingsSyncing = false;
+        refreshSettingsSyncStatus();
+        return;
+      }
+
+      throw firstError;
+    }
+
+    appState.payrollSupabaseAvailable = true;
+
+    if (
+      settingsResult.data?.settings &&
+      typeof settingsResult.data.settings === "object"
+    ) {
+      const localModifiedAt = localStorage.getItem(
+        `${getSettingsKey()}_modified_at`
+      );
+      const remoteModifiedAt = settingsResult.data.updated_at;
+
+      if (isLocalRecordNewer(localModifiedAt, remoteModifiedAt)) {
+        await saveSettingsToSupabase({ quiet: true });
+      } else {
+        appState.suppressSettingsRemoteSave = true;
+        appState.settings = sanitizeSettings(settingsResult.data.settings);
+        cacheSettingsLocally(remoteModifiedAt);
+        applySettings();
+        appState.suppressSettingsRemoteSave = false;
+      }
+    } else {
+      await saveSettingsToSupabase({ quiet: true });
+    }
+
+    const remoteLeaves = (leaveResult.data || [])
+      .map(mapRemoteLeaveRecord)
+      .filter(Boolean);
+
+    const mergedLeaves = new Map(
+      remoteLeaves.map(item => [item.date, item])
+    );
+    const leavesToUpload = [];
+
+    appState.leaveRecords.forEach(localItem => {
+      const remoteItem = mergedLeaves.get(localItem.date);
+
+      if (
+        !remoteItem ||
+        isLocalRecordNewer(localItem.updatedAt, remoteItem.updatedAt)
+      ) {
+        mergedLeaves.set(localItem.date, localItem);
+        leavesToUpload.push({
+          username: appState.currentUser,
+          leave_date: localItem.date,
+          leave_amount: localItem.amount,
+          leave_session: localItem.session,
+          note: localItem.note || ""
+        });
+      }
+    });
+
+    if (leavesToUpload.length) {
+      const { error } = await supabaseClient
+        .from("leave_records")
+        .upsert(leavesToUpload, { onConflict: "username,leave_date" });
+
+      if (error) {
+        throw error;
+      }
+    }
+
+    appState.leaveRecords = Array.from(mergedLeaves.values())
+      .sort((a, b) => a.date.localeCompare(b.date));
+    saveLeaveRecords();
+
+    const remotePayrollEntries = (payrollResult.data || [])
+      .map(mapRemotePayrollMonth)
+      .filter(Boolean);
+
+    const mergedPayroll = new Map(
+      remotePayrollEntries.map(item => [item.monthKey, item.data])
+    );
+    const payrollToUpload = [];
+
+    Object.entries(appState.payrollMonths).forEach(([monthKey, localData]) => {
+      if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+        return;
+      }
+
+      const remoteData = mergedPayroll.get(monthKey);
+
+      if (
+        !remoteData ||
+        isLocalRecordNewer(localData?.savedAt, remoteData?.savedAt)
+      ) {
+        mergedPayroll.set(monthKey, localData);
+        payrollToUpload.push({
+          username: appState.currentUser,
+          payroll_month: `${monthKey}-01`,
+          payroll_data: localData
+        });
+      }
+    });
+
+    if (payrollToUpload.length) {
+      const { error } = await supabaseClient
+        .from("payroll_months")
+        .upsert(payrollToUpload, { onConflict: "username,payroll_month" });
+
+      if (error) {
+        throw error;
+      }
+    }
+
+    appState.payrollMonths = Object.fromEntries(mergedPayroll.entries());
+    savePayrollMonths();
+
+    appState.payrollDrafts = {};
+    appState.payrollDataLoaded = true;
+
+    renderLeaveDetail();
+    renderHistory();
+    renderSalaryHistorySettings();
+    renderSalary();
+    renderDashboard();
+
+    setSettingsSyncStatus(
+      "online",
+      "Đã kết nối dữ liệu lương",
+      "Cài đặt, ngày nghỉ và bảng lương đã được tải từ Supabase."
+    );
+  } catch (error) {
+    appState.payrollDataLoaded = false;
+
+    if (isMissingPayrollTableError(error)) {
+      appState.payrollSupabaseAvailable = false;
+      appState.settingsSyncing = false;
+      refreshSettingsSyncStatus();
+      return;
+    }
+
+    setSettingsSyncStatus(
+      "error",
+      "Lỗi đồng bộ Supabase",
+      error.message || "Ứng dụng đang tiếp tục dùng dữ liệu trên thiết bị."
+    );
+  } finally {
+    appState.settingsSyncing = false;
+
+    const button = $("#settingsSyncButton");
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Đồng bộ";
+    }
+  }
+}
+
+
+async function syncAllPayrollDataToSupabase() {
+  if (!appState.currentUser) {
+    throw new Error("Bạn chưa đăng nhập.");
+  }
+
+  appState.payrollDataLoaded = false;
+
+  await initializePayrollSupabase({ force: true });
+
+  if (appState.payrollSupabaseAvailable === false) {
+    throw new Error(
+      "Chưa có bảng dữ liệu lương. Hãy chạy file supabase_payroll.sql trước."
+    );
+  }
+
+  if (!appState.payrollDataLoaded) {
+    throw new Error(
+      "Không thể đồng bộ dữ liệu lương. Hãy kiểm tra kết nối Supabase."
+    );
+  }
+
+  showToast("Đồng bộ dữ liệu lương thành công.");
+}
+
+
+async function refreshData(
+  showLoader = false,
+  target = null,
+  force = true
+) {
+  if (!appState.currentUser) {
+    return;
+  }
+
+  let targetDate = target;
+
+  if (!targetDate) {
+    targetDate =
+      appState.selectedDate &&
+      $("#dayDetailModal")?.classList.contains("show")
+        ? parseDateKey(appState.selectedDate)
+        : new Date();
+  }
+
+  await loadMonthData(
+    targetDate,
+    { showLoader, force }
+  );
+}
+
+
+async function checkSupabaseConnection() {
+  setConnectionStatus(
+    "checking",
+    "Đang kiểm tra",
+    "Đang kiểm tra quyền đọc dữ liệu OT, lương và phép...",
+    "loader-circle"
+  );
+
+  setSettingsSyncStatus(
+    "syncing",
+    "Đang kiểm tra Supabase",
+    "Đang xác nhận payroll_settings, leave_records, payroll_months và meal_weekly_receipts."
+  );
+
+  try {
+    const checks = await Promise.all([
+      supabaseClient.from("users").select("username").limit(1),
+      supabaseClient
+        .from("work_logs")
+        .select("work_date")
+        .eq("username", appState.currentUser)
+        .limit(1),
+      supabaseClient
+        .from("extra_shifts")
+        .select("id")
+        .eq("username", appState.currentUser)
+        .limit(1),
+      supabaseClient
+        .from("payroll_settings")
+        .select("username")
+        .eq("username", appState.currentUser)
+        .limit(1),
+      supabaseClient
+        .from("leave_records")
+        .select("leave_date")
+        .eq("username", appState.currentUser)
+        .limit(1),
+      supabaseClient
+        .from("payroll_months")
+        .select("payroll_month")
+        .eq("username", appState.currentUser)
+        .limit(1),
+      supabaseClient
+        .from("meal_weekly_receipts")
+        .select("week_start")
+        .eq("username", appState.currentUser)
+        .limit(1)
+    ]);
+
+    const error = checks.find(result => result.error)?.error;
+
+    if (error) {
+      throw error;
+    }
+
+    appState.payrollSupabaseAvailable = true;
+    appState.mealReceiptSupabaseAvailable = true;
+
+    setConnectionStatus(
+      "success",
+      "Đã kết nối đầy đủ",
+      "Đọc được dữ liệu OT, lương, phép năm và trạng thái nhận tiền cơm theo tuần.",
+      "circle-check"
+    );
+
+    setSettingsSyncStatus(
+      "online",
+      "Supabase đã sẵn sàng",
+      "Có thể đồng bộ lương, phép năm và nhận tiền cơm theo tuần."
+    );
+  } catch (error) {
+    const message = String(error.message || "").toLowerCase();
+    const code = String(error.code || "");
+
+    let title = "Không thể kết nối";
+    let detail = error.message || "Không xác định được lỗi kết nối.";
+
+    if (isMissingMealReceiptTableError(error)) {
+      appState.mealReceiptSupabaseAvailable = false;
+      title = "Thiếu bảng nhận tiền cơm";
+      detail = "Hãy chạy file supabase_meal_weekly_receipts.sql trong Supabase SQL Editor.";
+      setSettingsSyncStatus(
+        "warning",
+        "Thiếu bảng nhận tiền cơm",
+        detail
+      );
+    } else if (isMissingPayrollTableError(error)) {
+      appState.payrollSupabaseAvailable = false;
+      title = "Thiếu bảng dữ liệu lương";
+      detail = "Hãy chạy file supabase_payroll.sql trong Supabase SQL Editor.";
+      refreshSettingsSyncStatus();
+    } else if (
+      code === "42501" ||
+      message.includes("row-level security") ||
+      message.includes("permission")
+    ) {
+      title = "Không có quyền đọc dữ liệu";
+      detail = "Hãy kiểm tra RLS và quyền SELECT/INSERT/UPDATE/DELETE cho vai trò anon.";
+      setSettingsSyncStatus(
+        "error",
+        "Supabase từ chối quyền",
+        detail
+      );
+    } else if (
+      code === "42P01" ||
+      code === "PGRST205" ||
+      message.includes("extra_shifts") && message.includes("not found")
+    ) {
+      title = "Thiếu bảng dữ liệu OT";
+      detail = "Bảng extra_shifts chưa tồn tại hoặc chưa được Data API nhận diện.";
+      setSettingsSyncStatus(
+        "error",
+        "Thiếu bảng dữ liệu",
+        detail
+      );
+    } else {
+      setSettingsSyncStatus(
+        "error",
+        "Không thể kết nối Supabase",
+        detail
+      );
+    }
+
+    setConnectionStatus(
+      "error",
+      title,
+      detail,
+      "circle-alert"
+    );
+  }
+}
+
+
+function setConnectionStatus(
+  state,
+  title,
+  detail,
+  icon
+) {
+  const iconBox =
+    $("#connectionStatusIcon");
+
+  if (
+    iconBox
+  ) {
+    iconBox.className =
+      `connection-status-icon ${state}`;
+
+    iconBox.innerHTML =
+      `<i data-lucide="${icon}"></i>`;
+  }
+
+  setText(
+    "#connectionStatus",
+    title
+  );
+
+  setText(
+    "#connectionStatusDetail",
+    detail
+  );
+
+  refreshIcons();
+}
+
+
+// =====================================================
+// METADATA TRONG NOTE
+// =====================================================
+
+function parseStoredNote(
+  rawNote = ""
+) {
+  let visibleNote =
+    String(
+      rawNote ||
+      ""
+    );
+
+  let meta =
+    {};
+
+  let selectedMarker =
+    null;
+
+  let markerIndex =
+    -1;
+
+  [
+    NOTE_META_MARKER,
+    LEGACY_NOTE_META_MARKER
+  ].forEach(
+    marker => {
+      const index =
+        visibleNote
+          .lastIndexOf(
+            marker
+          );
+
+      if (
+        index >
+        markerIndex
+      ) {
+        markerIndex =
+          index;
+
+        selectedMarker =
+          marker;
+      }
+    }
+  );
+
+  if (
+    selectedMarker &&
+    markerIndex >=
+    0
+  ) {
+    const jsonText =
+      visibleNote
+        .slice(
+          markerIndex +
+          selectedMarker.length
+        )
+        .trim();
+
+    visibleNote =
+      visibleNote
+        .slice(
+          0,
+          markerIndex
+        )
+        .trim();
+
+    try {
+      meta =
+        JSON.parse(
+          jsonText
+        ) || {};
+    } catch {
+      meta = {};
+    }
+  }
+
+  return {
+    visibleNote,
+
+    meta: {
+      ...meta,
+
+      lunchChecked:
+        Boolean(
+          meta.lunchChecked
+        ),
+
+      carryOT:
+        Number.isFinite(
+          Number(
+            meta.carryOT
+          )
+        )
+          ? Math.max(
+            0,
+            Number(
+              meta.carryOT
+            )
+          )
+          : 0
+    }
+  };
+}
+
+
+function buildStoredNote(
+  visibleNote,
+  meta = {}
+) {
+  const cleanNote =
+    String(
+      visibleNote ||
+      ""
+    ).trim();
+
+  const payload = {
+    version: 1,
+
+    lunchChecked:
+      Boolean(
+        meta.lunchChecked
+      )
+  };
+
+  if (
+    Number.isFinite(
+      Number(
+        meta.carryOT
+      )
+    ) &&
+    Number(
+      meta.carryOT
+    ) > 0
+  ) {
+    payload.carryOT =
+      roundHours(
+        meta.carryOT
+      );
+  }
+
+  const metadata =
+    NOTE_META_MARKER +
+    JSON.stringify(
+      payload
+    );
+
+  return cleanNote
+    ? `${cleanNote}\n\n${metadata}`
+    : metadata;
+}
+
+
+function getLogVisibleNote(
+  log
+) {
+  return parseStoredNote(
+    log?.note ||
+    ""
+  ).visibleNote;
+}
+
+
+function getLogLunchChecked(
+  log
+) {
+  return parseStoredNote(
+    log?.note ||
+    ""
+  ).meta.lunchChecked;
+}
+
+
+// =====================================================
+// NGÀY GIỜ + FORMAT
+// =====================================================
+
+function pad(
+  value
+) {
+  return String(
+    value
+  ).padStart(
+    2,
+    "0"
+  );
+}
+
+
+function getDateKey(
+  date = new Date()
+) {
+  return (
+    `${date.getFullYear()}-` +
+    `${pad(
+      date.getMonth() + 1
+    )}-` +
+    `${pad(
+      date.getDate()
+    )}`
+  );
+}
+
+
+function parseDateKey(
+  dateKey
+) {
+  const [
+    year,
+    month,
+    day
+  ] =
+    String(
+      dateKey
+    )
+      .split(
+        "-"
+      )
+      .map(
+        Number
+      );
+
+  return new Date(
+    year,
+    month - 1,
+    day
+  );
+}
+
+
+function getTimeValue(
+  date = new Date()
+) {
+  return (
+    `${pad(
+      date.getHours()
+    )}:` +
+    `${pad(
+      date.getMinutes()
+    )}`
+  );
+}
+
+
+function normalizeDateToMinute(
+  date = new Date()
+) {
+  const normalized =
+    new Date(
+      date
+    );
+
+  normalized.setSeconds(
+    0,
+    0
+  );
+
+  return normalized;
+}
+
+
+function getLocalDateTime(
+  dateKey,
+  timeValue
+) {
+  const date =
+    parseDateKey(
+      dateKey
+    );
+
+  const [
+    hour,
+    minute
+  ] =
+    String(
+      timeValue
+    )
+      .split(
+        ":"
+      )
+      .map(
+        Number
+      );
+
+  date.setHours(
+    hour,
+    minute,
+    0,
+    0
+  );
+
+  return date;
+}
+
+
+function combineExtraDateTime(
+  dateKey,
+  startTime,
+  endTime
+) {
+  const start =
+    getLocalDateTime(
+      dateKey,
+      startTime
+    );
+
+  const end =
+    getLocalDateTime(
+      dateKey,
+      endTime
+    );
+
+  if (
+    end <=
+    start
+  ) {
+    end.setDate(
+      end.getDate() +
+      1
+    );
+  }
+
+  return {
+    start,
+    end
+  };
+}
+
+
+function isSunday(
+  dateKey
+) {
+  return (
+    parseDateKey(
+      dateKey
+    ).getDay() ===
+    0
+  );
+}
+
+
+function formatDisplayDate(
+  dateKey
+) {
+  return parseDateKey(
+    dateKey
+  ).toLocaleDateString(
+    "vi-VN",
+    {
+      weekday:
+        "long",
+
+      day:
+        "2-digit",
+
+      month:
+        "2-digit",
+
+      year:
+        "numeric"
+    }
+  );
+}
+
+
+function formatShortDate(
+  dateKey
+) {
+  return parseDateKey(
+    dateKey
+  ).toLocaleDateString(
+    "vi-VN",
+    {
+      day:
+        "2-digit",
+
+      month:
+        "2-digit"
+    }
+  );
+}
+
+
+function formatTimeFromISO(
+  isoValue
+) {
+  return isoValue
+    ? getTimeValue(
+      new Date(
+        isoValue
+      )
+    )
+    : "";
+}
+
+
+function roundHours(
+  value
+) {
+  const number =
+    Number(
+      value
+    );
+
+  if (
+    !Number.isFinite(
+      number
+    )
+  ) {
+    return 0;
+  }
+
+  return (
+    Math.round(
+      (
+        number +
+        Number.EPSILON
+      ) *
+      100
+    ) /
+    100
+  );
+}
+
+
+function formatHours(
+  value
+) {
+  return (
+    roundHours(
+      value
+    ).toLocaleString(
+      "vi-VN",
+      {
+        minimumFractionDigits:
+          0,
+
+        maximumFractionDigits:
+          2
+      }
+    ) +
+    "h"
+  );
+}
+
+
+function formatMoney(
+  value
+) {
+  return (
+    new Intl.NumberFormat(
+      "vi-VN"
+    ).format(
+      Math.round(
+        Number(
+          value
+        ) ||
+        0
+      )
+    ) +
+    "đ"
+  );
+}
+
+
+function formatElapsed(
+  milliseconds
+) {
+  const totalSeconds =
+    Math.floor(
+      Math.max(
+        0,
+        milliseconds
+      ) /
+      1000
+    );
+
+  const hours =
+    Math.floor(
+      totalSeconds /
+      3600
+    );
+
+  const minutes =
+    Math.floor(
+      (
+        totalSeconds %
+        3600
+      ) /
+      60
+    );
+
+  const seconds =
+    totalSeconds %
+    60;
+
+  return (
+    `${pad(
+      hours
+    )}:` +
+    `${pad(
+      minutes
+    )}:` +
+    `${pad(
+      seconds
+    )}`
+  );
+}
+
+
+// =====================================================
+// CÔNG THỨC
+// =====================================================
+
+function calculateDurationHours(
+  startDate,
+  endDate
+) {
+  return roundHours(
+    (
+      endDate.getTime() -
+      startDate.getTime()
+    ) /
+    3600000
+  );
+}
+
+
+function calculateMainOT(
+  startTime,
+  endTime,
+  lunchChecked,
+  dateKey
+) {
+  if (
+    !startTime ||
+    !endTime
+  ) {
+    return 0;
+  }
+
+  const baseDate =
+    "2024-01-01";
+
+  const actualStart =
+    new Date(
+      `${baseDate}T${startTime}:00`
+    );
+
+  const actualEnd =
+    new Date(
+      `${baseDate}T${endTime}:00`
+    );
+
+  if (
+    Number.isNaN(
+      actualStart.getTime()
+    ) ||
+    Number.isNaN(
+      actualEnd.getTime()
+    )
+  ) {
+    return 0;
+  }
+
+  if (
+    actualEnd <
+    actualStart
+  ) {
+    actualEnd.setDate(
+      actualEnd.getDate() +
+      1
+    );
+  }
+
+  if (
+    !isSunday(
+      dateKey
+    )
+  ) {
+    const normalStart =
+      new Date(
+        `${baseDate}T${appState.settings.defaultShiftStart}:00`
+      );
+
+    const normalEnd =
+      new Date(
+        `${baseDate}T${appState.settings.defaultShiftEnd}:00`
+      );
+
+    if (
+      normalEnd <=
+      normalStart
+    ) {
+      normalEnd.setDate(
+        normalEnd.getDate() +
+        1
+      );
+    }
+
+    let overtimeMinutes =
+      0;
+
+    if (
+      actualStart <
+      normalStart
+    ) {
+      const morningEnd =
+        actualEnd <
+        normalStart
+          ? actualEnd
+          : normalStart;
+
+      overtimeMinutes +=
+        Math.max(
+          0,
+          morningEnd.getTime() -
+          actualStart.getTime()
+        ) /
+        60000;
+    }
+
+    const eveningStart =
+      actualStart >
+      normalEnd
+        ? actualStart
+        : normalEnd;
+
+    if (
+      actualEnd >
+      eveningStart
+    ) {
+      overtimeMinutes +=
+        (
+          actualEnd.getTime() -
+          eveningStart.getTime()
+        ) /
+        60000;
+    }
+
+    return roundHours(
+      overtimeMinutes /
+      60 +
+      (
+        lunchChecked
+          ? 1
+          : 0
+      )
+    );
+  }
+
+  const totalMinutes =
+    (
+      actualEnd.getTime() -
+      actualStart.getTime()
+    ) /
+    60000;
+
+  const netMinutes =
+    totalMinutes -
+    (
+      lunchChecked
+        ? 60
+        : 0
+    );
+
+  return roundHours(
+    Math.max(
+      0,
+      netMinutes
+    ) /
+    60
+  );
+}
+
+
+// =====================================================
+// ĐỌC DỮ LIỆU TRONG BỘ NHỚ
+// =====================================================
+
+function getWorkLog(
+  dateKey
+) {
+  return (
+    appState.workLogs
+      .find(
+        item =>
+          item.work_date ===
+          dateKey
+      ) ||
+    null
+  );
+}
+
+
+function getExtraShifts(
+  dateKey
+) {
+  if (
+    !appState.extraTableAvailable
+  ) {
+    return [];
+  }
+
+  return appState.extraShifts
+    .filter(
+      item =>
+        item.work_date ===
+        dateKey
+    );
+}
+
+
+function getCompletedExtraShifts(
+  dateKey
+) {
+  return getExtraShifts(
+    dateKey
+  ).filter(
+    item =>
+      item.status ===
+      "completed" &&
+      item.end_at
+  );
+}
+
+
+function getExtraTotal(
+  dateKey
+) {
+  return roundHours(
+    getCompletedExtraShifts(
+      dateKey
+    ).reduce(
+      (
+        total,
+        item
+      ) =>
+        total +
+        (
+          Number(
+            item.duration_hours
+          ) ||
+          0
+        ),
+      0
+    )
+  );
+}
+
+
+function getStoredTotalOT(
+  dateKey
+) {
+  const log =
+    getWorkLog(
+      dateKey
+    );
+
+  return log
+    ? roundHours(
+      Number(
+        log.overtime
+      ) ||
+      0
+    )
+    : getExtraTotal(
+      dateKey
+    );
+}
+
+
+function getBaseOT(
+  dateKey
+) {
+  return roundHours(
+    Math.max(
+      0,
+      getStoredTotalOT(
+        dateKey
+      ) -
+      getExtraTotal(
+        dateKey
+      )
+    )
+  );
+}
+
+
+function getActiveExtraShift() {
+  if (
+    !appState.extraTableAvailable
+  ) {
+    return null;
+  }
+
+  return (
+    appState.extraShifts
+      .find(
+        item =>
+          item.status ===
+          "working" &&
+          !item.end_at
+      ) ||
+    null
+  );
+}
+
+
+function getLatestCompletedExtraShift(
+  dateKey
+) {
+  return (
+    getCompletedExtraShifts(
+      dateKey
+    )
+      .slice()
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          new Date(
+            b.end_at ||
+            b.start_at
+          ).getTime() -
+          new Date(
+            a.end_at ||
+            a.start_at
+          ).getTime()
+      )[0] ||
+    null
+  );
+}
+
+
+function getExtraShiftForEnd(
+  now = new Date()
+) {
+  const active =
+    getActiveExtraShift();
+
+  if (
+    active
+  ) {
+    return active;
+  }
+
+  const today =
+    getDateKey(
+      now
+    );
+
+  return (
+    appState.extraShifts
+      .filter(
+        item =>
+          item.status ===
+          "completed" &&
+          item.end_at
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          new Date(
+            b.end_at
+          ) -
+          new Date(
+            a.end_at
+          )
+      )
+      .find(
+        item =>
+          item.work_date ===
+          today ||
+          getDateKey(
+            new Date(
+              item.end_at
+            )
+          ) ===
+          today
+      ) ||
+    null
+  );
+}
+
+
+function getActiveMainShift() {
+  return (
+    appState.workLogs
+      .find(
+        item =>
+          item.start_time &&
+          !item.end_time
+      ) ||
+    null
+  );
+}
+
+
+function hasMainShift(
+  log,
+  dateKey =
+    log?.work_date
+) {
+  return Boolean(
+    log &&
+    (
+      log.start_time ||
+      log.end_time ||
+      getBaseOT(
+        dateKey
+      ) > 0
+    )
+  );
+}
+
+
+function getMonthTotal(
+  monthKey
+) {
+  const dates =
+    new Set();
+
+  appState.workLogs
+    .forEach(
+      item => {
+        if (
+          item.work_date
+            .startsWith(
+              monthKey
+            )
+        ) {
+          dates.add(
+            item.work_date
+          );
+        }
+      }
+    );
+
+  if (
+    appState.extraTableAvailable
+  ) {
+    appState.extraShifts
+      .forEach(
+        item => {
+          if (
+            item.work_date
+              .startsWith(
+                monthKey
+              )
+          ) {
+            dates.add(
+              item.work_date
+            );
+          }
+        }
+      );
+  }
+
+  return roundHours(
+    Array.from(
+      dates
+    ).reduce(
+      (
+        total,
+        dateKey
+      ) =>
+        total +
+        getStoredTotalOT(
+          dateKey
+        ),
+      0
+    )
+  );
+}
+
+
+// =====================================================
+// GHI WORK_LOGS + ĐỒNG BỘ EXTRA
+// =====================================================
+
+async function saveWorkLog(dateKey, changes = {}) {
+  const { data: databaseRows, error: readError } =
+    await supabaseClient
+      .from("work_logs")
+      .select("work_date")
+      .eq("username", appState.currentUser)
+      .eq("work_date", dateKey)
+      .limit(1);
+
+  if (readError) {
+    throw readError;
+  }
+
+  if ((databaseRows || []).length) {
+    const { error } =
+      await supabaseClient
+        .from("work_logs")
+        .update(changes)
+        .eq("username", appState.currentUser)
+        .eq("work_date", dateKey);
+
+    if (error) {
+      throw error;
+    }
+
+    return;
+  }
+
+  const { error } =
+    await supabaseClient
+      .from("work_logs")
+      .insert({
+        username: appState.currentUser,
+        work_date: dateKey,
+        start_time: null,
+        end_time: null,
+        overtime: 0,
+        meal_count: 0,
+        note: "",
+        ...changes
+      });
+
+  if (error) {
+    throw error;
+  }
+}
+
+
+async function queryExtraTotalFromDatabase(
+  dateKey
+) {
+  if (
+    !appState.extraTableAvailable
+  ) {
+    return 0;
+  }
+
+  const {
+    data,
+    error
+  } =
+    await supabaseClient
+      .from(
+        "extra_shifts"
+      )
+      .select(
+        "duration_hours,status,end_at"
+      )
+      .eq(
+        "username",
+        appState.currentUser
+      )
+      .eq(
+        "work_date",
+        dateKey
+      );
+
+  if (
+    error
+  ) {
+    throw error;
+  }
+
+  return roundHours(
+    (
+      data ||
+      []
+    )
+      .filter(
+        item =>
+          item.status ===
+          "completed" &&
+          item.end_at
+      )
+      .reduce(
+        (
+          total,
+          item
+        ) =>
+          total +
+          (
+            Number(
+              item.duration_hours
+            ) ||
+            0
+          ),
+        0
+      )
+  );
+}
+
+
+async function syncDayAfterExtraChange(
+  dateKey,
+  preservedBaseOT
+) {
+  const extraTotal =
+    await queryExtraTotalFromDatabase(
+      dateKey
+    );
+
+  await saveWorkLog(
+    dateKey,
+    {
+      overtime:
+        roundHours(
+          Math.max(
+            0,
+            preservedBaseOT
+          ) +
+          extraTotal
+        )
+    }
+  );
+}
+
+
+// =====================================================
+// ĐỒNG HỒ + DASHBOARD
+// =====================================================
+
+function updateClock() {
+  const now =
+    new Date();
+
+  const options =
+    appState.settings
+      ?.showSeconds
+      ? {
+        hour12:
+          false
+      }
+      : {
+        hour:
+          "2-digit",
+
+        minute:
+          "2-digit",
+
+        hour12:
+          false
+      };
+
+  setText(
+    "#currentTime",
+    now.toLocaleTimeString(
+      "vi-VN",
+      options
+    )
+  );
+
+  setText(
+    "#currentDate",
+    now.toLocaleDateString(
+      "vi-VN",
+      {
+        weekday:
+          "long",
+
+        day:
+          "numeric",
+
+        month:
+          "long",
+
+        year:
+          "numeric"
+      }
+    )
+  );
+
+  updateLiveTimers(
+    now
+  );
+}
+
+
+function updateLiveTimers(
+  now
+) {
+  const activeMain =
+    getActiveMainShift();
+
+  const activeExtra =
+    getActiveExtraShift();
+
+  if (
+    activeMain &&
+    $("#mainElapsed")
+  ) {
+    const start =
+      getLocalDateTime(
+        activeMain.work_date,
+        activeMain.start_time
+      );
+
+    $("#mainElapsed")
+      .textContent =
+      formatElapsed(
+        now.getTime() -
+        start.getTime()
+      );
+  }
+
+  if (
+    activeExtra &&
+    $("#extraElapsed")
+  ) {
+    const start =
+      new Date(
+        activeExtra.start_at
+      );
+
+    $("#extraElapsed")
+      .textContent =
+      formatElapsed(
+        now.getTime() -
+        start.getTime()
+      );
+  }
+}
+
+
+function renderDashboard() {
+  const today =
+    getDateKey();
+
+  const todayLog =
+    getWorkLog(
+      today
+    );
+
+  const activeMain =
+    getActiveMainShift();
+
+  const activeExtra =
+    getActiveExtraShift();
+
+  const todayExtras =
+    getCompletedExtraShifts(
+      today
+    );
+
+  setText(
+    "#todayOT",
+    formatHours(
+      getStoredTotalOT(
+        today
+      )
+    )
+  );
+
+  const currentMonthKey =
+    today.slice(
+      0,
+      7
+    );
+
+  const currentMonthOT =
+    getMonthTotal(
+      currentMonthKey
+    );
+
+  setText(
+    "#monthlyOT",
+    formatHours(
+      currentMonthOT
+    )
+  );
+
+  const currentPayrollDraft =
+    ensurePayrollDraft(
+      currentMonthKey
+    );
+
+  const currentPayrollResult =
+    calculatePayroll(
+      currentMonthKey,
+      currentPayrollDraft
+    );
+
+  setText(
+    "#monthlyOTMoney",
+    currentPayrollResult.baseSalary > 0
+      ? `≈ ${formatPayrollMoney(currentPayrollResult.overtimeMoney)}`
+      : "Chưa cài lương"
+  );
+
+  setText(
+    "#todayMainOT",
+    formatHours(
+      getBaseOT(
+        today
+      )
+    )
+  );
+
+  setText(
+    "#todayExtraOT",
+    formatHours(
+      getExtraTotal(
+        today
+      )
+    )
+  );
+
+  setText(
+    "#todayExtraCount",
+    appState.extraTableAvailable
+      ? `${todayExtras.length} ca đã hoàn tất`
+      : "Chưa cấu hình bảng ca thêm"
+  );
+
+  renderMainShiftCard(
+    todayLog,
+    activeMain
+  );
+
+  renderExtraShiftCard(
+    todayExtras,
+    activeExtra
+  );
+
+  const statuses =
+    [];
+
+  if (
+    activeMain
+  ) {
+    statuses.push(
+      "Ca chính đang chạy"
+    );
+  }
+
+  if (
+    activeExtra
+  ) {
+    statuses.push(
+      "Ca thêm đang chạy"
+    );
+  }
+
+  setText(
+    "#overallStatus",
+    statuses.length
+      ? statuses.join(
+        " • "
+      )
+      : "Chưa có ca đang chạy"
+  );
+
+  setText(
+    "#lunchLabelMain",
+    isSunday(
+      today
+    )
+      ? "Nghỉ trưa 1 giờ"
+      : "Tăng ca trưa +1 giờ"
+  );
+
+  setChecked(
+    "#lunchCheckMain",
+    getLogLunchChecked(
+      todayLog
+    )
+  );
+
+  setText(
+    "#mainShiftSchedule",
+    `${appState.settings.defaultShiftStart} – ${appState.settings.defaultShiftEnd}`
+  );
+
+  refreshIcons();
+}
+
+
+function renderMainShiftCard(
+  todayLog,
+  activeMain
+) {
+  const badge =
+    $("#mainShiftBadge");
+
+  const info =
+    $("#mainShiftInfo");
+
+  const timer =
+    $("#mainElapsed");
+
+  const startButton =
+    $("#mainStartBtn");
+
+  const endButton =
+    $("#mainEndBtn");
+
+  if (
+    !badge ||
+    !info ||
+    !timer ||
+    !startButton ||
+    !endButton
+  ) {
+    return;
+  }
+
+  badge.className =
+    "status-badge neutral";
+
+  timer.textContent =
+    "00:00:00";
+
+  endButton.disabled =
+    false;
+
+  if (
+    activeMain
+  ) {
+    badge.textContent =
+      "Đang làm";
+
+    badge.className =
+      "status-badge working";
+
+    info.textContent =
+      `Bắt đầu lúc ${activeMain.start_time}`;
+
+    startButton.disabled =
+      true;
+
+    return;
+  }
+
+  if (
+    todayLog?.start_time &&
+    todayLog?.end_time
+  ) {
+    badge.textContent =
+      "Đã hoàn tất";
+
+    badge.className =
+      "status-badge completed";
+
+    info.textContent =
+      `${todayLog.start_time} → ${todayLog.end_time} • Có thể cập nhật`;
+
+    timer.textContent =
+      formatHours(
+        getBaseOT(
+          todayLog.work_date
+        )
+      );
+
+    startButton.disabled =
+      true;
+
+    return;
+  }
+
+  badge.textContent =
+    "Chưa bắt đầu";
+
+  info.textContent =
+    "Bấm Tan ca nếu quên Vào ca";
+
+  startButton.disabled =
+    false;
+}
+
+
+function renderExtraShiftCard(
+  todayExtras,
+  activeExtra
+) {
+  const badge =
+    $("#extraShiftBadge");
+
+  const info =
+    $("#extraShiftInfo");
+
+  const timer =
+    $("#extraElapsed");
+
+  const startButton =
+    $("#extraStartBtn");
+
+  const endButton =
+    $("#extraEndBtn");
+
+  if (
+    !badge ||
+    !info ||
+    !timer ||
+    !startButton ||
+    !endButton
+  ) {
+    return;
+  }
+
+  timer.textContent =
+    "00:00:00";
+
+  if (
+    !appState.extraTableAvailable
+  ) {
+    badge.textContent =
+      "Chưa kết nối";
+
+    badge.className =
+      "status-badge neutral";
+
+    info.textContent =
+      "Cần kiểm tra bảng extra_shifts";
+
+    startButton.disabled =
+      true;
+
+    endButton.disabled =
+      true;
+
+    return;
+  }
+
+  endButton.disabled =
+    false;
+
+  if (
+    activeExtra
+  ) {
+    badge.textContent =
+      "Đang làm";
+
+    badge.className =
+      "status-badge working";
+
+    info.textContent =
+      `${formatTimeFromISO(
+        activeExtra.start_at
+      )} → Đang làm`;
+
+    startButton.disabled =
+      true;
+
+    return;
+  }
+
+  const latest =
+    getLatestCompletedExtraShift(
+      getDateKey()
+    );
+
+  badge.textContent =
+    todayExtras.length
+      ? `${todayExtras.length} ca hôm nay`
+      : "Sẵn sàng";
+
+  badge.className =
+    todayExtras.length
+      ? "status-badge extra"
+      : "status-badge neutral";
+
+  startButton.disabled =
+    false;
+
+  if (
+    latest
+  ) {
+    info.textContent =
+      `${formatTimeFromISO(
+        latest.start_at
+      )} → ${formatTimeFromISO(
+        latest.end_at
+      )} • Có thể cập nhật`;
+
+    timer.textContent =
+      formatHours(
+        getExtraTotal(
+          getDateKey()
+        )
+      );
+  } else {
+    info.textContent =
+      "Bấm Vào ca để bắt đầu ca thêm";
+  }
+}
+
+
+// =====================================================
+// CA CHÍNH
+// =====================================================
+
+async function startMainShift() {
+  const today = getDateKey();
+  const activeMain = getActiveMainShift();
+
+  if (activeMain) {
+    showToast("Bạn đang có một ca chính chưa kết thúc.", true);
+    return;
+  }
+
+  const { data: activeRows, error: activeError } =
+    await supabaseClient
+      .from("work_logs")
+      .select("*")
+      .eq("username", appState.currentUser)
+      .not("start_time", "is", null)
+      .is("end_time", null)
+      .limit(1);
+
+  if (activeError) {
+    throw activeError;
+  }
+
+  if ((activeRows || []).length) {
+    const activeDate = activeRows[0].work_date;
+    await refreshData(false, parseDateKey(activeDate), true);
+    showToast("Bạn đang có một ca chính chưa kết thúc.", true);
+    return;
+  }
+
+  const { data: todayRows, error: todayError } =
+    await supabaseClient
+      .from("work_logs")
+      .select("*")
+      .eq("username", appState.currentUser)
+      .eq("work_date", today)
+      .limit(1);
+
+  if (todayError) {
+    throw todayError;
+  }
+
+  const todayLog = (todayRows || [])[0] || getWorkLog(today);
+
+  if (todayLog?.start_time && todayLog?.end_time) {
+    showToast(
+      "Ca chính đã hoàn tất. Bấm Tan ca để cập nhật giờ kết thúc.",
+      true
+    );
+    return;
+  }
+
+  const startTime = getTimeValue();
+  const visibleNote = getLogVisibleNote(todayLog);
+  const carryOT =
+    todayLog && !todayLog.start_time && !todayLog.end_time
+      ? getBaseOT(today)
+      : 0;
+
+  setLoading(true);
+
+  try {
+    await saveWorkLog(today, {
+      start_time: startTime,
+      end_time: null,
+      note: buildStoredNote(visibleNote, {
+        lunchChecked: $("#lunchCheckMain")?.checked || false,
+        carryOT
+      })
+    });
+
+    await refreshData(false, new Date(), true);
+    showToast(`Đã vào ca chính lúc ${startTime}`);
+  } catch (error) {
+    showToast(
+      `Không thể ghi giờ vào: ${error.message || "Lỗi không xác định"}`,
+      true
+    );
+  } finally {
+    setLoading(false);
+  }
+}
+
+
+async function endMainShift() {
+  const now =
+    normalizeDateToMinute(
+      new Date()
+    );
+
+  const today =
+    getDateKey(
+      now
+    );
+
+  const activeMain =
+    getActiveMainShift();
+
+  const todayLog =
+    getWorkLog(
+      today
+    );
+
+  const targetDate =
+    activeMain
+      ? activeMain.work_date
+      : today;
+
+  const targetLog =
+    activeMain ||
+    todayLog;
+
+  const wasCompleted =
+    Boolean(
+      !activeMain &&
+      todayLog?.start_time &&
+      todayLog?.end_time
+    );
+
+  const startTime =
+    activeMain?.start_time ||
+    todayLog?.start_time ||
+    appState.settings
+      .defaultShiftStart;
+
+  const endTime =
+    getTimeValue(
+      now
+    );
+
+  const targetMeta =
+    parseStoredNote(
+      targetLog?.note ||
+      ""
+    ).meta;
+
+  const hasStoredMainShift =
+    Boolean(
+      targetLog?.start_time ||
+      targetLog?.end_time
+    );
+
+  const lunchChecked =
+    activeMain ||
+    hasStoredMainShift
+      ? targetMeta
+        .lunchChecked
+      : (
+        $("#lunchCheckMain")
+          ?.checked ||
+        false
+      );
+
+  const carryOT =
+    activeMain
+      ? targetMeta
+        .carryOT
+      : (
+        targetLog &&
+        !targetLog.start_time &&
+        !targetLog.end_time
+          ? getBaseOT(
+            targetDate
+          )
+          : 0
+      );
+
+  const mainOT =
+    calculateMainOT(
+      startTime,
+      endTime,
+      lunchChecked,
+      targetDate
+    );
+
+  const totalOT =
+    roundHours(
+      carryOT +
+      mainOT +
+      getExtraTotal(
+        targetDate
+      )
+    );
+
+  const mealCount =
+    getMealCountForEndTime(
+      endTime,
+      startTime
+    );
+
+  const storedNote =
+    buildStoredNote(
+      getLogVisibleNote(
+        targetLog
+      ),
+      {
+        lunchChecked
+      }
+    );
+
+  setLoading(
+    true
+  );
+
+  try {
+    await saveWorkLog(
+      targetDate,
+      {
+        start_time:
+          startTime,
+
+        end_time:
+          endTime,
+
+        overtime:
+          totalOT,
+
+        meal_count:
+          mealCount,
+
+        note:
+          storedNote
+      }
+    );
+
+    await refreshData(false, parseDateKey(targetDate), true);
+
+    if (
+      activeMain
+    ) {
+      showToast(
+        `Đã tan ca chính lúc ${endTime}`
+      );
+    } else if (
+      wasCompleted
+    ) {
+      showToast(
+        `Đã cập nhật giờ tan ca chính thành ${endTime}.`
+      );
+    } else {
+      showToast(
+        `Đã tạo ca mặc định ${startTime}–${endTime}`
+      );
+    }
+
+    const refreshedLog = getWorkLog(targetDate);
+
+    openEndShiftNotePrompt({
+      type: "main",
+      dateKey: targetDate,
+      endTime,
+      note: getLogVisibleNote(refreshedLog)
+    });
+  } catch (
+    error
+  ) {
+    showToast(
+      `Không thể cập nhật giờ tan ca: ${
+        error.message ||
+        "Lỗi không xác định"
+      }`,
+      true
+    );
+  } finally {
+    setLoading(
+      false
+    );
+  }
+}
+
+
+// =====================================================
+// GHI CHÚ SAU KHI TAN CA
+// =====================================================
+
+function shouldPromptEndShiftNote() {
+  return appState.settings?.promptNoteAfterShiftEnd !== false;
+}
+
+function openEndShiftNotePrompt({
+  type,
+  dateKey,
+  shiftId = null,
+  endTime = "",
+  note = ""
+}) {
+  if (!shouldPromptEndShiftNote()) {
+    return;
+  }
+
+  appState.endShiftNoteContext = {
+    type,
+    dateKey,
+    shiftId,
+    endTime
+  };
+
+  const isExtra = type === "extra";
+
+  setText(
+    "#endShiftNoteTitle",
+    isExtra ? "Ghi chú ca thêm" : "Ghi chú ca chính"
+  );
+
+  setText(
+    "#endShiftNoteSavedTime",
+    endTime
+      ? `Giờ tan ca ${endTime} đã được lưu.`
+      : "Giờ tan ca đã được lưu."
+  );
+
+  setText(
+    "#endShiftNoteTypeLabel",
+    isExtra ? "CA THÊM" : "CA CHÍNH"
+  );
+
+  const input = $("#endShiftNoteInput");
+
+  if (input) {
+    input.value = String(note || "");
+  }
+
+  openModal("endShiftNoteModal");
+
+  window.setTimeout(() => {
+    const textarea = $("#endShiftNoteInput");
+    textarea?.focus({ preventScroll: true });
+
+    if (textarea) {
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    }
+  }, 180);
+}
+
+async function saveEndShiftNote() {
+  const context = appState.endShiftNoteContext;
+
+  if (!context) {
+    closeModal("endShiftNoteModal");
+    return;
+  }
+
+  const note = String($("#endShiftNoteInput")?.value || "").trim();
+
+  setLoading(true);
+
+  try {
+    if (context.type === "main") {
+      const log = getWorkLog(context.dateKey);
+      const parsed = parseStoredNote(log?.note || "");
+
+      await saveWorkLog(context.dateKey, {
+        note: buildStoredNote(note, parsed.meta)
+      });
+    } else if (context.type === "extra") {
+      if (!ensureExtraTable()) {
+        return;
+      }
+
+      const { error } = await supabaseClient
+        .from("extra_shifts")
+        .update({ note })
+        .eq("id", context.shiftId)
+        .eq("username", appState.currentUser);
+
+      if (error) {
+        throw error;
+      }
+    } else {
+      throw new Error("Loại ca không hợp lệ.");
+    }
+
+    await refreshData(false, parseDateKey(context.dateKey), true);
+    closeModal("endShiftNoteModal");
+    showToast(note ? "Đã lưu ghi chú tan ca." : "Đã lưu tan ca không kèm ghi chú.");
+  } catch (error) {
+    showToast(
+      `Không thể lưu ghi chú: ${error.message || "Lỗi không xác định"}`,
+      true
+    );
+  } finally {
+    setLoading(false);
+  }
+}
+
+
+// =====================================================
+// CA THÊM
+// =====================================================
+
+function ensureExtraTable() {
+  if (
+    appState.extraTableAvailable
+  ) {
+    return true;
+  }
+
+  showToast(
+    "Chưa có quyền truy cập bảng extra_shifts.",
+    true
+  );
+
+  return false;
+}
+
+
+async function startExtraShift() {
+  if (!ensureExtraTable()) {
+    return;
+  }
+
+  if (getActiveExtraShift()) {
+    showToast("Bạn đang có một ca thêm chưa kết thúc.", true);
+    return;
+  }
+
+  const { data: activeRows, error: activeError } =
+    await supabaseClient
+      .from("extra_shifts")
+      .select("id")
+      .eq("username", appState.currentUser)
+      .eq("status", "working")
+      .is("end_at", null)
+      .limit(1);
+
+  if (activeError) {
+    throw activeError;
+  }
+
+  if ((activeRows || []).length) {
+    await refreshData(false, new Date(), true);
+    showToast("Bạn đang có một ca thêm chưa kết thúc.", true);
+    return;
+  }
+
+  const now = normalizeDateToMinute(new Date());
+  setLoading(true);
+
+  try {
+    const { error } =
+      await supabaseClient
+        .from("extra_shifts")
+        .insert({
+          username: appState.currentUser,
+          work_date: getDateKey(now),
+          start_at: now.toISOString(),
+          end_at: null,
+          duration_hours: 0,
+          note: "",
+          status: "working"
+        });
+
+    if (error) {
+      throw error;
+    }
+
+    await refreshData(false, now, true);
+    showToast(`Đã vào ca thêm lúc ${getTimeValue(now)}`);
+  } catch (error) {
+    showToast(
+      `Không thể bắt đầu ca thêm: ${error.message || "Lỗi không xác định"}`,
+      true
+    );
+  } finally {
+    setLoading(false);
+  }
+}
+
+
+async function endExtraShift() {
+  if (
+    !ensureExtraTable()
+  ) {
+    return;
+  }
+
+  const now =
+    normalizeDateToMinute(
+      new Date()
+    );
+
+  const targetShift =
+    getExtraShiftForEnd(
+      now
+    );
+
+  if (
+    !targetShift
+  ) {
+    showToast(
+      "Chưa có ca thêm hôm nay để cập nhật giờ tan ca.",
+      true
+    );
+
+    return;
+  }
+
+  const wasCompleted =
+    targetShift.status ===
+    "completed" &&
+    Boolean(
+      targetShift.end_at
+    );
+
+  const oldBaseOT =
+    getBaseOT(
+      targetShift.work_date
+    );
+
+  const startDate =
+    normalizeDateToMinute(
+      new Date(
+        targetShift.start_at
+      )
+    );
+
+  const endDate =
+    normalizeDateToMinute(
+      now
+    );
+
+  if (
+    Number.isNaN(
+      startDate.getTime()
+    )
+  ) {
+    showToast(
+      "Giờ bắt đầu ca thêm không hợp lệ.",
+      true
+    );
+
+    return;
+  }
+
+  if (
+    endDate <
+    startDate
+  ) {
+    showToast(
+      "Giờ tan ca không thể sớm hơn giờ vào ca.",
+      true
+    );
+
+    return;
+  }
+
+  const duration =
+    calculateDurationHours(
+      startDate,
+      endDate
+    );
+
+  setLoading(
+    true
+  );
+
+  try {
+    const {
+      error
+    } =
+      await supabaseClient
+        .from(
+          "extra_shifts"
+        )
+        .update({
+          start_at:
+            startDate.toISOString(),
+
+          end_at:
+            endDate.toISOString(),
+
+          duration_hours:
+            duration,
+
+          status:
+            "completed"
+        })
+        .eq(
+          "id",
+          targetShift.id
+        )
+        .eq(
+          "username",
+          appState.currentUser
+        );
+
+    if (
+      error
+    ) {
+      throw error;
+    }
+
+    await syncDayAfterExtraChange(
+      targetShift.work_date,
+      oldBaseOT
+    );
+
+    await refreshData(false, parseDateKey(targetShift.work_date), true);
+
+    showToast(
+      wasCompleted
+        ? `Đã cập nhật giờ tan ca thêm thành ${getTimeValue(
+          endDate
+        )}. Tổng ${formatHours(
+          duration
+        )}`
+        : `Đã tan ca thêm lúc ${getTimeValue(
+          endDate
+        )}. Tổng ${formatHours(
+          duration
+        )}`
+    );
+
+    const refreshedShift = appState.extraShifts.find(
+      item => String(item.id) === String(targetShift.id)
+    );
+
+    openEndShiftNotePrompt({
+      type: "extra",
+      dateKey: targetShift.work_date,
+      shiftId: targetShift.id,
+      endTime: getTimeValue(endDate),
+      note: refreshedShift?.note || targetShift.note || ""
+    });
+  } catch (
+    error
+  ) {
+    showToast(
+      `Không thể cập nhật ca thêm: ${
+        error.message ||
+        "Lỗi không xác định"
+      }`,
+      true
+    );
+  } finally {
+    setLoading(
+      false
+    );
+  }
+}
+
+
+// =====================================================
+// LỊCH SỬ
+// =====================================================
+
+async function openHistory(view = "calendar") {
+  appState.historyDate = new Date();
+  openModal("historyModal");
+  await loadMonthData(appState.historyDate, { showLoader: true, force: false });
+  setHistoryView(view === "list" ? "list" : "calendar");
+}
+
+
+async function changeHistoryMonth(direction) {
+  appState.historyDate.setDate(1);
+
+  appState.historyDate.setMonth(
+    appState.historyDate.getMonth() + direction
+  );
+
+  await loadMonthData(appState.historyDate, { showLoader: true, force: false });
+  renderHistory();
+}
+
+
+function setHistoryView(
+  view
+) {
+  appState.historyView =
+    view;
+
+  $$(
+    "[data-history-view]"
+  ).forEach(
+    button => {
+      button.classList
+        .toggle(
+          "active",
+          button.dataset
+            .historyView ===
+          view
+        );
+    }
+  );
+
+  $("#calendarHistoryPane")
+    ?.classList
+    .toggle(
+      "hidden",
+      view !==
+      "calendar"
+    );
+
+  $("#listHistoryPane")
+    ?.classList
+    .toggle(
+      "hidden",
+      view !==
+      "list"
+    );
+
+  renderHistory();
+
+  refreshIcons();
+}
+
+
+function renderHistory() {
+  const year =
+    appState.historyDate
+      .getFullYear();
+
+  const month =
+    appState.historyDate
+      .getMonth();
+
+  setText(
+    "#historyMonthLabel",
+    `Tháng ${month + 1}/${year}`
+  );
+
+  if (
+    appState.historyView ===
+    "calendar"
+  ) {
+    renderHistoryCalendar(
+      year,
+      month
+    );
+  } else {
+    renderHistoryList(
+      year,
+      month
+    );
+  }
+
+  refreshIcons();
+}
+
+
+function renderHistoryCalendar(year, month) {
+  const container = $("#calendarDays");
+
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = "";
+  const firstDay = new Date(year, month, 1).getDay();
+  const blankDays = firstDay === 0 ? 6 : firstDay - 1;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  for (let index = 0; index < blankDays; index += 1) {
+    const empty = document.createElement("div");
+    empty.className = "calendar-day empty-day";
+    container.appendChild(empty);
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dateKey = `${year}-${pad(month + 1)}-${pad(day)}`;
+    const log = getWorkLog(dateKey);
+    const extras = getExtraShifts(dateKey);
+    const total = getStoredTotalOT(dateKey);
+    const leave = getLeaveRecord(dateKey);
+    const leaveAllocation = leave
+      ? allocateLeaveRecords().get(dateKey)
+      : null;
+
+    const hasActive =
+      Boolean(log?.start_time && !log?.end_time) ||
+      extras.some(item => item.status === "working");
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = [
+      "calendar-day",
+      dateKey === getDateKey() ? "today" : "",
+      isSunday(dateKey) ? "sunday" : "",
+      hasMainShift(log, dateKey) ? "has-main" : "",
+      extras.length ? "has-extra" : "",
+      hasActive ? "has-active" : "",
+      total > 0 ? "has-ot" : "",
+      leave ? "has-leave" : "",
+      leave && leaveAllocation?.unpaid > 0 ? "leave-unpaid" : leave ? "leave-paid" : ""
+    ].filter(Boolean).join(" ");
+
+    button.innerHTML = `
+      <span class="calendar-day-number">${day}</span>
+      ${total > 0 ? `<small class="calendar-day-ot">${formatHours(total)}</small>` : ""}
+    `;
+
+    button.addEventListener("click", () => openDayDetail(dateKey));
+    container.appendChild(button);
+  }
+}
+
+
+function getCalendarWeekRow(
+  dateKey
+) {
+  const date =
+    parseDateKey(
+      dateKey
+    );
+
+  const firstDay =
+    new Date(
+      date.getFullYear(),
+      date.getMonth(),
+      1
+    ).getDay();
+
+  const mondayOffset =
+    firstDay ===
+    0
+      ? 6
+      : firstDay - 1;
+
+  return Math.min(
+    6,
+    Math.max(
+      1,
+      Math.floor(
+        (
+          mondayOffset +
+          date.getDate() -
+          1
+        ) /
+        7
+      ) +
+      1
+    )
+  );
+}
+
+
+function renderHistoryList(year, month) {
+  const container = $("#historyList");
+
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = "";
+  const monthKey = `${year}-${pad(month + 1)}`;
+  const dates = new Set();
+
+  appState.workLogs.forEach(item => {
+    if (String(item.work_date || "").startsWith(monthKey)) {
+      dates.add(item.work_date);
+    }
+  });
+
+  appState.extraShifts.forEach(item => {
+    if (String(item.work_date || "").startsWith(monthKey)) {
+      dates.add(item.work_date);
+    }
+  });
+
+  appState.leaveRecords.forEach(item => {
+    if (item.date.startsWith(monthKey)) {
+      dates.add(item.date);
+    }
+  });
+
+  const sortedDates = Array.from(dates).sort((a, b) => b.localeCompare(a));
+
+  if (!sortedDates.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <i data-lucide="calendar-x"></i>
+        <strong>Chưa có dữ liệu</strong>
+        <p>Tháng này chưa có OT hoặc ngày nghỉ được đánh dấu.</p>
+      </div>
+    `;
+    refreshIcons();
+    return;
+  }
+
+  const allocations = allocateLeaveRecords();
+
+  sortedDates.forEach(dateKey => {
+    const log = getWorkLog(dateKey);
+    const extras = getExtraShifts(dateKey);
+    const leave = getLeaveRecord(dateKey);
+    const allocation = allocations.get(dateKey);
+    const date = parseDateKey(dateKey);
+
+    let description = "Không có dữ liệu tăng ca";
+
+    if (log?.start_time || log?.end_time) {
+      description = `${log.start_time || "--:--"} → ${log.end_time || "Đang làm"}`;
+    }
+
+    if (extras.length) {
+      description += ` • ${extras.length} ca thêm`;
+    }
+
+    if (leave) {
+      description += allocation?.unpaid > 0
+        ? ` • Nghỉ ${formatDayAmount(leave.amount)} (có phần không lương)`
+        : ` • Nghỉ phép ${formatDayAmount(leave.amount)}`;
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `history-item week-${getCalendarWeekRow(dateKey)}`;
+    button.innerHTML = `
+      <span class="history-date-box">
+        <strong>${pad(date.getDate())}</strong>
+        <span>THÁNG ${pad(date.getMonth() + 1)}</span>
+      </span>
+      <span class="history-copy">
+        <strong>${date.toLocaleDateString("vi-VN", { weekday: "long" })}</strong>
+        <small>${escapeHTML(description)}</small>
+      </span>
+      ${leave ? `<span class="history-leave-badge ${allocation?.unpaid > 0 ? "unpaid" : ""}">${allocation?.unpaid > 0 ? "KHÔNG LƯƠNG" : "PHÉP NĂM"}</span>` : ""}
+      <span class="history-total">
+        <strong>${formatHours(getStoredTotalOT(dateKey))}</strong>
+        <small>TỔNG OT</small>
+      </span>
+    `;
+
+    button.addEventListener("click", () => openDayDetail(dateKey));
+    container.appendChild(button);
+  });
+
+  refreshIcons();
+}
+
+
+// =====================================================
+// CHI TIẾT NGÀY
+// =====================================================
+
+function getLeaveRecord(dateKey) {
+  return appState.leaveRecords.find(item => item.date === dateKey) || null;
+}
+
+
+function prepareLeaveDraft(dateKey) {
+  const existing = getLeaveRecord(dateKey);
+
+  appState.leaveDraft = existing
+    ? { ...existing }
+    : null;
+}
+
+
+function setLeaveDraftAmount(amount) {
+  const dateKey = appState.selectedDate;
+
+  if (!dateKey || isSunday(dateKey)) {
+    showToast("Chủ nhật không cần đánh dấu nghỉ.", true);
+    return;
+  }
+
+  const old = appState.leaveDraft || {};
+
+  appState.leaveDraft = {
+    date: dateKey,
+    amount,
+    session:
+      amount === 0.5
+        ? old.session === "afternoon"
+          ? "afternoon"
+          : "morning"
+        : "full",
+    note: old.note || "",
+    updatedAt: old.updatedAt || null
+  };
+
+  renderLeaveDetail();
+}
+
+
+function setLeaveDraftSession(session) {
+  if (!appState.leaveDraft || appState.leaveDraft.amount !== 0.5) {
+    return;
+  }
+
+  appState.leaveDraft.session =
+    session === "afternoon"
+      ? "afternoon"
+      : "morning";
+
+  renderLeaveDetail();
+}
+
+
+function buildLeaveRecordsWithDraft(dateKey, draft) {
+  const records = appState.leaveRecords
+    .filter(item => item.date !== dateKey)
+    .map(item => ({ ...item }));
+
+  if (draft && [0.5, 1].includes(Number(draft.amount))) {
+    records.push({
+      date: dateKey,
+      amount: Number(draft.amount),
+      session: draft.session || (draft.amount === 0.5 ? "morning" : "full"),
+      note: draft.note || ""
+    });
+  }
+
+  return records;
+}
+
+
+function monthSerial(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return year * 12 + month - 1;
+}
+
+
+function accruedThroughMonth(monthKey, settings = appState.settings) {
+  const start = settings.leaveStartMonth;
+
+  if (monthSerial(monthKey) < monthSerial(start)) {
+    return 0;
+  }
+
+  return roundHours(
+    (monthSerial(monthKey) - monthSerial(start) + 1) *
+    settings.monthlyLeaveAccrual
+  );
+}
+
+
+function allocateLeaveRecords(records = appState.leaveRecords, settings = appState.settings) {
+  const sorted = records
+    .filter(item => !isSunday(item.date))
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const allocations = new Map();
+  let paidUsed = 0;
+
+  sorted.forEach(item => {
+    const monthKey = item.date.slice(0, 7);
+    const entitlement =
+      monthSerial(monthKey) >= monthSerial(settings.leaveStartMonth)
+        ? settings.initialLeaveBalance + accruedThroughMonth(monthKey, settings)
+        : 0;
+
+    const available = Math.max(0, entitlement - paidUsed);
+    const amount = sanitizeHalfDayNumber(item.amount, 0);
+    const paid = Math.min(amount, available);
+    const unpaid = Math.max(0, amount - paid);
+
+    paidUsed = roundHours(paidUsed + paid);
+
+    allocations.set(item.date, {
+      amount,
+      paid: roundHours(paid),
+      unpaid: roundHours(unpaid),
+      availableBefore: roundHours(available),
+      availableAfter: roundHours(Math.max(0, available - paid))
+    });
+  });
+
+  return allocations;
+}
+
+
+function getLeaveMonthSummary(monthKey, records = appState.leaveRecords, settings = appState.settings) {
+  const allocations = allocateLeaveRecords(records, settings);
+  const previousMonthSerial = monthSerial(monthKey) - 1;
+  const previousYear = Math.floor(previousMonthSerial / 12);
+  const previousMonth = previousMonthSerial % 12 + 1;
+  const previousMonthKey = `${previousYear}-${pad(previousMonth)}`;
+
+  const paidBefore = Array.from(allocations.entries())
+    .filter(([date]) => date.slice(0, 7) < monthKey)
+    .reduce((sum, [, item]) => sum + item.paid, 0);
+
+  const opening =
+    monthSerial(monthKey) >= monthSerial(settings.leaveStartMonth)
+      ? Math.max(
+        0,
+        settings.initialLeaveBalance +
+        accruedThroughMonth(previousMonthKey, settings) -
+        paidBefore
+      )
+      : 0;
+
+  const accrued =
+    monthSerial(monthKey) >= monthSerial(settings.leaveStartMonth)
+      ? settings.monthlyLeaveAccrual
+      : 0;
+
+  let used = 0;
+  let unpaid = 0;
+  let requested = 0;
+
+  Array.from(allocations.entries())
+    .filter(([date]) => date.startsWith(monthKey))
+    .forEach(([, item]) => {
+      used += item.paid;
+      unpaid += item.unpaid;
+      requested += item.amount;
+    });
+
+  return {
+    opening: roundHours(opening),
+    accrued: roundHours(accrued),
+    used: roundHours(used),
+    unpaid: roundHours(unpaid),
+    requested: roundHours(requested),
+    closing: roundHours(Math.max(0, opening + accrued - used))
+  };
+}
+
+
+function getLeaveAllocationForDraft(dateKey, draft) {
+  if (!draft) {
+    return {
+      amount: 0,
+      paid: 0,
+      unpaid: 0,
+      availableBefore: getLeaveMonthSummary(dateKey.slice(0, 7)).closing,
+      availableAfter: getLeaveMonthSummary(dateKey.slice(0, 7)).closing
+    };
+  }
+
+  const records = buildLeaveRecordsWithDraft(dateKey, draft);
+  return allocateLeaveRecords(records).get(dateKey) || {
+    amount: 0,
+    paid: 0,
+    unpaid: 0,
+    availableBefore: 0,
+    availableAfter: 0
+  };
+}
+
+
+function renderLeaveDetail() {
+  const dateKey = appState.selectedDate;
+
+  if (!dateKey || !appState.settings) {
+    return;
+  }
+
+  const sunday = isSunday(dateKey);
+  const draft = sunday ? null : appState.leaveDraft;
+  const allocation = getLeaveAllocationForDraft(dateKey, draft);
+  const existing = getLeaveRecord(dateKey);
+
+  ["#leaveFullDayButton", "#leaveHalfDayButton"].forEach(selector => {
+    const button = $(selector);
+    if (button) {
+      button.disabled = sunday;
+    }
+  });
+
+  const fullActive = draft?.amount === 1;
+  const halfActive = draft?.amount === 0.5;
+
+  $("#leaveFullDayButton")?.classList.toggle("active", fullActive);
+  $("#leaveHalfDayButton")?.classList.toggle("active", halfActive);
+  $("#leaveFullDayButton")?.setAttribute("aria-pressed", String(fullActive));
+  $("#leaveHalfDayButton")?.setAttribute("aria-pressed", String(halfActive));
+
+  $("#leaveSessionOptions")?.classList.toggle("hidden", !halfActive || sunday);
+
+  const morning = draft?.session !== "afternoon";
+  $("#leaveMorningButton")?.classList.toggle("active", morning);
+  $("#leaveAfternoonButton")?.classList.toggle("active", !morning);
+  $("#leaveMorningButton")?.setAttribute("aria-pressed", String(morning));
+  $("#leaveAfternoonButton")?.setAttribute("aria-pressed", String(!morning));
+
+  setValue("#detailLeaveNote", draft?.note || "");
+  $("#detailLeaveWarning")?.classList.toggle("hidden", !sunday);
+  $("#cancelLeaveButton")?.classList.toggle("hidden", !draft && !existing);
+
+  let title = "Ngày làm việc bình thường";
+  let description = "Không có dữ liệu tăng ca vẫn được tính công và không sử dụng phép.";
+  let badge = "Mặc định có công";
+  let icon = "briefcase-business";
+
+  if (sunday) {
+    title = "Chủ nhật";
+    description = "Chủ nhật không nằm trong 26 công mặc định.";
+    badge = "Không tính công";
+    icon = "calendar-x";
+  } else if (draft) {
+    icon = allocation.unpaid > 0 ? "calendar-minus" : "calendar-check";
+
+    if (allocation.unpaid > 0 && allocation.paid > 0) {
+      title = "Nghỉ kết hợp phép và không lương";
+      description = `${formatDayAmount(allocation.paid)} dùng phép, ${formatDayAmount(allocation.unpaid)} bị trừ công.`;
+      badge = "Vượt số dư phép";
+    } else if (allocation.unpaid > 0) {
+      title = "Nghỉ không lương";
+      description = "Phép năm đã hết nên thời gian nghỉ này sẽ làm giảm lương.";
+      badge = "Trừ công";
+    } else {
+      title = "Nghỉ dùng phép năm";
+      description = "Thời gian nghỉ được bù bằng phép và không làm giảm lương.";
+      badge = "Được hưởng lương";
+    }
+  }
+
+  setText("#detailLeaveStatusTitle", title);
+  setText("#detailLeaveStatusDescription", description);
+  setText("#detailLeaveBadge", badge);
+  setText("#detailLeaveBalance", `${formatDayAmount(allocation.availableBefore)} phép`);
+  setText("#detailPaidLeaveAmount", formatDayAmount(allocation.paid));
+  setText("#detailUnpaidLeaveAmount", formatDayAmount(allocation.unpaid));
+
+  const iconBox = $("#detailLeaveStatusIcon");
+  if (iconBox) {
+    iconBox.innerHTML = `<i data-lucide="${icon}"></i>`;
+  }
+
+  refreshIcons();
+}
+
+
+async function commitLeaveDraft(dateKey) {
+  const validDraft =
+    appState.leaveDraft &&
+    !isSunday(dateKey) &&
+    [0.5, 1].includes(Number(appState.leaveDraft.amount));
+
+  if (appState.payrollSupabaseAvailable === true) {
+    if (validDraft) {
+      const payload = {
+        username: appState.currentUser,
+        leave_date: dateKey,
+        leave_amount: Number(appState.leaveDraft.amount),
+        leave_session:
+          appState.leaveDraft.amount === 0.5 &&
+          appState.leaveDraft.session === "afternoon"
+            ? "afternoon"
+            : appState.leaveDraft.amount === 0.5
+              ? "morning"
+              : "full",
+        note: String(appState.leaveDraft.note || "").trim()
+      };
+
+      const { error } = await supabaseClient
+        .from("leave_records")
+        .upsert(payload, { onConflict: "username,leave_date" });
+
+      if (error) {
+        throw error;
+      }
+    } else {
+      const { error } = await supabaseClient
+        .from("leave_records")
+        .delete()
+        .eq("username", appState.currentUser)
+        .eq("leave_date", dateKey);
+
+      if (error) {
+        throw error;
+      }
+    }
+  }
+
+  appState.leaveRecords = appState.leaveRecords.filter(
+    item => item.date !== dateKey
+  );
+
+  if (validDraft) {
+    appState.leaveRecords.push({
+      date: dateKey,
+      amount: Number(appState.leaveDraft.amount),
+      session:
+        appState.leaveDraft.amount === 0.5 &&
+        appState.leaveDraft.session === "afternoon"
+          ? "afternoon"
+          : appState.leaveDraft.amount === 0.5
+            ? "morning"
+            : "full",
+      note: String(appState.leaveDraft.note || "").trim(),
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  appState.leaveRecords.sort((a, b) => a.date.localeCompare(b.date));
+  saveLeaveRecords();
+  appState.payrollDrafts = {};
+
+  if (appState.payrollSupabaseAvailable === true) {
+    setSettingsSyncStatus(
+      "online",
+      "Đã đồng bộ Supabase",
+      "Ngày nghỉ và số dư phép đã được cập nhật trên đám mây."
+    );
+  }
+}
+
+
+function formatDayAmount(value) {
+  const amount = Math.round((Number(value) || 0) * 2) / 2;
+  return `${new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 }).format(amount)} ngày`;
+}
+
+
+function formatNumber(value) {
+  return new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 }).format(Number(value) || 0);
+}
+
+
+function updateInsuranceSettingsVisibility() {
+  const mode = appState.settings?.insuranceMode || "disabled";
+  const percentage = mode === "percentage";
+  const fixed = mode === "fixed";
+
+  ["#settingsInsuranceBase", "#settingsInsuranceRate"].forEach(selector => {
+    const element = $(selector);
+    if (element) {
+      element.disabled = !percentage;
+    }
+  });
+
+  const fixedInput = $("#settingsInsuranceFixedAmount");
+  if (fixedInput) {
+    fixedInput.disabled = !fixed;
+  }
+}
+
+
+function getDefaultPayrollDraft(monthKey) {
+  const policy = getIncomePolicyForMonth(monthKey, appState.settings);
+  const settingsSnapshot = sanitizeSettings({
+    ...appState.settings,
+    ...policy,
+    mealThresholds: Array.isArray(appState.settings?.mealThresholds)
+      ? appState.settings.mealThresholds.map(item => ({ ...item }))
+      : cloneDefaultMealThresholds()
+  });
+
+  INCOME_POLICY_FIELDS.forEach(key => {
+    settingsSnapshot[key] = policy[key];
+  });
+
+  const effectiveBaseSalary = sanitizeNonNegativeNumber(policy.baseSalary);
+
+  const draft = {
+    monthKey,
+    baseSalary: effectiveBaseSalary,
+    mainAllowanceOverride: null,
+    otherAllowanceOverride: null,
+    attendanceAllowanceOverride: null,
+    responsibilityAllowanceOverride: null,
+    monthlyKm: 0,
+    fuelRate: settingsSnapshot.fuelRate,
+    insuranceModeOverride: null,
+    insuranceBaseOverride: null,
+    insuranceRateOverride: null,
+    insuranceFixedOverride: null,
+    otherIncome: 0,
+    otherIncomeNote: "",
+    advance: 0,
+    otherDeduction: 0,
+    otherDeductionNote: "",
+    appliedSalaryCarryForwardIds: [],
+    settingsSnapshot,
+    dirty: false
+  };
+
+  applySalaryCarryForwardsToDraft(draft, monthKey, { markDirty: false });
+  return draft;
+}
+
+
+function ensurePayrollDraft(monthKey, reset = false) {
+  if (reset) {
+    delete appState.payrollDrafts[monthKey];
+  }
+
+  if (!appState.payrollDrafts[monthKey]) {
+    const saved = appState.payrollMonths[monthKey];
+
+    appState.payrollDrafts[monthKey] = saved
+      ? {
+        monthKey,
+        baseSalary: sanitizeNonNegativeNumber(saved.baseSalary),
+        mainAllowanceOverride: saved.mainAllowanceOverride == null
+          ? null
+          : sanitizeNonNegativeNumber(saved.mainAllowanceOverride),
+        otherAllowanceOverride: saved.otherAllowanceOverride == null
+          ? null
+          : sanitizeNonNegativeNumber(saved.otherAllowanceOverride),
+        attendanceAllowanceOverride: saved.attendanceAllowanceOverride == null
+          ? null
+          : sanitizeNonNegativeNumber(saved.attendanceAllowanceOverride),
+        responsibilityAllowanceOverride: saved.responsibilityAllowanceOverride == null
+          ? null
+          : sanitizeNonNegativeNumber(saved.responsibilityAllowanceOverride),
+        monthlyKm: sanitizeNonNegativeNumber(saved.monthlyKm),
+        fuelRate: sanitizeNonNegativeNumber(saved.fuelRate),
+        insuranceModeOverride: INSURANCE_MODES.includes(saved.insuranceModeOverride)
+          ? saved.insuranceModeOverride
+          : null,
+        insuranceBaseOverride: saved.insuranceBaseOverride == null
+          ? null
+          : sanitizeNonNegativeNumber(saved.insuranceBaseOverride),
+        insuranceRateOverride: saved.insuranceRateOverride == null
+          ? null
+          : sanitizeNonNegativeNumber(saved.insuranceRateOverride),
+        insuranceFixedOverride: saved.insuranceFixedOverride == null
+          ? null
+          : sanitizeNonNegativeNumber(saved.insuranceFixedOverride),
+        otherIncome: sanitizeNonNegativeNumber(saved.otherIncome),
+        otherIncomeNote: String(saved.otherIncomeNote || ""),
+        advance: sanitizeNonNegativeNumber(saved.advance),
+        otherDeduction: sanitizeNonNegativeNumber(saved.otherDeduction),
+        otherDeductionNote: String(saved.otherDeductionNote || ""),
+        appliedSalaryCarryForwardIds: Array.isArray(saved.appliedSalaryCarryForwardIds)
+          ? saved.appliedSalaryCarryForwardIds.slice()
+          : [],
+        settingsSnapshot: sanitizeSettings(saved.settingsSnapshot || appState.settings),
+        dirty: false
+      }
+      : getDefaultPayrollDraft(monthKey);
+
+    const draft = appState.payrollDrafts[monthKey];
+
+    if (saved) {
+      applySalaryCarryForwardsToDraft(draft, monthKey, { markDirty: true });
+
+      if (monthKey === getMonthKey(new Date())) {
+        applyIncomePolicyToDraft(draft, monthKey, { markDirty: true });
+      }
+    }
+  }
+
+  return appState.payrollDrafts[monthKey];
+}
+
+
+function resetUnsavedPayrollDraftDefaults() {
+  Object.keys(appState.payrollDrafts).forEach(monthKey => {
+    const draft = appState.payrollDrafts[monthKey];
+
+    if (!appState.payrollMonths[monthKey] && !draft.dirty) {
+      appState.payrollDrafts[monthKey] = getDefaultPayrollDraft(monthKey);
+    }
+  });
+}
+
+
+function allowanceResult(amount, mode, paidDays, standardDays, overrideValue = null) {
+  if (mode === "disabled") {
+    return { value: 0, label: "Không áp dụng", enabled: false, overridden: false };
+  }
+
+  if (overrideValue != null) {
+    return {
+      value: sanitizeNonNegativeNumber(overrideValue),
+      label: "Điều chỉnh riêng tháng",
+      enabled: true,
+      overridden: true
+    };
+  }
+
+  if (mode === "proportional") {
+    return {
+      value: amount * paidDays / standardDays,
+      label: `Theo ${formatNumber(paidDays)}/${formatNumber(standardDays)} công`,
+      enabled: true,
+      overridden: false
+    };
+  }
+
+  if (mode === "monthly") {
+    return {
+      value: amount,
+      label: "Mức mặc định tháng",
+      enabled: true,
+      overridden: false
+    };
+  }
+
+  return {
+    value: amount,
+    label: "Cố định đủ tháng",
+    enabled: true,
+    overridden: false
+  };
+}
+
+
+function calculatePayroll(monthKey, draft) {
+  const settings = sanitizeSettings(draft.settingsSnapshot || appState.settings);
+  const standardDays = settings.standardWorkDays;
+  const standardHours = settings.standardHours;
+  const leave = getLeaveMonthSummary(monthKey, appState.leaveRecords, settings);
+  const paidDays = Math.max(0, standardDays - leave.unpaid);
+  const totalOT = getMonthTotal(monthKey);
+  const baseSalary = sanitizeNonNegativeNumber(draft.baseSalary);
+
+  const workingSalary = baseSalary / standardDays * paidDays;
+  const overtimeMoney =
+    baseSalary / standardDays / standardHours * settings.otMultiplier * totalOT;
+
+  const allowances = {
+    main: allowanceResult(
+      settings.mainAllowance,
+      settings.mainAllowanceMode,
+      paidDays,
+      standardDays,
+      draft.mainAllowanceOverride
+    ),
+    other: allowanceResult(
+      settings.otherAllowance,
+      settings.otherAllowanceMode,
+      paidDays,
+      standardDays,
+      draft.otherAllowanceOverride
+    ),
+    attendance: allowanceResult(
+      settings.attendanceAllowance,
+      settings.attendanceAllowanceMode,
+      paidDays,
+      standardDays,
+      draft.attendanceAllowanceOverride
+    ),
+    responsibility: allowanceResult(
+      settings.responsibilityAllowance,
+      settings.responsibilityAllowanceMode,
+      paidDays,
+      standardDays,
+      draft.responsibilityAllowanceOverride
+    )
+  };
+
+  const allowanceTotal = Object.values(allowances)
+    .reduce((sum, item) => sum + item.value, 0);
+
+  const monthlyKm = sanitizeNonNegativeNumber(draft.monthlyKm);
+  const fuelRate = sanitizeNonNegativeNumber(draft.fuelRate);
+  const fuelMoney = monthlyKm * fuelRate;
+  const fuelEnabled = settings.fuelRate > 0 || fuelRate > 0 || monthlyKm > 0;
+  const otherIncome = sanitizeNonNegativeNumber(draft.otherIncome);
+
+  const insurance = getEffectiveInsuranceValues(draft);
+  let insuranceMoney = 0;
+  let insuranceDescription = "Không khấu trừ bảo hiểm";
+
+  if (insurance.mode === "percentage") {
+    insuranceMoney = insurance.base * insurance.rate / 100;
+    insuranceDescription = `${formatPayrollMoney(insurance.base)} × ${formatNumber(insurance.rate)}%`;
+  } else if (insurance.mode === "fixed") {
+    insuranceMoney = insurance.fixed;
+    insuranceDescription = "Số tiền bảo hiểm cố định";
+  }
+
+  const advance = sanitizeNonNegativeNumber(draft.advance);
+  const otherDeduction = sanitizeNonNegativeNumber(draft.otherDeduction);
+
+  const totalIncome =
+    workingSalary + overtimeMoney + allowanceTotal + fuelMoney + otherIncome;
+  const totalDeductions = insuranceMoney + advance + otherDeduction;
+  const netSalary = totalIncome - totalDeductions;
+  const unpaidLeaveReduction = baseSalary / standardDays * leave.unpaid;
+
+  const mealCount = appState.workLogs
+    .filter(item => String(item.work_date || "").startsWith(monthKey))
+    .reduce((sum, item) => sum + (parseInt(item.meal_count, 10) || 0), 0);
+
+  return {
+    settings,
+    standardDays,
+    standardHours,
+    otMultiplier: settings.otMultiplier,
+    paidDays,
+    leave,
+    totalOT,
+    baseSalary,
+    workingSalary,
+    overtimeMoney,
+    allowances,
+    monthlyKm,
+    fuelRate,
+    fuelMoney,
+    fuelEnabled,
+    otherIncome,
+    insuranceMode: insurance.mode,
+    insuranceMoney,
+    insuranceDescription,
+    advance,
+    otherDeduction,
+    totalIncome,
+    totalDeductions,
+    netSalary,
+    unpaidLeaveReduction,
+    mealMoney: mealCount * appState.settings.mealPrice
+  };
+}
+
+
+function isPayrollSnapshotUsable(snapshot) {
+  return Boolean(
+    snapshot &&
+    typeof snapshot === "object" &&
+    snapshot.settings &&
+    typeof snapshot.settings === "object" &&
+    snapshot.leave &&
+    typeof snapshot.leave === "object" &&
+    snapshot.allowances &&
+    typeof snapshot.allowances === "object" &&
+    snapshot.allowances.main &&
+    snapshot.allowances.other &&
+    snapshot.allowances.attendance &&
+    snapshot.allowances.responsibility &&
+    Number.isFinite(Number(snapshot.totalOT)) &&
+    Number.isFinite(Number(snapshot.paidDays)) &&
+    Number.isFinite(Number(snapshot.totalIncome)) &&
+    Number.isFinite(Number(snapshot.totalDeductions)) &&
+    Number.isFinite(Number(snapshot.netSalary))
+  );
+}
+
+
+function getPayrollSourceSignature(result) {
+  const leave =
+    result?.leave ||
+    {};
+
+  const normalize =
+    value =>
+      Math.round(
+        (Number(value) || 0) *
+        10000
+      ) /
+      10000;
+
+  return JSON.stringify({
+    totalOT: normalize(result?.totalOT),
+    paidDays: normalize(result?.paidDays),
+    leave: {
+      opening: normalize(leave.opening),
+      accrued: normalize(leave.accrued),
+      used: normalize(leave.used),
+      unpaid: normalize(leave.unpaid),
+      requested: normalize(leave.requested),
+      closing: normalize(leave.closing)
+    }
+  });
+}
+
+
+function hasPayrollSourceChanged(saved, liveResult) {
+  if (!saved) {
+    return false;
+  }
+
+  const snapshot =
+    saved.calculatedSnapshot;
+
+  if (
+    !isPayrollSnapshotUsable(
+      snapshot
+    )
+  ) {
+    // Bản lưu cũ không có snapshot đầy đủ: cho phép lưu lại để nâng cấp.
+    return true;
+  }
+
+  return (
+    getPayrollSourceSignature(
+      snapshot
+    ) !==
+    getPayrollSourceSignature(
+      liveResult
+    )
+  );
+}
+
+
+async function savePayrollMonth() {
+  const monthKey = getMonthKey(appState.salaryDate);
+  const draft = ensurePayrollDraft(monthKey);
+  const savedExisting = appState.payrollMonths[monthKey];
+  const result = calculatePayroll(monthKey, draft);
+  const sourceChanged = hasPayrollSourceChanged(savedExisting, result);
+
+  if (
+    savedExisting &&
+    !draft.dirty &&
+    !sourceChanged
+  ) {
+    showToast("Bảng lương tháng không có thay đổi mới.");
+    return;
+  }
+
+  const savedAt = new Date().toISOString();
+
+  const payrollData = {
+    monthKey,
+    baseSalary: draft.baseSalary,
+    mainAllowanceOverride: draft.mainAllowanceOverride,
+    otherAllowanceOverride: draft.otherAllowanceOverride,
+    attendanceAllowanceOverride: draft.attendanceAllowanceOverride,
+    responsibilityAllowanceOverride: draft.responsibilityAllowanceOverride,
+    monthlyKm: draft.monthlyKm,
+    fuelRate: draft.fuelRate,
+    insuranceModeOverride: draft.insuranceModeOverride,
+    insuranceBaseOverride: draft.insuranceBaseOverride,
+    insuranceRateOverride: draft.insuranceRateOverride,
+    insuranceFixedOverride: draft.insuranceFixedOverride,
+    otherIncome: draft.otherIncome,
+    otherIncomeNote: draft.otherIncomeNote,
+    advance: draft.advance,
+    otherDeduction: draft.otherDeduction,
+    otherDeductionNote: draft.otherDeductionNote,
+    appliedSalaryCarryForwardIds: Array.isArray(draft.appliedSalaryCarryForwardIds)
+      ? draft.appliedSalaryCarryForwardIds.slice()
+      : [],
+    settingsSnapshot: draft.settingsSnapshot,
+    calculatedSnapshot: result,
+    savedAt
+  };
+
+  const saveStatus = $("#payrollSaveStatus");
+  saveStatus?.classList.add("is-saving");
+  setText("#payrollSaveStatus", "Đang lưu và đồng bộ...");
+
+  try {
+    if (appState.payrollSupabaseAvailable === true) {
+      const { error } = await supabaseClient
+        .from("payroll_months")
+        .upsert(
+          {
+            username: appState.currentUser,
+            payroll_month: `${monthKey}-01`,
+            payroll_data: payrollData
+          },
+          { onConflict: "username,payroll_month" }
+        );
+
+      if (error) {
+        throw error;
+      }
+    }
+
+    appState.payrollMonths[monthKey] = payrollData;
+    savePayrollMonths();
+    draft.dirty = false;
+    renderSalary();
+
+    if (appState.payrollSupabaseAvailable === true) {
+      setSettingsSyncStatus(
+        "online",
+        "Đã đồng bộ Supabase",
+        `Bảng lương tháng ${monthKey} đã được lưu trên đám mây.`
+      );
+    }
+
+    showToast(
+      appState.payrollSupabaseAvailable === true
+        ? "Đã lưu bảng lương tháng lên Supabase."
+        : "Đã lưu bảng lương tháng trên thiết bị."
+    );
+  } finally {
+    saveStatus?.classList.remove("is-saving");
+  }
+}
+
+
+async function resetPayrollMonth() {
+  const monthKey = getMonthKey(appState.salaryDate);
+
+  if (!confirm(`Khôi phục bảng lương tháng ${monthKey} về cấu hình mặc định?`)) {
+    return;
+  }
+
+  if (appState.payrollSupabaseAvailable === true) {
+    const { error } = await supabaseClient
+      .from("payroll_months")
+      .delete()
+      .eq("username", appState.currentUser)
+      .eq("payroll_month", `${monthKey}-01`);
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  delete appState.payrollMonths[monthKey];
+  delete appState.payrollDrafts[monthKey];
+  savePayrollMonths();
+  ensurePayrollDraft(monthKey);
+  renderSalary();
+
+  if (monthKey === getMonthKey(new Date())) {
+    renderDashboard();
+  }
+
+  showToast("Đã khôi phục dữ liệu bảng lương tháng.");
+}
+
+
+function formatSavedTime(value) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("vi-VN", {
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString("vi-VN", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
     hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function formatTime(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" }).format(date);
-}
-
-function formatISODate(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function debounce(fn, wait = 180) {
-  let timeoutId;
-  return (...args) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => fn(...args), wait);
-  };
-}
-
-function setText(selector, value, root = document) {
-  const element = $(selector, root);
-  if (element) element.textContent = String(value ?? "");
-}
-
-function setValue(selector, value, root = document) {
-  const element = $(selector, root);
-  if (element) element.value = String(value ?? "");
-}
-
-function setChecked(selector, checked, root = document) {
-  const element = $(selector, root);
-  if (element) element.checked = Boolean(checked);
-}
-
-function announce(message) {
-  const liveRegion = $("#live-region");
-  if (!liveRegion) return;
-  liveRegion.textContent = "";
-  window.setTimeout(() => { liveRegion.textContent = message; }, 20);
-}
-
-function icon(name) {
-  const icons = {
-    dashboard: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z" fill="currentColor"/></svg>',
-    inventory: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 7 9-4 9 4-9 4-9-4Zm2 3.2 6 2.67v7.6l-6-2.67v-7.6Zm8 10.27v-7.6l6-2.67v7.6l-6 2.67Z" fill="currentColor"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z" fill="currentColor"/></svg>',
-    history: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 1-7.45 5.08L2 8.5V3l5.3 1.2L5.7 5.8A10 10 0 1 0 12 2v2Zm-1 3h2v5.4l3.3 2-1 1.7-4.3-2.6V7Z" fill="currentColor"/></svg>',
-    manage: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h10v2H4V5Zm0 6h16v2H4v-2Zm0 6h7v2H4v-2Zm13-13h3v4h-3V4Zm-3 12h6v4h-6v-4Z" fill="currentColor"/></svg>',
-    moon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 15.6A8 8 0 0 1 8.4 3.6 8.5 8.5 0 1 0 20.4 15.6Z" fill="currentColor"/></svg>',
-    sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 1h2v3h-2V1Zm0 19h2v3h-2v-3ZM1 11h3v2H1v-2Zm19 0h3v2h-3v-2ZM4.22 2.8l2.12 2.12-1.42 1.42L2.8 4.22 4.22 2.8Zm12.44 12.86 2.12 2.12-1.42 1.42-2.12-2.12 1.42-1.42Zm.7-12.86 1.42 1.42-2.12 2.12-1.42-1.42 2.12-2.12ZM4.92 15.66l1.42 1.42-2.12 2.12-1.42-1.42 2.12-2.12ZM12 6a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z" fill="currentColor"/></svg>',
-    search: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 1 0 3.96 11.65L19.8 21 21 19.8l-5.35-5.34A6.5 6.5 0 0 0 10.5 4Zm-4.8 6.5a4.8 4.8 0 1 1 9.6 0 4.8 4.8 0 0 1-9.6 0Z" fill="currentColor"/></svg>',
-    close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z" fill="currentColor"/></svg>',
-    edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15.7 4.3 4 4L9 19H5v-4L15.7 4.3Zm0 2.8L7 15.8V17h1.2L17 8.3l-1.3-1.2Z" fill="currentColor"/></svg>',
-    archive: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16l1 4H3l1-4Zm1 6h14v10H5V10Zm5 2v2h4v-2h-4Z" fill="currentColor"/></svg>',
-    warning: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 1 21h22L12 2Zm-1 7h2v6h-2V9Zm0 8h2v2h-2v-2Z" fill="currentColor"/></svg>',
-    check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.2 16.2-4.4-4.4 1.4-1.4 3 3 8.6-8.6 1.4 1.4-10 10Z" fill="currentColor"/></svg>',
-    info: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 10h2v8h-2v-8Zm0-4h2v2h-2V6Zm1-4a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z" fill="currentColor"/></svg>',
-    account: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8ZM4 21a8 8 0 0 1 16 0H4Z" fill="currentColor"/></svg>',
-    category: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z" fill="currentColor"/></svg>',
-    shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm-1 14-3-3 1.4-1.4 1.6 1.6 4.6-4.6L17 10l-6 6Z" fill="currentColor"/></svg>',
-    database: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c5 0 9 1.6 9 3.5S17 10 12 10 3 8.4 3 6.5 7 3 12 3Zm-9 7v4c0 1.9 4 3.5 9 3.5s9-1.6 9-3.5v-4c-2 1.5-5.5 2.2-9 2.2S5 11.5 3 10Zm0 7v.5C3 19.4 7 21 12 21s9-1.6 9-3.5V17c-2 1.5-5.5 2.2-9 2.2S5 18.5 3 17Z" fill="currentColor"/></svg>',
-    download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9l3-3 1.4 1.4L12 15.8l-5.4-5.4L8 9l3 3V3ZM4 18h16v3H4v-3Z" fill="currentColor"/></svg>',
-    upload: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 21h2v-9l3 3 1.4-1.4L12 8.2l-5.4 5.4L8 15l3-3v9ZM4 3h16v3H4V3Z" fill="currentColor"/></svg>',
-    trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4V2h8v2h5v2H3V4h5Zm-3 4h14l-1 14H6L5 8Zm4 3v7h2v-7H9Zm4 0v7h2v-7h-2Z" fill="currentColor"/></svg>',
-    swap: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 4 4-4 4v-3H2V7h5V4Zm10 8v3h5v2h-5v3l-4-4 4-4Z" fill="currentColor"/></svg>',
-    up: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 5 7 7-1.4 1.4-4.6-4.6V20h-2V8.8l-4.6 4.6L5 12l7-7Z" fill="currentColor"/></svg>',
-    down: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 19-7-7 1.4-1.4 4.6 4.6V4h2v11.2l4.6-4.6L19 12l-7 7Z" fill="currentColor"/></svg>',
-  };
-  return icons[name] || icons.info;
-}
-
-function showToast(type, title, message = "") {
-  const root = $("#toast-root");
-  if (!root) return;
-  const toast = document.createElement("div");
-  toast.className = "toast";
-  toast.dataset.type = type;
-  toast.innerHTML = `${icon(type === "success" ? "check" : type === "error" ? "warning" : "info")}
-    <div><div class="toast-title">${escapeHTML(title)}</div>${message ? `<div class="toast-message">${escapeHTML(message)}</div>` : ""}</div>`;
-  root.append(toast);
-  window.setTimeout(() => toast.remove(), 3600);
-}
-
-function applyTheme(theme) {
-  const normalized = theme === "dark" ? "dark" : "light";
-  appState.theme = normalized;
-  document.documentElement.dataset.theme = normalized;
-  safeStorage.setItem(STORAGE_KEYS.theme, normalized);
-  const themeColor = normalized === "dark" ? "#0f1512" : "#f4f7f5";
-  $("meta[name='theme-color']")?.setAttribute("content", themeColor);
-}
-
-function normalizeRoleCode(role) {
-  const normalized = String(role || "").trim().toLowerCase().replace(/\s+/g, "_");
-  if (["super_admin", "super-admin", "spadmin"].includes(normalized)) return "superadmin";
-  return normalized;
-}
-
-function rolePermissions(role) {
-  return ROLE_PRESETS[normalizeRoleCode(role)] || [];
-}
-
-function hasBasePermission(account, permission) {
-  const permissions = rolePermissions(account?.role);
-  return permissions.includes("*") || permissions.includes(permission);
-}
-
-function isCategoryScopedPermission(permission) {
-  return CATEGORY_SCOPED_PERMISSION_SET.has(permission);
-}
-
-function currentAccount() {
-  if (!appState.currentUser) return null;
-  return appState.cache.accounts.find((account) => account.id === appState.currentUser.id) || appState.currentUser;
-}
-
-function normalizeCategoryPermissions(account, schema = appState.cache.schema) {
-  const result = {};
-  const categories = schema?.categories || [];
-  const basePermissions = rolePermissions(account?.role);
-  const allowed = new Set(basePermissions.includes("*") ? CATEGORY_SCOPED_PERMISSIONS : basePermissions.filter((permission) => isCategoryScopedPermission(permission)));
-  for (const category of categories) {
-    const source = Array.isArray(account?.categoryPermissions?.[category.id]) ? account.categoryPermissions[category.id] : [];
-    result[category.id] = [...new Set(source.filter((permission) => allowed.has(permission)))];
-  }
-  return result;
-}
-
-function validateCategoryPermissionDependencies(categoryPermissions, schema) {
-  const transactionPermissions = [
-    PERMISSIONS.importInventory,
-    PERMISSIONS.exportInventory,
-    PERMISSIONS.countInventory,
-    PERMISSIONS.reverseTransaction,
-  ];
-  const detailPermissions = [PERMISSIONS.editProduct, PERMISSIONS.archiveProduct];
-
-  for (const category of schema?.categories || []) {
-    const permissions = Array.isArray(categoryPermissions?.[category.id]) ? categoryPermissions[category.id] : [];
-    if (!permissions.length) continue;
-    if (!permissions.includes(PERMISSIONS.viewInventory)) {
-      throw new Error(`Nhóm “${category.name}”: mọi quyền thao tác phải kèm quyền Xem kho.`);
-    }
-    if (transactionPermissions.some((permission) => permissions.includes(permission)) && !permissions.includes(PERMISSIONS.viewQuantity)) {
-      throw new Error(`Nhóm “${category.name}”: quyền giao dịch phải kèm quyền Xem số lượng.`);
-    }
-    if (permissions.includes(PERMISSIONS.reverseTransaction) && !permissions.includes(PERMISSIONS.viewHistory)) {
-      throw new Error(`Nhóm “${category.name}”: quyền Đảo giao dịch phải kèm quyền Xem lịch sử.`);
-    }
-    if (detailPermissions.some((permission) => permissions.includes(permission)) && !permissions.includes(PERMISSIONS.viewDetail)) {
-      throw new Error(`Nhóm “${category.name}”: quyền sửa hoặc lưu trữ vật liệu phải kèm quyền Xem chi tiết.`);
-    }
-  }
-}
-
-function accountHasPermission(account, permission, categoryId = null, schema = appState.cache.schema) {
-  if (!account || accountStatus(account) !== ACCOUNT_STATUSES.active) return false;
-  if (normalizeRoleCode(account.role) === "superadmin") return true;
-  if (!hasBasePermission(account, permission)) return false;
-  if (!isCategoryScopedPermission(permission)) return true;
-  if (account.scopeMode !== "custom") return true;
-  const categoryPermissions = normalizeCategoryPermissions(account, schema);
-  if (categoryId) return categoryPermissions[categoryId]?.includes(permission) || false;
-  return Object.values(categoryPermissions).some((permissions) => permissions.includes(permission));
-}
-
-function hasPermission(permission, categoryId = null) {
-  return accountHasPermission(currentAccount(), permission, categoryId, appState.cache.schema);
-}
-
-function storeActor(store) {
-  if (!appState.currentUser) return null;
-  return store.accounts.find((account) => account.id === appState.currentUser.id) || null;
-}
-
-function assertStorePermission(store, permission, categoryId = null) {
-  const actor = storeActor(store);
-  if (!accountHasPermission(actor, permission, categoryId, store.schema)) {
-    throw new Error("Tài khoản hiện tại không còn quyền thực hiện thao tác này. Hãy tải lại dữ liệu.");
-  }
-  return actor;
-}
-
-function categoriesWithPermission(permission, { activeOnly = true } = {}) {
-  return (appState.cache.schema?.categories || []).filter((category) => (!activeOnly || category.active !== false) && hasPermission(permission, category.id));
-}
-
-function canCreateAnyInventoryTransaction(categoryId = null) {
-  return hasPermission(PERMISSIONS.importInventory, categoryId)
-    || hasPermission(PERMISSIONS.exportInventory, categoryId)
-    || hasPermission(PERMISSIONS.countInventory, categoryId);
-}
-
-function accountStatus(account) {
-  if (Object.values(ACCOUNT_STATUSES).includes(account?.status)) return account.status;
-  return account?.active === false ? ACCOUNT_STATUSES.disabled : ACCOUNT_STATUSES.active;
-}
-
-function accountStatusLabel(account) {
-  return ACCOUNT_STATUS_LABELS[accountStatus(account)] || "Không xác định";
-}
-
-function roleLevel(role) {
-  return ROLE_LEVELS[normalizeRoleCode(role)] || 0;
-}
-
-function canAccountManageTarget(actor, targetAccount = null) {
-  if (!actor || normalizeRoleCode(actor.role) !== "superadmin" || !accountHasPermission(actor, PERMISSIONS.manageAccounts, null, appState.cache.schema)) return false;
-  if (!targetAccount) return true;
-  return true;
-}
-
-function canManageAccount(targetAccount = null) {
-  return canAccountManageTarget(currentAccount(), targetAccount);
-}
-
-function assignableRolesForAccount(actor) {
-  return normalizeRoleCode(actor?.role) === "superadmin" ? Object.keys(ROLE_PRESETS) : [];
-}
-
-function assignableRoles(targetAccount = null) {
-  return assignableRolesForAccount(currentAccount(), targetAccount);
-}
-
-function setAuthenticatedAccount(account) {
-  if (!account) {
-    appState.currentUser = null;
-    appState.auth.status = "signedOut";
-    return;
-  }
-  const normalizedAccount = clone(account);
-  normalizedAccount.role = normalizeRoleCode(normalizedAccount.role);
-  if (normalizedAccount.role === "superadmin") {
-    normalizedAccount.scopeMode = "all";
-    normalizedAccount.categoryPermissions = {};
-  }
-  appState.currentUser = normalizedAccount;
-  appState.auth.status = "signedIn";
-}
-
-function syncCurrentUserFromAccounts() {
-  if (!appState.currentUser) return;
-  const selected = appState.cache.accounts.find((account) => account.id === appState.currentUser.id);
-  if (!selected || accountStatus(selected) !== ACCOUNT_STATUSES.active) {
-    clearAuthSession();
-    setAuthenticatedAccount(null);
-    return;
-  }
-  setAuthenticatedAccount(selected);
-}
-
-function roleLabel(role) {
-  return ROLE_LABELS[normalizeRoleCode(role)] || role;
-}
-
-function canDeleteTestProduct() {
-  const role = normalizeRoleCode(appState.currentUser?.role);
-  return ["admin", "superadmin"].includes(role) && hasPermission(PERMISSIONS.manageData);
-}
-
-function categoryById(categoryId) {
-  return appState.cache.schema?.categories?.find((category) => category.id === categoryId) || null;
-}
-
-function productById(productId) {
-  return appState.cache.products.find((product) => product.id === productId) || null;
-}
-
-function visibleProducts(permission = PERMISSIONS.viewInventory) {
-  return appState.cache.products.filter((product) => hasPermission(permission, product.categoryId));
-}
-
-function visibleTransactions(permission = PERMISSIONS.viewHistory) {
-  return appState.cache.transactions.filter((transaction) => hasPermission(permission, transaction.categoryId));
-}
-
-function transactionById(transactionId) {
-  return appState.cache.transactions.find((transaction) => transaction.id === transactionId) || null;
-}
-
-function latestTransactionForProduct(productId) {
-  return appState.cache.transactions.find((transaction) => transaction.productId === productId) || null;
-}
-
-function productStatus(product) {
-  const quantity = toNumber(product.quantity);
-  const warning = Math.max(0, toNumber(product.warningLevel));
-  if (quantity <= 0) return { key: "out", label: "Hết hàng", className: "badge-danger" };
-  if (quantity <= warning) return { key: "low", label: "Sắp hết", className: "badge-warning" };
-  return { key: "ok", label: "Đủ hàng", className: "badge-success" };
-}
-
-function attributeDisplayValue(attribute, value) {
-  if (value === "" || value === null || value === undefined) return "—";
-  const formatted = attribute.type === "number" ? formatQuantity(value) : String(value);
-  return attribute.unit ? `${formatted} ${attribute.unit}` : formatted;
-}
-
-function orderedCategoryAttributes(category, { activeOnly = true, identityOnly = false } = {}) {
-  if (!Array.isArray(category?.attributes)) return [];
-  return category.attributes
-    .map((attribute, index) => ({ attribute, index }))
-    .filter(({ attribute }) => (!activeOnly || attribute.active !== false) && (!identityOnly || attribute.identity))
-    .sort((left, right) => {
-      const leftOrder = Number.isFinite(Number(left.attribute.sortOrder)) ? Number(left.attribute.sortOrder) : left.index;
-      const rightOrder = Number.isFinite(Number(right.attribute.sortOrder)) ? Number(right.attribute.sortOrder) : right.index;
-      return leftOrder - rightOrder || left.index - right.index;
-    })
-    .map(({ attribute }) => attribute);
-}
-
-function identityCategoryAttributes(category) {
-  if (!Array.isArray(category?.attributes)) return [];
-  return category.attributes
-    .map((attribute, index) => ({ attribute, index }))
-    .filter(({ attribute }) => attribute.active !== false && attribute.identity)
-    .sort((left, right) => {
-      const leftIdentityOrder = toOptionalNumber(left.attribute.identityOrder);
-      const rightIdentityOrder = toOptionalNumber(right.attribute.identityOrder);
-      const leftOrder = leftIdentityOrder ?? left.index;
-      const rightOrder = rightIdentityOrder ?? right.index;
-      return leftOrder - rightOrder || String(left.attribute.id).localeCompare(String(right.attribute.id), "vi");
-    })
-    .map(({ attribute }) => attribute);
-}
-
-function buildProductSignature(category, attributes) {
-  const parts = identityCategoryAttributes(category)
-    .map((attribute) => `${attribute.id}=${normalizeText(attributes[attribute.id])}`);
-  return `${category.id}|${parts.join("|")}`;
-}
-
-function buildProductName(category, attributes) {
-  const values = orderedCategoryAttributes(category, { identityOnly: true })
-    .map((attribute) => {
-      const value = attributes[attribute.id];
-      if (value === "" || value === null || value === undefined) return "";
-      return attributeDisplayValue(attribute, value);
-    })
-    .filter(Boolean);
-  return values.length ? `${category.name} · ${values.join(" · ")}` : category.name;
-}
-
-function formatProductNameNumber(value) {
-  const number = normalizeQuantity(value, Number.NaN);
-  return Number.isFinite(number) ? String(number) : String(value ?? "").trim();
-}
-
-function daoDimensionPriority(attribute, fallbackIndex = 0) {
-  const key = normalizeSearchText(`${attribute?.id || ""} ${attribute?.name || ""}`);
-  if (key.includes("do day")) return 10;
-  if (key.includes("chieu cao")) return 20;
-  return 100 + fallbackIndex;
-}
-
-function buildProductDisplayName(category, attributes = {}) {
-  const fallback = buildProductName(category, attributes);
-  const entries = orderedCategoryAttributes(category, { identityOnly: true })
-    .map((attribute, index) => ({ attribute, index, value: attributes?.[attribute.id] }))
-    .filter(({ value }) => value !== "" && value !== null && value !== undefined);
-
-  if (!entries.length) return fallback;
-
-  const categoryKey = normalizeSearchText(category?.name || "");
-  const textEntries = entries.filter(({ attribute }) => attribute.type !== "number");
-  const primaryEntry = textEntries.find(({ value }) => normalizeSearchText(value).startsWith("dao"));
-  const isDaoMaterial = categoryKey.includes("dao") || Boolean(primaryEntry);
-  if (!isDaoMaterial) return fallback;
-
-  const title = primaryEntry ? String(primaryEntry.value).trim() : String(category?.name || "Vật liệu").trim();
-  const dimensions = entries
-    .filter(({ attribute }) => attribute.type === "number")
-    .sort((left, right) => daoDimensionPriority(left.attribute, left.index) - daoDimensionPriority(right.attribute, right.index))
-    .map(({ value }) => formatProductNameNumber(value));
-  const details = entries
-    .filter(({ attribute }) => attribute.type !== "number")
-    .filter((entry) => entry !== primaryEntry)
-    .map(({ attribute, value }) => attributeDisplayValue(attribute, value));
-
-  let name = title || fallback;
-  if (dimensions.length) name += ` ${dimensions.join(" × ")}`;
-  if (details.length) name += ` · ${details.join(" · ")}`;
-  return name.trim() || fallback;
-}
-
-function productDisplayName(product) {
-  if (!product) return "Vật liệu";
-  if (String(product.customName || "").trim()) return String(product.name || product.customName).trim();
-  const category = categoryById(product.categoryId);
-  if (!category) return String(product.name || "Vật liệu");
-  const categoryKey = normalizeSearchText(category.name || "");
-  const hasDaoIdentity = orderedCategoryAttributes(category, { identityOnly: true }).some((attribute) => {
-    if (attribute.type === "number") return false;
-    const value = product.attributes?.[attribute.id];
-    return value !== "" && value !== null && value !== undefined && normalizeSearchText(value).startsWith("dao");
+    minute: "2-digit"
   });
-  return categoryKey.includes("dao") || hasDaoIdentity
-    ? buildProductDisplayName(category, product.attributes || {})
-    : String(product.name || buildProductName(category, product.attributes || {}));
 }
 
-function validateProductPayload(payload, schema, products) {
-  const category = schema.categories.find((item) => item.id === payload.categoryId && item.active !== false);
-  if (!category) throw new Error("Nhóm vật liệu không hợp lệ hoặc đã ngừng sử dụng.");
 
-  const attributes = {};
-  for (const attribute of orderedCategoryAttributes(category)) {
-    const rawValue = payload.attributes?.[attribute.id] ?? "";
-    const value = attribute.type === "number" && rawValue !== "" ? toNumber(rawValue, Number.NaN) : String(rawValue).trim();
-    if (attribute.required && (value === "" || Number.isNaN(value))) {
-      throw new Error(`Vui lòng nhập ${attribute.name}.`);
-    }
-    if (attribute.type === "number" && value !== "" && (!Number.isFinite(value) || value < 0)) {
-      throw new Error(`${attribute.name} phải là số không âm.`);
-    }
-    attributes[attribute.id] = value;
-  }
-
-  const units = category.units.filter(Boolean);
-  const unit = String(payload.unit || category.defaultUnit || units[0] || "").trim();
-  if (!unit) throw new Error("Vui lòng chọn đơn vị.");
-  if (units.length && !units.includes(unit)) throw new Error("Đơn vị không thuộc nhóm vật liệu này.");
-
-  const warningLevel = toNumber(payload.warningLevel, Number.NaN);
-  if (!Number.isFinite(warningLevel) || warningLevel < 0) throw new Error("Mức cảnh báo phải là số không âm.");
-
-  const signature = buildProductSignature(category, attributes);
-  const duplicate = products.find((product) => !product.archived && product.id !== payload.id && product.signature === signature);
-  if (duplicate) throw new Error(`Quy cách này đã tồn tại: ${duplicate.name}.`);
-
-  const customName = String(payload.customName || "").trim();
-  const name = customName || buildProductName(category, attributes);
-
-  return {
-    id: payload.id || null,
-    categoryId: category.id,
-    customName,
-    name,
-    unit,
-    warningLevel,
-    attributes,
-    signature,
-    note: String(payload.note || "").trim(),
-  };
+function openDayDetail(dateKey) {
+  appState.selectedDate = dateKey;
+  appState.editingExtraId = null;
+  prepareLeaveDraft(dateKey);
+  renderDayDetail();
+  openModal("dayDetailModal");
 }
 
-function transactionPermission(type) {
-  if (type === TRANSACTION_TYPES.import) return PERMISSIONS.importInventory;
-  if (type === TRANSACTION_TYPES.export) return PERMISSIONS.exportInventory;
-  if (type === TRANSACTION_TYPES.adjust) return PERMISSIONS.countInventory;
-  if (type === TRANSACTION_TYPES.reverse) return PERMISSIONS.reverseTransaction;
-  return null;
+
+function renderDayDetail(
+  resetEditor = true
+) {
+  const dateKey =
+    appState.selectedDate;
+
+  if (
+    !dateKey
+  ) {
+    return;
+  }
+
+  const log =
+    getWorkLog(
+      dateKey
+    );
+
+  const baseOT =
+    getBaseOT(
+      dateKey
+    );
+
+  const mainExists =
+    Boolean(
+      log?.start_time ||
+      log?.end_time ||
+      baseOT > 0
+    );
+
+  setText(
+    "#detailDateTitle",
+    formatDisplayDate(
+      dateKey
+    )
+  );
+
+  setChecked(
+    "#detailHasMainShift",
+    mainExists
+  );
+
+  setValue(
+    "#detailStartTime",
+    log?.start_time ||
+    appState.settings
+      .defaultShiftStart
+  );
+
+  setValue(
+    "#detailEndTime",
+    log?.end_time ||
+    appState.settings
+      .defaultShiftEnd
+  );
+
+  setChecked(
+    "#detailLunchChecked",
+    getLogLunchChecked(
+      log
+    )
+  );
+
+  setValue(
+    "#detailMainOT",
+    baseOT
+  );
+
+  setValue(
+    "#detailMealCount",
+    parseInt(
+      log?.meal_count,
+      10
+    ) ||
+    0
+  );
+
+  setValue(
+    "#detailNote",
+    getLogVisibleNote(
+      log
+    )
+  );
+
+  setText(
+    "#detailLunchLabel",
+    isSunday(
+      dateKey
+    )
+      ? "Nghỉ trưa 1 giờ"
+      : "Tăng ca trưa +1 giờ"
+  );
+
+  updateDetailMainFields();
+
+  renderDetailExtraList();
+
+  renderDetailSummary();
+
+  setExtraEditorAvailability();
+
+  if (
+    resetEditor
+  ) {
+    resetExtraEditor();
+  }
+
+  renderLeaveDetail();
+
+  refreshIcons();
 }
 
-function assertTransactionPermission(type, categoryId = null) {
-  const permission = transactionPermission(type);
-  if (!permission || !hasPermission(permission, categoryId)) {
-    throw new Error("Vai trò hiện tại không có quyền thực hiện loại giao dịch này.");
+
+function handleMainShiftToggle() {
+  updateDetailMainFields();
+
+  if (
+    $("#detailHasMainShift")
+      ?.checked
+  ) {
+    calculateDetailMainOT();
+  } else {
+    setValue(
+      "#detailMainOT",
+      0
+    );
+
+    renderDetailSummary();
   }
 }
 
-function validateTransactionPayload(payload, product) {
-  if (!product || product.archived) throw new Error("Vật liệu không còn khả dụng.");
-  const type = payload.type;
-  if (![TRANSACTION_TYPES.import, TRANSACTION_TYPES.export, TRANSACTION_TYPES.adjust].includes(type)) {
-    throw new Error("Loại giao dịch không hợp lệ.");
-  }
-  const currentQuantity = normalizeQuantity(product.quantity);
-  const amount = normalizeQuantity(payload.amount);
-  if (!Number.isFinite(currentQuantity) || currentQuantity < 0) throw new Error("Tồn hiện tại không hợp lệ.");
-  if (!Number.isFinite(amount) || amount < 0) throw new Error("Số lượng phải là số không âm.");
-  if (amount > MAX_QUANTITY) throw new Error("Số lượng vượt giới hạn cho phép.");
 
-  if ([TRANSACTION_TYPES.import, TRANSACTION_TYPES.export].includes(type) && amount <= 0) {
-    throw new Error("Số lượng nhập hoặc xuất phải lớn hơn 0.");
-  }
-  if (type === TRANSACTION_TYPES.export && amount > currentQuantity) {
-    throw new Error(`Tồn hiện tại chỉ còn ${formatQuantity(currentQuantity)} ${product.unit}.`);
-  }
-
-  const note = String(payload.note || "").trim();
-
-  let afterQuantity = currentQuantity;
-  if (type === TRANSACTION_TYPES.import) afterQuantity = normalizeQuantity(currentQuantity + amount);
-  if (type === TRANSACTION_TYPES.export) afterQuantity = normalizeQuantity(currentQuantity - amount);
-  if (type === TRANSACTION_TYPES.adjust) afterQuantity = amount;
-  if (!Number.isFinite(afterQuantity) || afterQuantity < 0 || afterQuantity > MAX_QUANTITY) {
-    throw new Error("Tồn sau giao dịch không hợp lệ.");
-  }
-
-  return {
-    type,
-    amount,
-    beforeQuantity: currentQuantity,
-    afterQuantity,
-    deltaQuantity: normalizeQuantity(afterQuantity - currentQuantity, 0),
-    note,
-  };
+function updateDetailMainFields() {
+  $("#detailMainFields")
+    ?.classList
+    .toggle(
+      "detail-main-disabled",
+      !$("#detailHasMainShift")
+        ?.checked
+    );
 }
 
-function createProductSnapshot(product, schema, fallbackTransaction = null) {
-  const category = schema?.categories?.find((item) => item.id === product?.categoryId);
-  const attributes = category
-    ? orderedCategoryAttributes(category).map((attribute) => ({
-        id: attribute.id,
-        name: attribute.name,
-        value: product?.attributes?.[attribute.id] ?? "",
-        unit: attribute.unit || "",
-      }))
-    : [];
-  return {
-    productId: product?.id || fallbackTransaction?.productId || "",
-    productName: fallbackTransaction?.productName || product?.name || "Vật liệu",
-    categoryId: fallbackTransaction?.categoryId || product?.categoryId || "",
-    categoryName: category?.name || fallbackTransaction?.productSnapshot?.categoryName || "",
-    unit: fallbackTransaction?.unit || product?.unit || "",
-    signature: product?.signature || fallbackTransaction?.productSnapshot?.signature || "",
-    attributes,
-  };
+
+function calculateDetailMainOT() {
+  if (
+    !$("#detailHasMainShift")
+      ?.checked
+  ) {
+    setValue(
+      "#detailMainOT",
+      0
+    );
+
+    renderDetailSummary();
+
+    return;
+  }
+
+  setValue(
+    "#detailMainOT",
+    calculateMainOT(
+      $("#detailStartTime")
+        ?.value ||
+      "",
+
+      $("#detailEndTime")
+        ?.value ||
+      "",
+
+      $("#detailLunchChecked")
+        ?.checked ||
+      false,
+
+      appState.selectedDate
+    )
+  );
+
+  renderDetailSummary();
 }
 
-function migrateStoreData(data) {
-  const store = clone(data);
-  let changed = toNumber(store.version, 1) !== DATA_FORMAT_VERSION;
 
-  if (!store || !store.schema || !Array.isArray(store.schema.categories) || !Array.isArray(store.products) || !Array.isArray(store.transactions) || !Array.isArray(store.accounts)) {
-    throw new Error("Dữ liệu thử nghiệm sai định dạng.");
-  }
-
-  for (const category of store.schema.categories) {
-    if (!Array.isArray(category.attributes)) category.attributes = [];
-
-    const displayEntries = category.attributes
-      .map((attribute, index) => ({ attribute, index }))
-      .sort((left, right) => {
-        const leftOrder = Number.isFinite(Number(left.attribute.sortOrder)) ? Number(left.attribute.sortOrder) : left.index;
-        const rightOrder = Number.isFinite(Number(right.attribute.sortOrder)) ? Number(right.attribute.sortOrder) : right.index;
-        return leftOrder - rightOrder || left.index - right.index;
-      });
-
-    displayEntries.forEach(({ attribute }, index) => {
-      if (Number(attribute.sortOrder) !== index) changed = true;
-      attribute.sortOrder = index;
-    });
-
-    const identityEntries = displayEntries.filter(({ attribute }) => attribute.active !== false && attribute.identity);
-    const identityOrders = identityEntries.map(({ attribute }) => toOptionalNumber(attribute.identityOrder));
-    const hasStableIdentityOrder = identityOrders.every((order) => order !== null)
-      && new Set(identityOrders).size === identityOrders.length;
-
-    if (!hasStableIdentityOrder) {
-      identityEntries.forEach(({ attribute }, index) => {
-        attribute.identityOrder = index;
-      });
-      changed = true;
-    } else {
-      identityEntries.forEach(({ attribute }) => {
-        const normalizedOrder = toOptionalNumber(attribute.identityOrder);
-        if (attribute.identityOrder !== normalizedOrder) changed = true;
-        attribute.identityOrder = normalizedOrder;
-      });
-    }
-  }
-
-  const categoriesById = new Map(store.schema.categories.map((category) => [category.id, category]));
-  const activeSignatures = new Set();
-  for (const product of store.products) {
-    const category = categoriesById.get(product.categoryId);
-    if (!category) continue;
-    const signature = buildProductSignature(category, product.attributes || {});
-    if (product.signature !== signature) {
-      product.signature = signature;
-      changed = true;
-    }
-    if (!product.archived) {
-      if (activeSignatures.has(signature)) {
-        throw new Error(`Dữ liệu có quy cách trùng sau khi chuẩn hóa: ${product.name || product.id}.`);
-      }
-      activeSignatures.add(signature);
-    }
-  }
-
-  const productsById = new Map(store.products.map((product) => [product.id, product]));
-  const requestKeys = new Set();
-  for (const transaction of store.transactions || []) {
-    const product = productsById.get(transaction.productId);
-    const requestKey = String(transaction.requestKey || `migrated:${transaction.id}`);
-    if (transaction.requestKey !== requestKey) changed = true;
-    transaction.requestKey = requestKey;
-    if (requestKeys.has(requestKey)) throw new Error(`Dữ liệu có khóa thao tác giao dịch trùng: ${transaction.id}.`);
-    requestKeys.add(requestKey);
-
-    const beforeQuantity = normalizeQuantity(transaction.beforeQuantity);
-    const afterQuantity = normalizeQuantity(transaction.afterQuantity);
-    const amount = normalizeQuantity(transaction.amount, Math.abs(afterQuantity - beforeQuantity));
-    if (!quantitiesEqual(transaction.beforeQuantity, beforeQuantity) || !quantitiesEqual(transaction.afterQuantity, afterQuantity) || !quantitiesEqual(transaction.amount, amount)) changed = true;
-    transaction.beforeQuantity = beforeQuantity;
-    transaction.afterQuantity = afterQuantity;
-    transaction.amount = amount;
-    transaction.deltaQuantity = normalizeQuantity(afterQuantity - beforeQuantity, 0);
-    transaction.actorId = String(transaction.actorId || "legacy-user");
-    transaction.actorRole = String(transaction.actorRole || "legacy");
-    transaction.reversedAt = transaction.reversedAt || null;
-    transaction.reversedBy = transaction.reversedBy || null;
-    transaction.reversalTransactionId = transaction.reversalTransactionId || null;
-    transaction.reversalOf = transaction.reversalOf || null;
-    transaction.originalType = transaction.originalType || null;
-    transaction.hiddenAt = transaction.hiddenAt || null;
-    transaction.hiddenBy = transaction.hiddenBy || null;
-    transaction.hiddenReason = String(transaction.hiddenReason || "");
-    if (!transaction.productSnapshot) {
-      transaction.productSnapshot = createProductSnapshot(product, store.schema, transaction);
-      transaction.productSnapshot.migrated = true;
-      changed = true;
-    }
-  }
-
-
-  if (!Array.isArray(store.accountAudit)) {
-    store.accountAudit = [];
-    changed = true;
-  }
-
-  const schemaCategoryIds = new Set(store.schema.categories.map((category) => category.id));
-  for (const account of store.accounts) {
-    const status = accountStatus(account);
-    if (account.status !== status || account.active !== (status === ACCOUNT_STATUSES.active)) changed = true;
-    account.status = status;
-    account.active = status === ACCOUNT_STATUSES.active;
-    if (!['all', 'custom'].includes(account.scopeMode)) {
-      account.scopeMode = 'all';
-      changed = true;
-    }
-    const normalizedPermissions = normalizeCategoryPermissions(account, store.schema);
-    const cleanedPermissions = {};
-    for (const categoryId of schemaCategoryIds) cleanedPermissions[categoryId] = normalizedPermissions[categoryId] || [];
-    if (JSON.stringify(account.categoryPermissions || {}) !== JSON.stringify(cleanedPermissions)) changed = true;
-    account.categoryPermissions = account.scopeMode === 'custom' ? cleanedPermissions : {};
-    if (!account.passwordSalt || !account.passwordHash || !Number.isFinite(Number(account.passwordIterations))) {
-      Object.assign(account, clone(DEFAULT_DEMO_PASSWORD_RECORD));
-      changed = true;
-    }
-    if (Object.prototype.hasOwnProperty.call(account, "mustChangePassword")) {
-      delete account.mustChangePassword;
-      changed = true;
-    }
-    if (Object.prototype.hasOwnProperty.call(account, "passwordResetRequestedAt")) {
-      delete account.passwordResetRequestedAt;
-      changed = true;
-    }
-    if (Object.prototype.hasOwnProperty.call(account, "password")) {
-      delete account.password;
-      changed = true;
-    }
-  }
-
-  if (!store.accounts.some((account) => normalizeRoleCode(account.role) === 'superadmin')) {
-    store.accounts.unshift(clone(DEFAULT_ACCOUNTS.find((account) => normalizeRoleCode(account.role) === 'superadmin')));
-    changed = true;
-  }
-
-  store.version = DATA_FORMAT_VERSION;
-  return { store, changed };
+function suggestMealCount(
+  endTime
+) {
+  setValue(
+    "#detailMealCount",
+    getMealCountForEndTime(
+      endTime,
+      $("#detailStartTime")
+        ?.value || ""
+    )
+  );
 }
 
-function seedData() {
-  const seeded = {
-    version: DATA_FORMAT_VERSION,
-    schema: clone(DEFAULT_SCHEMA),
-    products: clone(DEFAULT_PRODUCTS),
-    transactions: clone(DEFAULT_TRANSACTIONS),
-    accounts: clone(DEFAULT_ACCOUNTS),
-    accountAudit: [],
-    updatedAt: new Date().toISOString(),
-  };
-  return migrateStoreData(seeded).store;
+
+function renderDetailSummary() {
+  const mainOT =
+    $("#detailHasMainShift")
+      ?.checked
+      ? (
+        parseFloat(
+          $("#detailMainOT")
+            ?.value
+        ) ||
+        0
+      )
+      : 0;
+
+  const extraOT =
+    getExtraTotal(
+      appState.selectedDate
+    );
+
+  setText(
+    "#detailExtraTotal",
+    formatHours(
+      extraOT
+    )
+  );
+
+  setText(
+    "#detailTotalOT",
+    formatHours(
+      roundHours(
+        mainOT +
+        extraOT
+      )
+    )
+  );
 }
 
-function validateBackupData(data) {
-  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("File sao lưu không hợp lệ.");
-  const normalizedData = migrateStoreData(data).store;
-  data = normalizedData;
-  if (!data.schema || !Array.isArray(data.schema.categories)) throw new Error("File sao lưu thiếu danh mục vật liệu.");
-  if (!Array.isArray(data.products) || !Array.isArray(data.transactions) || !Array.isArray(data.accounts)) {
-    throw new Error("File sao lưu thiếu cấu trúc bắt buộc.");
-  }
 
-  const ensureUnique = (values, label) => {
-    const normalized = values.map((value) => String(value || "").trim());
-    if (normalized.some((value) => !value)) throw new Error(`${label} có giá trị rỗng.`);
-    if (new Set(normalized).size !== normalized.length) throw new Error(`${label} có giá trị trùng.`);
-  };
+function setExtraEditorAvailability() {
+  const disabled =
+    !appState.extraTableAvailable;
 
-  ensureUnique(data.schema.categories.map((category) => category.id), "ID nhóm");
-  for (const category of data.schema.categories) {
-    if (!String(category.name || "").trim()) throw new Error("Có nhóm chưa có tên.");
-    if (!Array.isArray(category.units) || !category.units.length) throw new Error(`Nhóm ${category.name} chưa có đơn vị.`);
-    if (!Array.isArray(category.attributes) || !category.attributes.length) throw new Error(`Nhóm ${category.name} chưa có thuộc tính.`);
-    ensureUnique(category.attributes.map((attribute) => attribute.id), `ID thuộc tính của nhóm ${category.name}`);
-    if (!category.attributes.some((attribute) => attribute.identity && attribute.active !== false)) {
-      throw new Error(`Nhóm ${category.name} chưa có thuộc tính nhận diện.`);
-    }
-  }
+  [
+    "#extraEditorStart",
+    "#extraEditorEnd",
+    "#extraEditorNote",
+    "#saveExtraEditorButton"
+  ].forEach(
+    selector => {
+      const element =
+        $(selector);
 
-  const categoryIds = new Set(data.schema.categories.map((category) => category.id));
-  ensureUnique(data.products.map((product) => product.id), "ID vật liệu");
-  const activeSignatures = new Set();
-  for (const product of data.products) {
-    if (!categoryIds.has(product.categoryId)) throw new Error(`Vật liệu ${product.name || product.id} tham chiếu nhóm không tồn tại.`);
-    if (!String(product.name || "").trim()) throw new Error("Có vật liệu chưa có tên.");
-    if (toNumber(product.quantity, Number.NaN) < 0 || !Number.isFinite(toNumber(product.quantity, Number.NaN))) throw new Error(`Số tồn của ${product.name} không hợp lệ.`);
-    if (toNumber(product.warningLevel, Number.NaN) < 0 || !Number.isFinite(toNumber(product.warningLevel, Number.NaN))) throw new Error(`Mức cảnh báo của ${product.name} không hợp lệ.`);
-    if (!product.archived) {
-      const signatureKey = `${product.categoryId}|${String(product.signature || "")}`;
-      if (activeSignatures.has(signatureKey)) throw new Error(`File có quy cách vật liệu trùng: ${product.name}.`);
-      activeSignatures.add(signatureKey);
-    }
-  }
-
-  ensureUnique(data.transactions.map((transaction) => transaction.id), "ID giao dịch");
-  ensureUnique(data.transactions.map((transaction) => transaction.requestKey), "Khóa thao tác giao dịch");
-  const productIds = new Set(data.products.map((product) => product.id));
-  const transactionIds = new Set(data.transactions.map((transaction) => transaction.id));
-  for (const transaction of data.transactions) {
-    if (!productIds.has(transaction.productId)) throw new Error(`Giao dịch ${transaction.id} tham chiếu vật liệu không tồn tại.`);
-    if (!Object.values(TRANSACTION_TYPES).includes(transaction.type)) throw new Error(`Giao dịch ${transaction.id} có loại không hợp lệ.`);
-    const before = normalizeQuantity(transaction.beforeQuantity);
-    const after = normalizeQuantity(transaction.afterQuantity);
-    const amount = normalizeQuantity(transaction.amount);
-    if (![before, after, amount].every(Number.isFinite) || before < 0 || after < 0 || amount < 0) throw new Error(`Giao dịch ${transaction.id} có số lượng không hợp lệ.`);
-    if (transaction.reversalOf && !transactionIds.has(transaction.reversalOf)) throw new Error(`Giao dịch đảo ${transaction.id} không tìm thấy giao dịch gốc.`);
-    if (transaction.reversalTransactionId && !transactionIds.has(transaction.reversalTransactionId)) throw new Error(`Giao dịch ${transaction.id} tham chiếu giao dịch đảo không tồn tại.`);
-  }
-
-  ensureUnique(data.accounts.map((account) => account.id), "ID tài khoản");
-  ensureUnique(data.accounts.map((account) => normalizeText(account.username)), "Tên đăng nhập");
-  for (const account of data.accounts) {
-    if (!ROLE_PRESETS[account.role]) throw new Error(`Tài khoản ${account.username} có vai trò không hợp lệ.`);
-    if (!Object.values(ACCOUNT_STATUSES).includes(accountStatus(account))) throw new Error(`Tài khoản ${account.username} có trạng thái không hợp lệ.`);
-    if (!['all', 'custom'].includes(account.scopeMode)) throw new Error(`Tài khoản ${account.username} có phạm vi không hợp lệ.`);
-    validateUsername(account.username);
-    if (!account.passwordSalt || !account.passwordHash || !Number.isFinite(Number(account.passwordIterations))) throw new Error(`Tài khoản ${account.username} thiếu dữ liệu xác thực.`);
-    if (account.scopeMode === 'custom') {
-      for (const [categoryId, permissions] of Object.entries(account.categoryPermissions || {})) {
-        if (!categoryIds.has(categoryId)) throw new Error(`Tài khoản ${account.username} tham chiếu nhóm không tồn tại.`);
-        if (!Array.isArray(permissions) || permissions.some((permission) => !CATEGORY_SCOPED_PERMISSION_SET.has(permission))) throw new Error(`Tài khoản ${account.username} có quyền nhóm không hợp lệ.`);
+      if (
+        element
+      ) {
+        element.disabled =
+          disabled;
       }
     }
-  }
-  if (!Array.isArray(data.accountAudit)) throw new Error("File sao lưu thiếu nhật ký tài khoản.");
-
-  return data;
+  );
 }
 
-const localDataService = {
-  mode: "local",
-  label: "Local Preview Adapter",
-  capabilities: Object.freeze({ localBackup: true, cloud: false }),
 
-  readStore() {
-    try {
-      const raw = safeStorage.getItem(STORAGE_KEYS.demoData);
-      if (!raw) {
-        const seeded = seedData();
-        safeStorage.setItem(STORAGE_KEYS.demoData, JSON.stringify(seeded));
-        return seeded;
-      }
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.products)) throw new Error("Dữ liệu thử nghiệm sai định dạng.");
-      const migration = migrateStoreData(parsed);
-      if (migration.changed) safeStorage.setItem(STORAGE_KEYS.demoData, JSON.stringify(migration.store));
-      return migration.store;
-    } catch (error) {
-      console.warn("Không đọc được dữ liệu thử nghiệm, khởi tạo lại.", error);
-      try {
-        const raw = safeStorage.getItem(STORAGE_KEYS.demoData);
-        if (raw) safeStorage.setItem(`${STORAGE_KEYS.demoData}:corrupt:${Date.now()}`, raw);
-      } catch {
-        // Không cản trở việc khởi tạo dữ liệu mẫu.
-      }
-      const seeded = seedData();
-      safeStorage.setItem(STORAGE_KEYS.demoData, JSON.stringify(seeded));
-      return seeded;
-    }
-  },
+function renderDetailExtraList() {
+  const container =
+    $("#detailExtraList");
 
-  writeStore(store) {
-    const next = { ...store, updatedAt: new Date().toISOString() };
-    safeStorage.setItem(STORAGE_KEYS.demoData, JSON.stringify(next));
-    return next;
-  },
+  if (
+    !container
+  ) {
+    return;
+  }
 
-  async login(usernameInput, password) {
-    await delay(220);
-    const store = this.readStore();
-    let username;
-    try {
-      username = validateUsername(usernameInput);
-    } catch {
-      throw new Error("Tên đăng nhập hoặc mật khẩu không đúng.");
-    }
-    const account = store.accounts.find((item) => normalizeText(item.username).replace(/\s+/g, "") === username);
-    const validPassword = account ? await verifyPassword(password, account) : false;
-    if (!account || !validPassword) throw new Error("Tên đăng nhập hoặc mật khẩu không đúng.");
-    const status = accountStatus(account);
-    if (status === ACCOUNT_STATUSES.locked) throw new Error("Tài khoản đã bị khóa. Hãy liên hệ Super Admin.");
-    if (status !== ACCOUNT_STATUSES.active) throw new Error("Tài khoản đã ngừng sử dụng.");
-    saveAuthSession(account.id);
-    return clone(account);
-  },
+  container.innerHTML =
+    "";
 
-  async logout() {
-    await delay(60);
-    clearAuthSession();
-    return true;
-  },
+  if (
+    !appState.extraTableAvailable
+  ) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <i data-lucide="database-zap"></i>
 
-  async getSessionProfile(accountId) {
-    await delay(80);
-    const store = this.readStore();
-    const account = store.accounts.find((item) => item.id === accountId);
-    if (!account || accountStatus(account) !== ACCOUNT_STATUSES.active) return null;
-    return clone(account);
-  },
+        <strong>
+          Chưa đọc được bảng ca thêm
+        </strong>
 
-  async loadBootstrap() {
-    await delay(120);
-    const store = this.readStore();
-    const actor = storeActor(store);
-    if (!actor || accountStatus(actor) !== ACCOUNT_STATUSES.active) throw new Error("Phiên đăng nhập không còn hợp lệ.");
-    return clone({ schema: store.schema, products: store.products.filter((product) => !product.archived), profile: actor });
-  },
+        <p>
+          Kiểm tra quyền Supabase trong phần Cài đặt.
+        </p>
+      </div>
+    `;
 
-  async listTransactions({ limit = 50, offset = 0 } = {}) {
-    await delay(100);
-    const store = this.readStore();
-    const actor = storeActor(store);
-    if (!actor) throw new Error("Phiên đăng nhập không hợp lệ.");
-    const visible = store.transactions.filter((transaction) => !transaction.hiddenAt && accountHasPermission(actor, PERMISSIONS.viewHistory, transaction.categoryId, store.schema));
-    return clone(visible.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(1, limit)));
-  },
+    refreshIcons();
 
-  async listAccounts() {
-    await delay(100);
-    const store = this.readStore();
-    assertStorePermission(store, PERMISSIONS.manageAccounts);
-    return clone(store.accounts);
-  },
+    return;
+  }
 
-  async listAccountAudit({ limit = 50 } = {}) {
-    await delay(90);
-    const store = this.readStore();
-    assertStorePermission(store, PERMISSIONS.manageAccounts);
-    return clone((store.accountAudit || []).slice(0, Math.max(1, limit)));
-  },
+  const extras =
+    getExtraShifts(
+      appState.selectedDate
+    ).sort(
+      (
+        a,
+        b
+      ) =>
+        new Date(
+          a.start_at
+        ) -
+        new Date(
+          b.start_at
+        )
+    );
 
+  if (
+    !extras.length
+  ) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <i data-lucide="clock-plus"></i>
 
-  async saveProduct(payload) {
-    await delay(180);
-    const store = this.readStore();
-    const normalized = validateProductPayload(payload, store.schema, store.products);
-    const requiredPermission = normalized.id ? PERMISSIONS.editProduct : PERMISSIONS.addProduct;
-    const actor = assertStorePermission(store, requiredPermission, normalized.categoryId);
-    const now = new Date().toISOString();
-    let product;
+        <strong>
+          Chưa có ca thêm
+        </strong>
 
-    if (normalized.id) {
-      const index = store.products.findIndex((item) => item.id === normalized.id && !item.archived);
-      if (index < 0) throw new Error("Không tìm thấy vật liệu cần sửa.");
-      product = {
-        ...store.products[index],
-        ...normalized,
-        attributes: { ...(store.products[index].attributes || {}), ...(normalized.attributes || {}) },
-        id: store.products[index].id,
-        quantity: store.products[index].quantity,
-        archived: false,
-        updatedAt: now,
-      };
-      store.products[index] = product;
-    } else {
-      product = {
-        ...normalized,
-        id: makeId("prd"),
-        quantity: 0,
-        archived: false,
-        createdAt: now,
-        updatedAt: now,
-      };
-      store.products.unshift(product);
-    }
+        <p>
+          Có thể chấm ở màn hình chính hoặc nhập thủ công bên dưới.
+        </p>
+      </div>
+    `;
 
-    const initialStock = toNumber(payload.initialStock, 0);
-    if (!normalized.id && initialStock > 0) {
-      product.quantity = initialStock;
-      product.updatedAt = now;
-      const initialTransactionId = makeId("txn");
-      store.transactions.unshift({
-        id: initialTransactionId,
-        requestKey: `initial:${product.id}`,
-        productId: product.id,
-        productName: product.name,
-        categoryId: product.categoryId,
-        type: TRANSACTION_TYPES.initial,
-        amount: normalizeQuantity(initialStock),
-        beforeQuantity: 0,
-        afterQuantity: normalizeQuantity(initialStock),
-        deltaQuantity: normalizeQuantity(initialStock),
-        unit: product.unit,
-        note: "Khởi tạo tồn khi tạo vật liệu",
-        actor: actor.displayName,
-        actorId: actor.id,
-        actorRole: actor.role,
-        productSnapshot: createProductSnapshot(product, store.schema),
-        reversedAt: null,
-        reversedBy: null,
-        reversalTransactionId: null,
-        reversalOf: null,
-        originalType: null,
-        createdAt: now,
-      });
-    }
+    refreshIcons();
 
-    this.writeStore(store);
-    return clone(product);
-  },
+    return;
+  }
 
-  async archiveProduct(productId) {
-    await delay(160);
-    const store = this.readStore();
-    const index = store.products.findIndex((item) => item.id === productId && !item.archived);
-    if (index < 0) throw new Error("Không tìm thấy vật liệu cần lưu trữ.");
-    assertStorePermission(store, PERMISSIONS.archiveProduct, store.products[index].categoryId);
-    store.products[index] = { ...store.products[index], archived: true, updatedAt: new Date().toISOString() };
-    this.writeStore(store);
-    return true;
-  },
+  extras.forEach(
+    item => {
+      const active =
+        item.status ===
+        "working" &&
+        !item.end_at;
 
-  async deleteTestProduct(productId, expectedRevision = null, requestKey = "") {
-    await delay(180);
-    return withDemoWriteLock(async () => {
-      const store = this.readStore();
-      const actor = assertStorePermission(store, PERMISSIONS.manageData);
-      if (!["admin", "superadmin"].includes(normalizeRoleCode(actor.role))) {
-        throw new Error("Chỉ Admin hoặc Super Admin được xóa vật liệu test.");
-      }
-      const index = store.products.findIndex((item) => item.id === productId);
-      if (index < 0) throw new Error("Không tìm thấy vật liệu cần xóa.");
-      const product = store.products[index];
-      if (expectedRevision !== null && expectedRevision !== undefined && Number(product.revision ?? 1) !== Number(expectedRevision)) {
-        throw new Error("Vật liệu đã được cập nhật. Hãy tải lại rồi thử lại.");
-      }
-      const transactionCount = store.transactions.filter((transaction) => transaction.productId === productId).length;
-      store.transactions = store.transactions.filter((transaction) => transaction.productId !== productId);
-      store.products.splice(index, 1);
-      this.writeStore(store);
-      return { deleted: true, productId, transactionCount, requestKey: String(requestKey || ""), duplicate: false };
-    });
-  },
+      const record =
+        document.createElement(
+          "div"
+        );
 
-  async applyTransaction(payload) {
-    await delay(200);
-    return withDemoWriteLock(async () => {
-      const store = this.readStore();
-    const requestKey = String(payload.requestKey || "").trim();
-    if (!requestKey) throw new Error("Thiếu khóa thao tác giao dịch.");
-    const existingTransaction = store.transactions.find((transaction) => transaction.requestKey === requestKey);
-    if (existingTransaction) {
-      const samePayload = existingTransaction.productId === payload.productId
-        && existingTransaction.type === payload.type
-        && quantitiesEqual(existingTransaction.amount, payload.amount)
-        && String(existingTransaction.note || "") === String(payload.note || "").trim();
-      if (!samePayload) throw new Error("Khóa thao tác đã được dùng cho một giao dịch khác.");
-      const existingProduct = store.products.find((product) => product.id === existingTransaction.productId);
-      if (!existingProduct) throw new Error("Giao dịch đã tồn tại nhưng vật liệu không còn trong dữ liệu.");
-      return clone({ product: existingProduct, transaction: existingTransaction, duplicate: true });
-    }
+      record.className =
+        active
+          ? "extra-record active-record"
+          : "extra-record";
 
-    const index = store.products.findIndex((item) => item.id === payload.productId && !item.archived);
-    if (index < 0) throw new Error("Không tìm thấy vật liệu để giao dịch.");
-    const product = store.products[index];
-    const actor = assertStorePermission(store, transactionPermission(payload.type), product.categoryId);
-    const normalized = validateTransactionPayload(payload, product);
-    const now = new Date().toISOString();
+      record.innerHTML = `
+        <span class="extra-record-icon">
+          <i data-lucide="${
+            active
+              ? "activity"
+              : "clock-check"
+          }"></i>
+        </span>
 
-    const updatedProduct = { ...product, quantity: normalized.afterQuantity, updatedAt: now };
-    const transaction = {
-      id: makeId("txn"),
-      requestKey,
-      productId: product.id,
-      productName: product.name,
-      categoryId: product.categoryId,
-      type: normalized.type,
-      amount: normalized.amount,
-      beforeQuantity: normalized.beforeQuantity,
-      afterQuantity: normalized.afterQuantity,
-      deltaQuantity: normalized.deltaQuantity,
-      unit: product.unit,
-      note: normalized.note,
-      actor: actor.displayName,
-      actorId: actor.id,
-      actorRole: actor.role,
-      productSnapshot: createProductSnapshot(product, store.schema),
-      reversedAt: null,
-      reversedBy: null,
-      reversalTransactionId: null,
-      reversalOf: null,
-      originalType: null,
-      createdAt: now,
-    };
+        <span class="extra-record-copy">
+          <strong>
+            ${formatTimeFromISO(
+              item.start_at
+            )}
+            →
+            ${
+              item.end_at
+                ? formatTimeFromISO(
+                  item.end_at
+                )
+                : "Đang chạy"
+            }
+          </strong>
 
-    store.products[index] = updatedProduct;
-    store.transactions.unshift(transaction);
-      this.writeStore(store);
-      return clone({ product: updatedProduct, transaction, duplicate: false });
-    });
-  },
+          <small>
+            ${escapeHTML(
+              item.note ||
+              (
+                active
+                  ? "Ca thêm đang chạy"
+                  : "Không có ghi chú"
+              )
+            )}
+          </small>
+        </span>
 
-  async reverseTransaction(payload) {
-    await delay(220);
-    return withDemoWriteLock(async () => {
-      const store = this.readStore();
-    const requestKey = String(payload.requestKey || "").trim();
-    if (!requestKey) throw new Error("Thiếu khóa thao tác đảo giao dịch.");
-    const existingReversal = store.transactions.find((transaction) => transaction.requestKey === requestKey);
-    if (existingReversal) {
-      const samePayload = existingReversal.reversalOf === payload.transactionId
-        && String(existingReversal.note || "") === String(payload.reason || "").trim();
-      if (!samePayload) throw new Error("Khóa thao tác đảo đã được dùng cho một yêu cầu khác.");
-      const existingProduct = store.products.find((product) => product.id === existingReversal.productId);
-      if (!existingProduct) throw new Error("Giao dịch đảo đã tồn tại nhưng vật liệu không còn trong dữ liệu.");
-      return clone({ product: existingProduct, transaction: existingReversal, duplicate: true });
-    }
-
-    const originalIndex = store.transactions.findIndex((transaction) => transaction.id === payload.transactionId);
-    if (originalIndex < 0) throw new Error("Không tìm thấy giao dịch cần đảo.");
-    const original = store.transactions[originalIndex];
-    const actor = assertStorePermission(store, PERMISSIONS.reverseTransaction, original.categoryId);
-    if (original.type === TRANSACTION_TYPES.reverse || original.type === TRANSACTION_TYPES.initial) {
-      throw new Error("Không hỗ trợ đảo giao dịch khởi tạo hoặc một giao dịch đảo.");
-    }
-    if (original.reversalTransactionId || original.reversedAt) throw new Error("Giao dịch này đã được đảo trước đó.");
-
-    const latest = store.transactions.find((transaction) => transaction.productId === original.productId);
-    if (!latest || latest.id !== original.id) {
-      throw new Error("Chỉ được đảo giao dịch mới nhất của vật liệu để không làm sai chuỗi tồn kho.");
-    }
-
-    const productIndex = store.products.findIndex((product) => product.id === original.productId && !product.archived);
-    if (productIndex < 0) throw new Error("Vật liệu không còn khả dụng để đảo giao dịch.");
-    const product = store.products[productIndex];
-    if (!quantitiesEqual(product.quantity, original.afterQuantity)) {
-      throw new Error("Tồn hiện tại không khớp giao dịch gốc. Hãy tải lại dữ liệu và kiểm tra lịch sử.");
-    }
-
-    const reason = String(payload.reason || "").trim();
-    if (!reason) throw new Error("Vui lòng nhập lý do đảo giao dịch.");
-    const now = new Date().toISOString();
-    const afterQuantity = normalizeQuantity(original.beforeQuantity);
-    const reversal = {
-      id: makeId("txn"),
-      requestKey,
-      productId: product.id,
-      productName: original.productName,
-      categoryId: original.categoryId,
-      type: TRANSACTION_TYPES.reverse,
-      amount: normalizeQuantity(Math.abs(afterQuantity - product.quantity), 0),
-      beforeQuantity: normalizeQuantity(product.quantity),
-      afterQuantity,
-      deltaQuantity: normalizeQuantity(afterQuantity - product.quantity, 0),
-      unit: original.unit,
-      note: reason,
-      actor: actor.displayName,
-      actorId: actor.id,
-      actorRole: actor.role,
-      productSnapshot: clone(original.productSnapshot || createProductSnapshot(product, store.schema, original)),
-      reversedAt: null,
-      reversedBy: null,
-      reversalTransactionId: null,
-      reversalOf: original.id,
-      originalType: original.type,
-      createdAt: now,
-    };
-
-    store.transactions[originalIndex] = {
-      ...original,
-      reversedAt: now,
-      reversedBy: actor.displayName,
-      reversalTransactionId: reversal.id,
-    };
-    store.products[productIndex] = { ...product, quantity: afterQuantity, updatedAt: now };
-      store.transactions.unshift(reversal);
-      this.writeStore(store);
-      return clone({ product: store.products[productIndex], transaction: reversal, original: store.transactions[originalIndex], duplicate: false });
-    });
-  },
-
-  addAccountAudit(store, action, target, detail = "", actor = storeActor(store)) {
-    if (!actor) throw new Error("Không tìm thấy tài khoản thực hiện thao tác.");
-    if (!Array.isArray(store.accountAudit)) store.accountAudit = [];
-    store.accountAudit.unshift({
-      id: makeId("audit"),
-      action,
-      targetAccountId: target?.id || "",
-      targetUsername: target?.username || "",
-      actorId: actor.id,
-      actorName: actor.displayName,
-      actorRole: actor.role,
-      detail: String(detail || ""),
-      createdAt: new Date().toISOString(),
-    });
-    store.accountAudit = store.accountAudit.slice(0, 500);
-  },
-
-  async saveAccount(payload) {
-    await delay(160);
-    const store = this.readStore();
-    const actor = assertStorePermission(store, PERMISSIONS.manageAccounts);
-    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được quản lý tài khoản.");
-    const existing = payload.id ? store.accounts.find((item) => item.id === payload.id) : null;
-    if (payload.id && !existing) throw new Error("Không tìm thấy tài khoản cần sửa.");
-    if (!canAccountManageTarget(actor, existing)) throw new Error("Bạn không có quyền quản lý tài khoản này.");
-
-    const username = validateUsername(payload.username);
-    const displayName = String(payload.displayName || "").trim();
-    const role = String(payload.role || "viewer");
-    const scopeMode = payload.scopeMode === "custom" ? "custom" : "all";
-    const status = Object.values(ACCOUNT_STATUSES).includes(payload.status) ? payload.status : ACCOUNT_STATUSES.active;
-    if (!displayName) throw new Error("Vui lòng nhập tên hiển thị.");
-    if (!ROLE_PRESETS[role]) throw new Error("Vai trò không hợp lệ.");
-    if (!assignableRolesForAccount(actor, existing).includes(role)) throw new Error("Bạn không được gán vai trò này.");
-    if (existing && username !== existing.username) throw new Error("Không đổi tên đăng nhập sau khi tạo tài khoản.");
-    const duplicate = store.accounts.find((account) => account.id !== payload.id && normalizeText(account.username).replace(/\s+/g, "") === username);
-    if (duplicate) throw new Error("Tên đăng nhập đã tồn tại.");
-
-    if (normalizeRoleCode(existing?.role) === "superadmin" && normalizeRoleCode(role) !== "superadmin" && accountStatus(existing) === ACCOUNT_STATUSES.active) {
-      const remaining = store.accounts.filter((account) => account.id !== existing.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
-      if (!remaining.length) throw new Error("Phải giữ ít nhất một Super Admin đang hoạt động.");
-    }
-
-    if (existing && status !== accountStatus(existing)) {
-      if (!accountHasPermission(actor, PERMISSIONS.lockAccounts, null, store.schema)) throw new Error("Bạn không có quyền thay đổi trạng thái tài khoản.");
-      if (existing.id === actor.id && status !== ACCOUNT_STATUSES.active) throw new Error("Không thể tự khóa hoặc ngừng tài khoản đang đăng nhập.");
-      if (normalizeRoleCode(existing.role) === "superadmin" && accountStatus(existing) === ACCOUNT_STATUSES.active && status !== ACCOUNT_STATUSES.active) {
-        const remaining = store.accounts.filter((account) => account.id !== existing.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
-        if (!remaining.length) throw new Error("Phải giữ ít nhất một Super Admin đang hoạt động.");
-      }
-    }
-
-    const allowedScoped = new Set(rolePermissions(role).includes("*") ? CATEGORY_SCOPED_PERMISSIONS : rolePermissions(role).filter((permission) => isCategoryScopedPermission(permission)));
-    const categoryPermissions = {};
-    if (scopeMode === "custom") {
-      for (const category of store.schema.categories) {
-        const requested = Array.isArray(payload.categoryPermissions?.[category.id]) ? payload.categoryPermissions[category.id] : [];
-        categoryPermissions[category.id] = [...new Set(requested.filter((permission) => allowedScoped.has(permission)))];
-      }
-      if (!Object.values(categoryPermissions).some((permissions) => permissions.includes(PERMISSIONS.viewInventory))) {
-        throw new Error("Phạm vi tùy chỉnh cần cho phép xem kho ở ít nhất một nhóm.");
-      }
-      validateCategoryPermissionDependencies(categoryPermissions, store.schema);
-    }
-
-    const now = new Date().toISOString();
-    let account;
-    if (existing) {
-      const index = store.accounts.findIndex((item) => item.id === existing.id);
-      account = { ...existing, username, displayName, role, status, active: status === ACCOUNT_STATUSES.active, scopeMode, categoryPermissions, updatedAt: now };
-      store.accounts[index] = account;
-      this.addAccountAudit(store, "update_account", account, `Vai trò: ${roleLabel(role)} · Trạng thái: ${accountStatusLabel(account)} · Phạm vi: ${scopeMode}`, actor);
-    } else {
-      if (String(payload.password || "") !== String(payload.passwordConfirm || "")) throw new Error("Xác nhận mật khẩu không khớp.");
-      const passwordRecord = await createPasswordRecord(payload.password);
-      account = {
-        id: makeId("acc"), username, displayName, role, status: ACCOUNT_STATUSES.active, active: true, scopeMode, categoryPermissions,
-        ...passwordRecord, createdAt: now, updatedAt: now,
-      };
-      store.accounts.unshift(account);
-      this.addAccountAudit(store, "create_account", account, `Vai trò: ${roleLabel(role)} · Phạm vi: ${scopeMode} · Không bắt buộc đổi mật khẩu lần đầu`, actor);
-    }
-    this.writeStore(store);
-    return clone(account);
-  },
-
-  async setAccountPassword(accountId, password, passwordConfirm) {
-    await delay(160);
-    const store = this.readStore();
-    const actor = assertStorePermission(store, PERMISSIONS.resetAccountPassword);
-    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được đặt lại mật khẩu.");
-    const index = store.accounts.findIndex((account) => account.id === accountId);
-    if (index < 0) throw new Error("Không tìm thấy tài khoản.");
-    const target = store.accounts[index];
-    if (!canAccountManageTarget(actor, target)) throw new Error("Bạn không có quyền thao tác với tài khoản này.");
-    if (String(password || "") !== String(passwordConfirm || "")) throw new Error("Xác nhận mật khẩu không khớp.");
-    const passwordRecord = await createPasswordRecord(password);
-    store.accounts[index] = { ...target, ...passwordRecord, updatedAt: new Date().toISOString() };
-    this.addAccountAudit(store, "reset_password", store.accounts[index], "Super Admin đã đặt mật khẩu mới; tài khoản không bị bắt buộc đổi ở lần đăng nhập tiếp theo.", actor);
-    this.writeStore(store);
-    return true;
-  },
-
-  async archiveAccount(accountId) {
-    await delay(150);
-    const store = this.readStore();
-    const actor = assertStorePermission(store, PERMISSIONS.lockAccounts);
-    const target = store.accounts.find((account) => account.id === accountId);
-    if (!target) throw new Error("Không tìm thấy tài khoản.");
-    if (!canAccountManageTarget(actor, target)) throw new Error("Bạn không có quyền thao tác với tài khoản này.");
-    if (target.id === actor.id) throw new Error("Không thể tự ngừng tài khoản đang đăng nhập.");
-    if (normalizeRoleCode(target.role) === "superadmin" && accountStatus(target) === ACCOUNT_STATUSES.active) {
-      const remaining = store.accounts.filter((account) => account.id !== target.id && normalizeRoleCode(account.role) === "superadmin" && accountStatus(account) === ACCOUNT_STATUSES.active);
-      if (!remaining.length) throw new Error("Phải giữ ít nhất một Super Admin đang hoạt động.");
-    }
-    const index = store.accounts.findIndex((account) => account.id === accountId);
-    store.accounts[index] = { ...target, status: ACCOUNT_STATUSES.disabled, active: false, updatedAt: new Date().toISOString() };
-    this.addAccountAudit(store, "disable_account", store.accounts[index], "Ngừng sử dụng tài khoản.", actor);
-    this.writeStore(store);
-    return true;
-  },
-
-  async saveCategory(payload) {
-    await delay(180);
-    const store = this.readStore();
-    assertStorePermission(store, PERMISSIONS.manageSchema);
-    const name = String(payload.name || "").trim();
-    if (!name) throw new Error("Vui lòng nhập tên nhóm.");
-    const units = Array.from(new Set(String(payload.units || "").split(",").map((item) => item.trim()).filter(Boolean)));
-    if (!units.length) throw new Error("Nhóm phải có ít nhất một đơn vị.");
-    const defaultUnit = String(payload.defaultUnit || units[0]).trim();
-    if (!units.includes(defaultUnit)) throw new Error("Đơn vị mặc định phải nằm trong danh sách đơn vị.");
-    const warningDefault = toNumber(payload.warningDefault, Number.NaN);
-    if (!Number.isFinite(warningDefault) || warningDefault < 0) throw new Error("Mức cảnh báo mặc định không hợp lệ.");
-
-    const existingCategory = payload.id ? store.schema.categories.find((category) => category.id === payload.id) : null;
-    const existingAttributesById = new Map((existingCategory?.attributes || []).map((attribute) => [attribute.id, attribute]));
-    let nextIdentityOrder = (existingCategory?.attributes || []).reduce((maximum, attribute) => {
-      const order = toOptionalNumber(attribute.identityOrder);
-      return order !== null ? Math.max(maximum, order) : maximum;
-    }, -1) + 1;
-
-    const attributes = payload.attributes.map((attribute, index) => {
-      const attrName = String(attribute.name || "").trim();
-      if (!attrName) throw new Error(`Thuộc tính ${index + 1} chưa có tên.`);
-      const type = ["text", "number", "select"].includes(attribute.type) ? attribute.type : "text";
-      const options = type === "select"
-        ? Array.from(new Set(String(attribute.options || "").split(",").map((item) => item.trim()).filter(Boolean)))
-        : [];
-      if (type === "select" && !options.length) throw new Error(`${attrName} cần ít nhất một lựa chọn.`);
-      const attributeId = attribute.id || `${payload.id || slugify(name)}-${slugify(attrName)}-${index + 1}`;
-      const previousAttribute = existingAttributesById.get(attributeId);
-      let identityOrder = toOptionalNumber(previousAttribute?.identityOrder);
-      if (identityOrder === null) identityOrder = toOptionalNumber(attribute.identityOrder);
-      if (Boolean(attribute.identity) && identityOrder === null) {
-        identityOrder = nextIdentityOrder;
-        nextIdentityOrder += 1;
-      }
-      return {
-        id: attributeId,
-        name: attrName,
-        type,
-        options,
-        unit: String(attribute.unit || "").trim(),
-        required: Boolean(attribute.required),
-        identity: Boolean(attribute.identity),
-        list: Boolean(attribute.list),
-        active: true,
-        sortOrder: index,
-        identityOrder,
-      };
-    });
-    if (!attributes.length) throw new Error("Nhóm cần ít nhất một thuộc tính.");
-    if (!attributes.some((attribute) => attribute.identity)) throw new Error("Cần ít nhất một thuộc tính nhận diện để chống trùng.");
-
-    const duplicateName = store.schema.categories.find((category) => category.id !== payload.id && normalizeText(category.name) === normalizeText(name));
-    if (duplicateName) throw new Error("Tên nhóm đã tồn tại.");
-
-    if (existingCategory) {
-      const categoryAllProducts = store.products.filter((product) => product.categoryId === payload.id);
-      const categoryProducts = categoryAllProducts.filter((product) => !product.archived);
-      const hasActiveProducts = categoryProducts.length > 0;
-      if (payload.active === false && hasActiveProducts) {
-        throw new Error("Nhóm vẫn còn vật liệu đang hoạt động nên chưa thể ngừng sử dụng.");
-      }
-      const oldAttributesById = new Map(existingCategory.attributes.map((attribute) => [attribute.id, attribute]));
-      const newAttributesById = new Map(attributes.map((attribute) => [attribute.id, attribute]));
-      for (const [attributeId, oldAttribute] of oldAttributesById) {
-        const nextAttribute = newAttributesById.get(attributeId);
-        const productsUsingAttribute = categoryAllProducts.filter((product) => {
-          const value = product.attributes?.[attributeId];
-          return value !== "" && value !== null && value !== undefined;
-        });
-        if (!nextAttribute) {
-          if (oldAttribute.identity && hasActiveProducts) {
-            throw new Error(`Không thể xóa thuộc tính nhận diện “${oldAttribute.name}” khi nhóm đang có vật liệu hoạt động.`);
+        <span class="extra-record-duration">
+          ${
+            active
+              ? "LIVE"
+              : formatHours(
+                item.duration_hours
+              )
           }
-          if (productsUsingAttribute.length) {
-            attributes.push({ ...oldAttribute, active: false, required: false, identity: false, list: false, sortOrder: attributes.length });
-          }
-          continue;
-        }
-        if (productsUsingAttribute.length && nextAttribute.type !== oldAttribute.type) {
-          throw new Error(`Không thể đổi kiểu dữ liệu của thuộc tính “${oldAttribute.name}” khi đã có dữ liệu.`);
-        }
-        if (hasActiveProducts && !oldAttribute.required && nextAttribute.required) {
-          const hasMissingValue = categoryProducts.some((product) => {
-            const value = product.attributes?.[attributeId];
-            return value === "" || value === null || value === undefined;
+        </span>
+
+        <span class="extra-record-actions">
+          <button
+            type="button"
+            class="edit-extra-button"
+            data-extra-id="${item.id}"
+          >
+            <i data-lucide="pencil"></i>
+          </button>
+
+          <button
+            type="button"
+            class="delete-extra-button"
+            data-extra-id="${item.id}"
+          >
+            <i data-lucide="trash-2"></i>
+          </button>
+        </span>
+      `;
+
+      container.appendChild(
+        record
+      );
+    }
+  );
+
+  $$(
+    ".edit-extra-button"
+  ).forEach(
+    button => {
+      button.addEventListener(
+        "click",
+        () =>
+          editExtraShift(
+            button.dataset
+              .extraId
+          )
+      );
+    }
+  );
+
+  $$(
+    ".delete-extra-button"
+  ).forEach(
+    button => {
+      button.addEventListener(
+        "click",
+        () =>
+          runLockedAction(
+            `deleteExtra:${button.dataset.extraId}`,
+            [`.delete-extra-button[data-extra-id="${button.dataset.extraId}"]`],
+            () => deleteExtraShift(
+              button.dataset
+                .extraId
+            )
+          )
+      );
+    }
+  );
+
+  refreshIcons();
+}
+
+
+function editExtraShift(
+  extraId
+) {
+  const item =
+    appState.extraShifts
+      .find(
+        shift =>
+          String(
+            shift.id
+          ) ===
+          String(
+            extraId
+          )
+      );
+
+  if (
+    !item
+  ) {
+    return;
+  }
+
+  appState.editingExtraId =
+    extraId;
+
+  setText(
+    "#extraEditorEyebrow",
+    "CHỈNH SỬA"
+  );
+
+  setText(
+    "#extraEditorTitle",
+    "Sửa ca thêm"
+  );
+
+  setValue(
+    "#extraEditorStart",
+    formatTimeFromISO(
+      item.start_at
+    )
+  );
+
+  setValue(
+    "#extraEditorEnd",
+    item.end_at
+      ? formatTimeFromISO(
+        item.end_at
+      )
+      : ""
+  );
+
+  setValue(
+    "#extraEditorNote",
+    item.note ||
+    ""
+  );
+
+  $("#cancelExtraEditButton")
+    ?.classList
+    .remove(
+      "hidden"
+    );
+
+  setText(
+    "#saveExtraEditorButton span",
+    "Lưu ca thêm"
+  );
+
+  $("#extraEditorStart")
+    ?.scrollIntoView({
+      behavior:
+        "smooth",
+
+      block:
+        "center"
+    });
+}
+
+
+function resetExtraEditor() {
+  appState.editingExtraId =
+    null;
+
+  setText(
+    "#extraEditorEyebrow",
+    "THÊM THỦ CÔNG"
+  );
+
+  setText(
+    "#extraEditorTitle",
+    "Ghi ca thêm"
+  );
+
+  setValue(
+    "#extraEditorStart",
+    ""
+  );
+
+  setValue(
+    "#extraEditorEnd",
+    ""
+  );
+
+  setValue(
+    "#extraEditorNote",
+    ""
+  );
+
+  $("#cancelExtraEditButton")
+    ?.classList
+    .add(
+      "hidden"
+    );
+
+  setText(
+    "#saveExtraEditorButton span",
+    "Lưu ca thêm"
+  );
+}
+
+
+async function saveExtraEditor() {
+  if (
+    !ensureExtraTable()
+  ) {
+    return;
+  }
+
+  const dateKey =
+    appState.selectedDate;
+
+  const startTime =
+    $("#extraEditorStart")
+      ?.value ||
+    "";
+
+  const endTime =
+    $("#extraEditorEnd")
+      ?.value ||
+    "";
+
+  const note =
+    $("#extraEditorNote")
+      ?.value
+      .trim() ||
+    "";
+
+  if (
+    !startTime
+  ) {
+    showToast(
+      "Vui lòng nhập giờ bắt đầu.",
+      true
+    );
+
+    return;
+  }
+
+  const editingItem =
+    appState.editingExtraId
+      ? appState.extraShifts
+        .find(
+          item =>
+            String(
+              item.id
+            ) ===
+            String(
+              appState.editingExtraId
+            )
+        )
+      : null;
+
+  if (
+    !editingItem &&
+    !endTime
+  ) {
+    showToast(
+      "Ca thêm thủ công cần có giờ kết thúc.",
+      true
+    );
+
+    return;
+  }
+
+  const oldBaseOT =
+    getBaseOT(
+      dateKey
+    );
+
+  setLoading(
+    true
+  );
+
+  try {
+    if (
+      editingItem
+    ) {
+      const startDate =
+        getLocalDateTime(
+          dateKey,
+          startTime
+        );
+
+      const payload =
+        endTime
+          ? (() => {
+            const {
+              start,
+              end
+            } =
+              combineExtraDateTime(
+                dateKey,
+                startTime,
+                endTime
+              );
+
+            return {
+              work_date:
+                dateKey,
+
+              start_at:
+                start.toISOString(),
+
+              end_at:
+                end.toISOString(),
+
+              duration_hours:
+                calculateDurationHours(
+                  start,
+                  end
+                ),
+
+              status:
+                "completed",
+
+              note
+            };
+          })()
+          : {
+            work_date:
+              dateKey,
+
+            start_at:
+              startDate.toISOString(),
+
+            end_at:
+              null,
+
+            duration_hours:
+              0,
+
+            status:
+              "working",
+
+            note
+          };
+
+      const {
+        error
+      } =
+        await supabaseClient
+          .from(
+            "extra_shifts"
+          )
+          .update(
+            payload
+          )
+          .eq(
+            "id",
+            editingItem.id
+          )
+          .eq(
+            "username",
+            appState.currentUser
+          );
+
+      if (
+        error
+      ) {
+        throw error;
+      }
+    } else {
+      const {
+        start,
+        end
+      } =
+        combineExtraDateTime(
+          dateKey,
+          startTime,
+          endTime
+        );
+
+      const {
+        error
+      } =
+        await supabaseClient
+          .from(
+            "extra_shifts"
+          )
+          .insert({
+            username:
+              appState.currentUser,
+
+            work_date:
+              dateKey,
+
+            start_at:
+              start.toISOString(),
+
+            end_at:
+              end.toISOString(),
+
+            duration_hours:
+              calculateDurationHours(
+                start,
+                end
+              ),
+
+            status:
+              "completed",
+
+            note
           });
-          if (hasMissingValue) throw new Error(`Chưa thể bắt buộc thuộc tính “${oldAttribute.name}” vì dữ liệu cũ còn thiếu giá trị.`);
-        }
-      }
-      if (hasActiveProducts) {
-        const unitsInUse = new Set(categoryProducts.map((product) => product.unit));
-        for (const usedUnit of unitsInUse) {
-          if (!units.includes(usedUnit)) throw new Error(`Đơn vị “${usedUnit}” đang được vật liệu sử dụng nên chưa thể xóa.`);
-        }
-        const oldIdentity = existingCategory.attributes
-          .filter((attribute) => attribute.active !== false && attribute.identity)
-          .map((attribute) => `${attribute.id}:${attribute.type}`)
-          .sort()
-          .join("|");
-        const newIdentity = attributes
-          .filter((attribute) => attribute.active !== false && attribute.identity)
-          .map((attribute) => `${attribute.id}:${attribute.type}`)
-          .sort()
-          .join("|");
-        if (oldIdentity !== newIdentity) {
-          throw new Error("Nhóm đã có vật liệu. Không thể đổi cấu trúc thuộc tính nhận diện nếu chưa chạy migration chữ ký.");
-        }
+
+      if (
+        error
+      ) {
+        throw error;
       }
     }
 
-    const nowCategory = {
-      id: payload.id || slugify(name),
-      name,
-      icon: String(payload.icon || "◇").trim().slice(0, 2) || "◇",
-      units,
-      defaultUnit,
-      warningDefault,
-      active: payload.active !== false,
-      attributes,
-    };
+    await syncDayAfterExtraChange(
+      dateKey,
+      oldBaseOT
+    );
 
-    if (payload.id) {
-      const index = store.schema.categories.findIndex((category) => category.id === payload.id);
-      if (index < 0) throw new Error("Không tìm thấy nhóm cần sửa.");
+    await refreshData(false, parseDateKey(dateKey), true);
 
-      const refreshedProducts = store.products.map((product) => {
-        if (product.categoryId !== payload.id) return product;
-        const signature = buildProductSignature(nowCategory, product.attributes || {});
-        const name = String(product.customName || "").trim()
-          ? product.name
-          : buildProductName(nowCategory, product.attributes || {});
-        return { ...product, signature, name, updatedAt: new Date().toISOString() };
+    resetExtraEditor();
+
+    renderDetailExtraList();
+
+    renderDetailSummary();
+
+    renderHistory();
+
+    showToast(
+      editingItem
+        ? "Đã cập nhật ca thêm."
+        : "Đã thêm ca mới."
+    );
+  } catch (
+    error
+  ) {
+    showToast(
+      `Không thể lưu ca thêm: ${
+        error.message ||
+        "Lỗi không xác định"
+      }`,
+      true
+    );
+  } finally {
+    setLoading(
+      false
+    );
+  }
+}
+
+
+async function deleteExtraShift(
+  extraId
+) {
+  if (
+    !ensureExtraTable()
+  ) {
+    return;
+  }
+
+  const item =
+    appState.extraShifts
+      .find(
+        shift =>
+          String(
+            shift.id
+          ) ===
+          String(
+            extraId
+          )
+      );
+
+  if (
+    !item ||
+    !confirm(
+      "Xóa ca thêm này?"
+    )
+  ) {
+    return;
+  }
+
+  const oldBaseOT =
+    getBaseOT(
+      item.work_date
+    );
+
+  setLoading(
+    true
+  );
+
+  try {
+    const {
+      error
+    } =
+      await supabaseClient
+        .from(
+          "extra_shifts"
+        )
+        .delete()
+        .eq(
+          "id",
+          item.id
+        )
+        .eq(
+          "username",
+          appState.currentUser
+        );
+
+    if (
+      error
+    ) {
+      throw error;
+    }
+
+    await syncDayAfterExtraChange(
+      item.work_date,
+      oldBaseOT
+    );
+
+    await refreshData(false, parseDateKey(item.work_date), true);
+
+    renderDetailExtraList();
+
+    renderDetailSummary();
+
+    renderHistory();
+
+    showToast(
+      "Đã xóa ca thêm."
+    );
+  } catch (
+    error
+  ) {
+    showToast(
+      `Không thể xóa ca thêm: ${
+        error.message ||
+        "Lỗi không xác định"
+      }`,
+      true
+    );
+  } finally {
+    setLoading(
+      false
+    );
+  }
+}
+
+
+async function saveDayDetails() {
+  const dateKey = appState.selectedDate;
+
+  if (!dateKey) {
+    return;
+  }
+
+  const mainEnabled = $("#detailHasMainShift")?.checked || false;
+  const startTime = $("#detailStartTime")?.value || "";
+  const endTime = $("#detailEndTime")?.value || "";
+
+  if (mainEnabled && (!startTime || !endTime)) {
+    showToast("Ca chính cần có đủ giờ vào và giờ tan ca.", true);
+    return;
+  }
+
+  const mainOT =
+    mainEnabled
+      ? parseFloat($("#detailMainOT")?.value) || 0
+      : 0;
+
+  const totalOT = roundHours(
+    mainOT + getExtraTotal(dateKey)
+  );
+
+  const lunchChecked =
+    mainEnabled &&
+    ($("#detailLunchChecked")?.checked || false);
+
+  const visibleNote = $("#detailNote")?.value.trim() || "";
+  const mealCount =
+    Math.max(0, parseInt($("#detailMealCount")?.value, 10) || 0);
+
+  const existing = getWorkLog(dateKey);
+  const hasWorkData =
+    Boolean(existing) ||
+    mainEnabled ||
+    totalOT > 0 ||
+    mealCount > 0 ||
+    Boolean(visibleNote);
+
+  setLoading(true);
+
+  try {
+    if (hasWorkData) {
+      await saveWorkLog(dateKey, {
+        start_time: mainEnabled ? startTime : null,
+        end_time: mainEnabled ? endTime : null,
+        overtime: totalOT,
+        meal_count: mealCount,
+        note: buildStoredNote(visibleNote, { lunchChecked })
       });
-      const activeSignatures = new Set();
-      for (const product of refreshedProducts.filter((item) => item.categoryId === payload.id && !item.archived)) {
-        if (activeSignatures.has(product.signature)) {
-          throw new Error(`Cấu hình nhận diện mới làm trùng quy cách: ${product.name}.`);
-        }
-        activeSignatures.add(product.signature);
+    }
+
+    await commitLeaveDraft(dateKey);
+
+    await refreshData(false, parseDateKey(dateKey), true);
+    renderHistory();
+    prepareLeaveDraft(dateKey);
+    renderDayDetail(false);
+    renderSalary();
+
+    showToast("Đã lưu thay đổi.");
+  } catch (error) {
+    showToast(
+      `Không thể lưu dữ liệu ngày: ${error.message || "Lỗi không xác định"}`,
+      true
+    );
+  } finally {
+    setLoading(false);
+  }
+}
+
+
+async function deleteSelectedDay() {
+  const dateKey =
+    appState.selectedDate;
+
+  if (
+    !dateKey ||
+    !confirm(
+      `Xóa toàn bộ dữ liệu OT ngày ${formatShortDate(
+        dateKey
+      )}? Dữ liệu nghỉ/phép sẽ được giữ nguyên.`
+    )
+  ) {
+    return;
+  }
+
+  setLoading(
+    true
+  );
+
+  try {
+    const workDelete =
+      await supabaseClient
+        .from(
+          "work_logs"
+        )
+        .delete()
+        .eq(
+          "username",
+          appState.currentUser
+        )
+        .eq(
+          "work_date",
+          dateKey
+        );
+
+    if (
+      workDelete.error
+    ) {
+      throw workDelete.error;
+    }
+
+    if (
+      appState.extraTableAvailable
+    ) {
+      const extraDelete =
+        await supabaseClient
+          .from(
+            "extra_shifts"
+          )
+          .delete()
+          .eq(
+            "username",
+            appState.currentUser
+          )
+          .eq(
+            "work_date",
+            dateKey
+          );
+
+      if (
+        extraDelete.error
+      ) {
+        throw extraDelete.error;
+      }
+    }
+
+    await refreshData(false, parseDateKey(dateKey), true);
+
+    closeModal(
+      "dayDetailModal"
+    );
+
+    renderHistory();
+
+    showToast(
+      "Đã xóa toàn bộ dữ liệu ngày."
+    );
+  } catch (
+    error
+  ) {
+    showToast(
+      `Không thể xóa dữ liệu: ${
+        error.message ||
+        "Lỗi không xác định"
+      }`,
+      true
+    );
+  } finally {
+    setLoading(
+      false
+    );
+  }
+}
+
+
+// =====================================================
+// THU NHẬP CÁ NHÂN + TIỀN CƠM THEO TUẦN
+// =====================================================
+
+function updateSalaryAccessLabels() {
+  const year = appState.salaryDate.getFullYear();
+  const month = appState.salaryDate.getMonth() + 1;
+  const label = `Tháng ${month}/${year}`;
+
+  setText("#salaryMonthLabel", label);
+  setText("#salaryAccessMonthLabel", label);
+}
+
+
+function setSalaryPrivacyState(revealed) {
+  appState.salaryRevealed = Boolean(revealed);
+
+  if (!appState.salaryRevealed) {
+    appState.salaryRevealToken += 1;
+  }
+
+  const gate = $("#salaryAccessGate");
+  const content = $("#salaryPrivateContent");
+
+  if (gate) {
+    gate.hidden = appState.salaryRevealed;
+  }
+
+  if (content) {
+    content.hidden = !appState.salaryRevealed;
+  }
+
+  if (!appState.salaryRevealed) {
+    closeAllPayrollInlineEditors();
+    closeModal("fuelPayrollEditorModal");
+    closeModal("insurancePayrollEditorModal");
+  }
+
+  updateSalaryAccessLabels();
+  refreshIcons();
+}
+
+
+async function openSalary() {
+  appState.salaryDate = new Date();
+  setSalaryPrivacyState(false);
+  openModal("salaryModal");
+}
+
+
+async function changeSalaryMonth(direction) {
+  appState.salaryDate.setDate(1);
+  appState.salaryDate.setMonth(appState.salaryDate.getMonth() + direction);
+  setSalaryPrivacyState(false);
+}
+
+
+async function revealSalary() {
+  updateSalaryAccessLabels();
+
+  const targetDate = new Date(appState.salaryDate);
+  const monthKey = getMonthKey(targetDate);
+  const token = appState.salaryRevealToken + 1;
+  appState.salaryRevealToken = token;
+
+  await loadMonthData(targetDate, { showLoader: true, force: false });
+
+  if (
+    appState.salaryRevealToken !== token ||
+    getMonthKey(appState.salaryDate) !== monthKey ||
+    !$("#salaryModal")?.classList.contains("show")
+  ) {
+    return;
+  }
+
+  ensurePayrollDraft(monthKey, true);
+  setSalaryPrivacyState(true);
+  renderSalary();
+}
+
+
+function handleReportSalaryInput(event) {
+  const monthKey = getMonthKey(appState.salaryDate);
+  const draft = ensurePayrollDraft(monthKey);
+  draft.baseSalary = parsePayrollMoney(event.target.value);
+  draft.dirty = true;
+  renderSalary();
+
+  if (monthKey === getMonthKey(new Date())) {
+    renderDashboard();
+  }
+}
+
+
+function syncSalaryInputs(source) {
+  const settingsValue = appState.settings?.baseSalary || 0;
+
+  if (source !== "report") {
+    const monthKey = getMonthKey(appState.salaryDate);
+    const draft = appState.payrollDrafts[monthKey];
+    setPayrollMoneyInput(
+      "#baseSalaryInput",
+      draft ? draft.baseSalary : settingsValue
+    );
+  }
+
+  if (source !== "settings") {
+    setValue("#settingsBaseSalary", settingsValue || "");
+  }
+}
+
+
+function updatePayrollConditionalRows(result, draft) {
+  const settings = result.settings;
+  const effectiveInsuranceMode = result.insuranceMode;
+
+  $$('[data-payroll-setting]').forEach(row => {
+    const key = row.dataset.payrollSetting;
+    let enabled = true;
+
+    if (key === "fuelEnabled") {
+      enabled = result.fuelEnabled;
+    } else if (key === "insuranceMode") {
+      enabled = effectiveInsuranceMode !== "disabled";
+    } else if (key && key.endsWith("Mode")) {
+      enabled = settings[key] !== "disabled";
+    }
+
+    row.hidden = !enabled;
+    row.classList.toggle("is-disabled", !enabled);
+
+    if (!enabled) {
+      const editorId = row.getAttribute("aria-controls");
+      const editor = editorId ? document.getElementById(editorId) : null;
+
+      if (editor?.classList.contains("payroll-inline-editor")) {
+        editor.hidden = true;
       }
 
-      store.products = refreshedProducts;
-      store.schema.categories[index] = nowCategory;
+      row.setAttribute("aria-expanded", "false");
+    }
+  });
+}
+
+
+function renderSalary() {
+  updateSalaryAccessLabels();
+
+  if (!appState.settings || !appState.salaryRevealed) {
+    return;
+  }
+
+  const year = appState.salaryDate.getFullYear();
+  const month = appState.salaryDate.getMonth();
+  const monthKey = `${year}-${pad(month + 1)}`;
+  const draft = ensurePayrollDraft(monthKey);
+  const saved = appState.payrollMonths[monthKey];
+  const liveResult = calculatePayroll(monthKey, draft);
+  const savedSnapshotUsable = isPayrollSnapshotUsable(
+    saved?.calculatedSnapshot
+  );
+  const sourceChanged = Boolean(
+    saved &&
+    !draft.dirty &&
+    hasPayrollSourceChanged(
+      saved,
+      liveResult
+    )
+  );
+
+  // Khi tháng đã lưu và chưa có chỉnh sửa chủ động, luôn hiển thị đúng
+  // snapshot đã chốt. Dữ liệu OT/phép thay đổi sau đó chỉ tạo cảnh báo
+  // và bật nút Lưu để người dùng chủ động cập nhật bảng lương.
+  const result =
+    saved &&
+    !draft.dirty &&
+    savedSnapshotUsable
+      ? saved.calculatedSnapshot
+      : liveResult;
+
+  setText("#salaryMonthLabel", `Tháng ${month + 1}/${year}`);
+
+  setText("#payrollTotalIncome", formatPayrollMoney(result.totalIncome));
+  setText("#payrollTotalDeductions", formatPayrollMoney(result.totalDeductions));
+  setText("#payrollNetSalary", formatPayrollMoney(result.netSalary));
+  setText("#payrollQuickOT", formatHours(result.totalOT));
+  setText("#payrollQuickPaidDays", `${formatNumber(result.paidDays)} công`);
+
+  setText("#payrollStandardDays", `${formatNumber(result.standardDays)} công`);
+  setText("#payrollPaidDays", `${formatNumber(result.paidDays)} công`);
+  setText("#payrollLeaveOpening", formatDayAmount(result.leave.opening));
+  setText("#payrollLeaveAccrued", formatDayAmount(result.leave.accrued));
+  setText("#payrollLeaveUsed", formatDayAmount(result.leave.used));
+  setText("#payrollUnpaidLeave", formatDayAmount(result.leave.unpaid));
+  setText("#payrollLeaveClosing", formatDayAmount(result.leave.closing));
+  setText("#salaryOTHours", formatHours(result.totalOT));
+
+  setText("#payrollWorkingSalary", formatPayrollMoney(result.workingSalary));
+  setText("#overtimeMoney", formatPayrollMoney(result.overtimeMoney));
+  setText(
+    "#salaryFormulaDescription",
+    `Lương / ${formatNumber(result.standardDays)} công / ${formatNumber(result.standardHours)} giờ × ${formatNumber(result.otMultiplier)} × tổng OT.`
+  );
+
+  setText("#payrollMainAllowanceMode", result.allowances.main.label);
+  setText("#payrollMainAllowance", formatPayrollMoney(result.allowances.main.value));
+  setText("#payrollOtherAllowanceMode", result.allowances.other.label);
+  setText("#payrollOtherAllowance", formatPayrollMoney(result.allowances.other.value));
+  setText("#payrollAttendanceAllowanceMode", result.allowances.attendance.label);
+  setText("#payrollAttendanceAllowance", formatPayrollMoney(result.allowances.attendance.value));
+  setText("#payrollResponsibilityAllowanceMode", result.allowances.responsibility.label);
+  setText("#payrollResponsibilityAllowance", formatPayrollMoney(result.allowances.responsibility.value));
+
+  setText("#payrollIncomeSectionTotal", formatPayrollMoney(result.totalIncome));
+  setText("#payrollFuelSectionTotal", formatPayrollMoney(result.fuelMoney));
+  setText("#payrollFuelMoney", formatPayrollMoney(result.fuelMoney));
+  setText(
+    "#payrollFuelFormula",
+    `${formatNumber(result.monthlyKm)} km giao hàng × ${formatPayrollMoney(result.fuelRate)}/km`
+  );
+
+  setText(
+    "#payrollOtherIncomeDescription",
+    draft.otherIncomeNote || (result.otherIncome > 0 ? "Khoản cộng riêng của tháng" : "Chưa có khoản cộng")
+  );
+  setText("#payrollOtherIncomeMoney", formatPayrollMoney(result.otherIncome));
+
+  setText("#payrollInsuranceDescription", result.insuranceDescription);
+  setText("#payrollInsuranceMoney", formatPayrollMoney(result.insuranceMoney));
+  setText("#payrollAdvanceMoney", formatPayrollMoney(result.advance));
+  setText(
+    "#payrollOtherDeductionDescription",
+    draft.otherDeductionNote || (result.otherDeduction > 0 ? "Khoản trừ riêng của tháng" : "Chưa có khoản trừ")
+  );
+  setText("#payrollOtherDeductionMoney", formatPayrollMoney(result.otherDeduction));
+  setText("#payrollDeductionSectionTotal", formatPayrollMoney(result.totalDeductions));
+  setText("#payrollTotalDeductionsLine", formatPayrollMoney(result.totalDeductions));
+
+  setText("#payrollUnpaidLeaveReduction", formatPayrollMoney(result.unpaidLeaveReduction));
+  $("#payrollUnpaidLeaveInformation")?.classList.toggle(
+    "hidden",
+    result.leave.unpaid <= 0
+  );
+
+  const attendanceBadge = $("#payrollAttendanceBadge");
+  if (attendanceBadge) {
+    attendanceBadge.classList.remove(
+      "auto-badge",
+      "saved-badge",
+      "changed-badge",
+      "unpaid-leave-badge"
+    );
+
+    if (result.leave.unpaid > 0) {
+      attendanceBadge.textContent = "Có nghỉ không lương";
+      attendanceBadge.classList.add("unpaid-leave-badge");
+    } else if (result.leave.used > 0) {
+      attendanceBadge.textContent = "Đã dùng phép";
+      attendanceBadge.classList.add("saved-badge");
     } else {
-      if (store.schema.categories.some((category) => category.id === nowCategory.id)) nowCategory.id = `${nowCategory.id}-${Date.now()}`;
-      store.schema.categories.push(nowCategory);
+      attendanceBadge.textContent = "Tự động";
+      attendanceBadge.classList.add("auto-badge");
     }
-    store.schema.version = toNumber(store.schema.version, 1) + 1;
-    this.writeStore(store);
-    return clone(nowCategory);
-  },
+  }
 
-  async setCategoryActive(categoryId, active) {
-    await delay(140);
-    const store = this.readStore();
-    assertStorePermission(store, PERMISSIONS.manageSchema);
-    const index = store.schema.categories.findIndex((category) => category.id === categoryId);
-    if (index < 0) throw new Error("Không tìm thấy nhóm.");
-    if (!active) {
-      const hasActiveProducts = store.products.some((product) => product.categoryId === categoryId && !product.archived);
-      if (hasActiveProducts) throw new Error("Nhóm vẫn còn vật liệu đang hoạt động. Hãy lưu trữ hoặc chuyển vật liệu trước.");
+  updatePayrollConditionalRows(result, draft);
+
+  const snapshotText =
+    saved &&
+    !draft.dirty
+      ? sourceChanged
+        ? savedSnapshotUsable
+          ? "Đã chốt • dữ liệu OT/phép đã thay đổi"
+          : "Bản lưu cũ cần cập nhật snapshot"
+        : `Đã lưu ${formatSavedTime(saved.savedAt)}`
+      : draft.dirty
+        ? "Có thay đổi chưa lưu"
+        : "Chưa lưu bảng lương tháng";
+
+  const saveStatusText =
+    sourceChanged &&
+    !draft.dirty
+      ? "Dữ liệu OT/phép đã đổi — bấm Lưu bảng lương để cập nhật"
+      : snapshotText;
+
+  setText("#payrollSnapshotStatus", snapshotText);
+  setText("#payrollSaveStatus", saveStatusText);
+
+  const saveStatus = $("#payrollSaveStatus");
+  saveStatus?.classList.toggle(
+    "success",
+    Boolean(
+      saved &&
+      !draft.dirty &&
+      !sourceChanged
+    )
+  );
+  saveStatus?.classList.toggle(
+    "warning",
+    Boolean(
+      sourceChanged &&
+      !draft.dirty
+    )
+  );
+  saveStatus?.classList.remove("error");
+
+  const saveButton = $("#savePayrollMonthButton");
+  const resetButton = $("#resetPayrollMonthButton");
+
+  if (saveButton) {
+    saveButton.disabled = Boolean(
+      saved &&
+      !draft.dirty &&
+      !sourceChanged
+    );
+  }
+
+  if (resetButton) {
+    resetButton.disabled = !saved && !draft.dirty;
+  }
+
+  $("#salaryReportBody")?.classList.toggle("has-unsaved-changes", draft.dirty);
+
+  const alert = $("#payrollAlert");
+  if (alert) {
+    const showAlert = result.leave.unpaid > 0;
+    alert.classList.toggle("hidden", !showAlert);
+    setText(
+      "#payrollAlertMessage",
+      showAlert
+        ? `${formatDayAmount(result.leave.unpaid)} nghỉ vượt phép đã làm giảm lương làm việc ${formatPayrollMoney(result.unpaidLeaveReduction)}.`
+        : ""
+    );
+  }
+
+  if (appState.activePayrollInlineEditor) {
+    populatePayrollInlineEditor(appState.activePayrollInlineEditor);
+  }
+}
+
+
+
+
+const SALARY_CHART_METRICS = Object.freeze({
+  "ot-hours": {
+    eyebrow: "GIỜ TĂNG CA",
+    title: "Xu hướng OT theo tháng",
+    value: result => Number(result?.totalOT) || 0,
+    format: value => formatHours(value),
+    compact: value => `${formatNumber(value)}h`,
+    axis: value => `${formatNumber(value)}h`
+  },
+  "ot-money": {
+    eyebrow: "TIỀN TĂNG CA",
+    title: "Giá trị OT theo tháng",
+    value: result => Number(result?.overtimeMoney) || 0,
+    format: value => formatPayrollMoney(value),
+    compact: value => formatCompactChartMoney(value),
+    axis: value => formatCompactChartMoney(value)
+  },
+  "net-income": {
+    eyebrow: "THỰC NHẬN",
+    title: "Xu hướng thực nhận theo tháng",
+    value: result => Number(result?.netSalary) || 0,
+    format: value => formatPayrollMoney(value),
+    compact: value => formatCompactChartMoney(value),
+    axis: value => formatCompactChartMoney(value)
+  }
+});
+
+
+function formatCompactChartMoney(value) {
+  const amount = Math.abs(Number(value) || 0);
+  const sign = Number(value) < 0 ? "−" : "";
+
+  if (amount >= 1_000_000_000) {
+    return `${sign}${new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 }).format(amount / 1_000_000_000)}tỷ`;
+  }
+
+  if (amount >= 1_000_000) {
+    return `${sign}${new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 }).format(amount / 1_000_000)}tr`;
+  }
+
+  if (amount >= 1_000) {
+    return `${sign}${new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 0 }).format(amount / 1_000)}k`;
+  }
+
+  return `${sign}${new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 0 }).format(amount)}`;
+}
+
+
+function getSalaryChartMetricConfig(metric = appState.salaryChartMetric) {
+  return SALARY_CHART_METRICS[metric] || SALARY_CHART_METRICS["ot-hours"];
+}
+
+
+function getSalaryChartMonthKey(year, monthIndex) {
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
+}
+
+
+function isFutureSalaryChartMonth(year, monthIndex) {
+  const now = new Date();
+  return year > now.getFullYear() ||
+    (year === now.getFullYear() && monthIndex > now.getMonth());
+}
+
+
+async function loadSalaryChartSourceData(year) {
+  if (!appState.currentUser) {
+    return;
+  }
+
+  const start = `${year}-01-01`;
+  const end = `${year}-12-31`;
+
+  const [workResult, extraResult] = await Promise.all([
+    supabaseClient
+      .from("work_logs")
+      .select("*")
+      .eq("username", appState.currentUser)
+      .gte("work_date", start)
+      .lte("work_date", end)
+      .order("work_date", { ascending: false }),
+    supabaseClient
+      .from("extra_shifts")
+      .select("*")
+      .eq("username", appState.currentUser)
+      .gte("work_date", start)
+      .lte("work_date", end)
+      .order("start_at", { ascending: false })
+  ]);
+
+  if (workResult.error) {
+    throw workResult.error;
+  }
+
+  let extraRows = [];
+  if (extraResult.error) {
+    appState.extraTableAvailable = false;
+    console.warn("Không tải được extra_shifts cho biểu đồ:", extraResult.error.message);
+  } else {
+    appState.extraTableAvailable = true;
+    extraRows = extraResult.data || [];
+  }
+
+  const workRows = workResult.data || [];
+
+  for (let monthIndex = 0; monthIndex < 12; monthIndex += 1) {
+    if (isFutureSalaryChartMonth(year, monthIndex)) {
+      continue;
     }
-    store.schema.categories[index] = { ...store.schema.categories[index], active: Boolean(active) };
-    store.schema.version = toNumber(store.schema.version, 1) + 1;
-    this.writeStore(store);
-    return true;
-  },
 
-  async deleteInventoryHistory({ before = null, reason = "", confirmation = "" } = {}) {
-    await delay(180);
-    const store = this.readStore();
-    const actor = assertStorePermission(store, PERMISSIONS.manageData);
-    if (normalizeRoleCode(actor.role) !== "superadmin") throw new Error("Chỉ Super Admin được xóa lịch sử kho.");
-    if (String(confirmation || "").trim().toUpperCase() !== "XOA LICH SU") throw new Error("Vui lòng nhập đúng XOA LICH SU để xác nhận.");
-    if (String(reason || "").trim().length < 5) throw new Error("Vui lòng nhập lý do tối thiểu 5 ký tự.");
-    const cutoff = before ? new Date(`${before}T23:59:59.999`) : null;
-    if (cutoff && Number.isNaN(cutoff.getTime())) throw new Error("Ngày xóa lịch sử không hợp lệ.");
-    const now = new Date().toISOString();
-    let deletedCount = 0;
-    store.transactions = store.transactions.map((transaction) => {
-      const shouldHide = !transaction.hiddenAt && (!cutoff || new Date(transaction.createdAt) <= cutoff);
-      if (!shouldHide) return transaction;
-      deletedCount += 1;
+    const monthKey = getSalaryChartMonthKey(year, monthIndex);
+    mergeWorkLogs(
+      monthKey,
+      workRows.filter(item => String(item.work_date || "").startsWith(monthKey))
+    );
+    mergeExtraShifts(
+      monthKey,
+      extraRows.filter(item => String(item.work_date || "").startsWith(monthKey))
+    );
+    appState.loadedMonths.add(monthKey);
+  }
+
+  renderOpenViewsAfterDataLoad();
+}
+
+
+async function loadSalaryChartYear(year) {
+  const safeYear = Math.min(Number(year) || new Date().getFullYear(), new Date().getFullYear());
+  appState.salaryChartYear = safeYear;
+  appState.salaryChartData = null;
+  appState.salaryChartSelectedIndex = null;
+
+  setText("#salaryChartYearLabel", `Năm ${safeYear}`);
+  const nextButton = $("#salaryChartNextYear");
+  if (nextButton) {
+    nextButton.disabled = safeYear >= new Date().getFullYear();
+  }
+
+  $("#salaryChartLoading")?.classList.remove("hidden");
+  $("#salaryChartContent")?.classList.add("is-loading");
+
+  try {
+    try {
+      await loadSalaryChartSourceData(safeYear);
+    } catch (error) {
+      console.warn("Không tải đủ dữ liệu nguồn cho biểu đồ:", error);
+      showToast(
+        `Không tải đủ dữ liệu biểu đồ: ${error.message || "Lỗi kết nối"}. Các tháng đã chốt vẫn được ưu tiên hiển thị.`,
+        true
+      );
+    }
+
+    const entries = Array.from({ length: 12 }, (_, index) => {
+      const monthKey = getSalaryChartMonthKey(safeYear, index);
+      const future = isFutureSalaryChartMonth(safeYear, index);
+
+      if (future) {
+        return {
+          monthKey,
+          monthIndex: index,
+          future: true,
+          available: false,
+          savedOfficial: false,
+          result: null
+        };
+      }
+
+      const saved = appState.payrollMonths[monthKey];
+      const savedSnapshotUsable = isPayrollSnapshotUsable(saved?.calculatedSnapshot);
+      const monthLoaded = appState.loadedMonths.has(monthKey);
+
+      if (!monthLoaded && !savedSnapshotUsable) {
+        return {
+          monthKey,
+          monthIndex: index,
+          future: false,
+          available: false,
+          savedOfficial: false,
+          result: null
+        };
+      }
+
+      const comparison = getPayrollResultForComparison(monthKey);
+      const savedOfficial = Boolean(
+        comparison.saved &&
+        !comparison.draft.dirty &&
+        isPayrollSnapshotUsable(comparison.saved.calculatedSnapshot)
+      );
+
       return {
-        ...transaction,
-        hiddenAt: now,
-        hiddenBy: actor.id,
-        hiddenReason: String(reason || "").trim(),
+        monthKey,
+        monthIndex: index,
+        future: false,
+        available: true,
+        savedOfficial,
+        result: comparison.result
       };
     });
-    store.accountAudit = Array.isArray(store.accountAudit) ? store.accountAudit : [];
-    store.accountAudit.unshift({
-      id: makeId("audit"),
-      action: "hide_inventory_history",
-      targetId: before || "all",
-      targetUsername: "Lịch sử kho",
-      actorId: actor.id,
-      actorName: actor.displayName,
-      actorRole: actor.role,
-      detail: `${String(reason || "").trim()} · ${deletedCount} giao dịch`,
-      createdAt: now,
-    });
-    this.writeStore(store);
-    return { deletedCount, before: before || null };
-  },
 
-  exportBackup() {
-    const store = this.readStore();
-    assertStorePermission(store, PERMISSIONS.manageData);
-    return clone(store);
-  },
-
-  async importBackup(data) {
-    await delay(180);
-    const currentStore = this.readStore();
-    assertStorePermission(currentStore, PERMISSIONS.manageData);
-    const validated = validateBackupData(data);
-    safeStorage.setItem(STORAGE_KEYS.rollback, JSON.stringify(currentStore));
-    const sanitized = {
-      version: DATA_FORMAT_VERSION,
-      schema: clone(validated.schema),
-      products: clone(validated.products),
-      transactions: clone(validated.transactions),
-      accounts: clone(validated.accounts),
-      accountAudit: clone(validated.accountAudit),
-      updatedAt: new Date().toISOString(),
+    appState.salaryChartData = {
+      year: safeYear,
+      entries
     };
-    this.writeStore(sanitized);
-    return true;
-  },
 
-  async resetDemo() {
-    await delay(180);
-    const currentStore = this.readStore();
-    assertStorePermission(currentStore, PERMISSIONS.manageData);
-    safeStorage.setItem(STORAGE_KEYS.rollback, JSON.stringify(currentStore));
-    this.writeStore(seedData());
-    return true;
-  },
+    const preferredMonth = getMonthKey(appState.salaryDate);
+    const preferredIndex = entries.findIndex(item => item.monthKey === preferredMonth && item.available);
+    const lastAvailableIndex = entries.reduce(
+      (found, item, index) => item.available ? index : found,
+      -1
+    );
+    appState.salaryChartSelectedIndex = preferredIndex >= 0
+      ? preferredIndex
+      : lastAvailableIndex >= 0
+        ? lastAvailableIndex
+        : null;
 
-  async restoreRollback() {
-    await delay(160);
-    const activeStore = this.readStore();
-    assertStorePermission(activeStore, PERMISSIONS.manageData);
-    const raw = safeStorage.getItem(STORAGE_KEYS.rollback);
-    if (!raw) throw new Error("Chưa có snapshot để khôi phục.");
-    const rollbackData = validateBackupData(JSON.parse(raw));
-    this.writeStore(rollbackData);
-    safeStorage.setItem(STORAGE_KEYS.rollback, JSON.stringify(activeStore));
-    return true;
-  },
-};
-
-let dataServiceConfigurationError = null;
-let dataService = localDataService;
-
-if (window.APP_CONFIG?.dataMode === "supabase") {
-  try {
-    dataService = window.createSupabaseDataService(window.APP_CONFIG);
-  } catch (error) {
-    dataServiceConfigurationError = error;
-    dataService = Object.freeze({
-      mode: "unavailable",
-      label: "Supabase chưa cấu hình",
-      capabilities: Object.freeze({ localBackup: false, cloud: true }),
-      async login() { throw dataServiceConfigurationError; },
-      async logout() { clearAuthSession(); return true; },
-      async getSessionProfile() { return null; },
-    });
-  }
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-async function withDemoWriteLock(task) {
-  if (navigator.locks?.request) {
-    return navigator.locks.request("kho-khuon-be-v2-demo-write", { mode: "exclusive" }, task);
-  }
-  return task();
-}
-
-async function withActionLock(key, button, task) {
-  if (appState.actionLocks.has(key)) return;
-  appState.actionLocks.add(key);
-  const originalHTML = button?.innerHTML;
-  const originalDisabled = button?.disabled;
-  if (button) {
-    button.disabled = true;
-    button.setAttribute("aria-busy", "true");
-    button.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>Đang xử lý</span>`;
-  }
-  appState.ui.modalBusy = true;
-  try {
-    return await task();
+    renderSalaryChart();
   } finally {
-    appState.actionLocks.delete(key);
-    appState.ui.modalBusy = false;
-    if (button?.isConnected) {
-      button.disabled = Boolean(originalDisabled);
-      button.removeAttribute("aria-busy");
-      button.innerHTML = originalHTML;
+    $("#salaryChartLoading")?.classList.add("hidden");
+    $("#salaryChartContent")?.classList.remove("is-loading");
+  }
+}
+
+
+function getSalaryChartEntriesWithValues() {
+  const metric = getSalaryChartMetricConfig();
+  return (appState.salaryChartData?.entries || [])
+    .filter(item => item.available && item.result)
+    .map(item => ({
+      ...item,
+      value: metric.value(item.result)
+    }));
+}
+
+
+function getSalaryChartScale(values) {
+  if (!values.length) {
+    return { min: 0, max: 1 };
+  }
+
+  let min = Math.min(...values, 0);
+  let max = Math.max(...values, 0);
+
+  if (Math.abs(max - min) < 0.0001) {
+    max = min === 0 ? 1 : min + Math.abs(min) * 0.2;
+    if (Math.abs(max - min) < 0.0001) {
+      max = min + 1;
     }
   }
-}
 
-function nextRequestId(key) {
-  const id = (appState.requestIds[key] || 0) + 1;
-  appState.requestIds[key] = id;
-  return id;
-}
-
-function isCurrentRequest(key, id) {
-  return appState.requestIds[key] === id;
-}
-
-async function checkInitializationStatus() {
-  if (dataService.mode !== "supabase" || typeof dataService.getInitializationStatus !== "function") {
-    appState.ui.initialized = true;
-    return;
+  const range = max - min;
+  const padding = range * 0.08;
+  max += padding;
+  if (min < 0) {
+    min -= padding;
+  } else {
+    min = 0;
   }
-  try {
-    const result = await dataService.getInitializationStatus();
-    appState.ui.initialized = Boolean(result?.initialized);
-  } catch (error) {
-    appState.ui.initialized = true;
-    appState.ui.bootstrapError = error.message || "Không kiểm tra được trạng thái khởi tạo.";
-  }
+
+  return { min, max };
 }
 
-async function loadBootstrap({ render = true, silent = false } = {}) {
-  const requestId = nextRequestId("bootstrap");
-  appState.loading.bootstrap = true;
-  appState.ui.bootstrapError = null;
-  if (render) renderApp();
-  try {
-    const result = await dataService.loadBootstrap();
-    if (!isCurrentRequest("bootstrap", requestId)) return;
-    appState.cache.schema = result.schema;
-    appState.cache.products = result.products;
-    appState.cache.loaded.bootstrap = true;
-    setAuthenticatedAccount(result.profile);
-    return true;
-  } catch (error) {
-    console.error(error);
-    const invalidSession = ["AUTH_REQUIRED", "ACCOUNT_LOCKED", "ACCOUNT_DISABLED"].includes(error.code);
-    if (invalidSession) {
-      await dataService.logout().catch(() => {});
-      clearAuthSession();
-      setAuthenticatedAccount(null);
-      await stopRealtimeSync();
-      showToast("error", "Phiên đăng nhập không còn hợp lệ", error.message);
-    } else {
-      appState.ui.bootstrapError = error.message || "Không tải được dữ liệu từ máy chủ.";
-      if (!silent) showToast("error", "Không tải được dữ liệu", appState.ui.bootstrapError);
+
+function renderSalaryChartSvg(entries) {
+  const metric = getSalaryChartMetricConfig();
+  const width = 720;
+  const height = 330;
+  const margin = { top: 24, right: 18, bottom: 50, left: 64 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const values = entries.map(item => item.value);
+  const scale = getSalaryChartScale(values);
+  const valueRange = scale.max - scale.min || 1;
+  const x = index => margin.left + plotWidth * index / 11;
+  const y = value => margin.top + plotHeight * (scale.max - value) / valueRange;
+  const ticks = Array.from({ length: 5 }, (_, index) => scale.min + valueRange * index / 4).reverse();
+  const entryMap = new Map(entries.map(item => [item.monthIndex, item]));
+
+  const grid = ticks.map(value => {
+    const yy = y(value);
+    return `
+      <line class="salary-chart-grid-line" x1="${margin.left}" y1="${yy}" x2="${width - margin.right}" y2="${yy}"></line>
+      <text class="salary-chart-axis-y" x="${margin.left - 10}" y="${yy + 4}" text-anchor="end">${escapeHTML(metric.axis(value))}</text>
+    `;
+  }).join("");
+
+  const monthLabels = Array.from({ length: 12 }, (_, index) => `
+    <text class="salary-chart-axis-x" x="${x(index)}" y="${height - 18}" text-anchor="middle">T${index + 1}</text>
+  `).join("");
+
+  const segments = [];
+  let currentSegment = [];
+  Array.from({ length: 12 }, (_, index) => index).forEach(index => {
+    const item = entryMap.get(index);
+    if (item) {
+      currentSegment.push(`${x(index)},${y(item.value)}`);
+    } else if (currentSegment.length) {
+      segments.push(currentSegment);
+      currentSegment = [];
     }
-    return false;
-  } finally {
-    if (isCurrentRequest("bootstrap", requestId)) {
-      appState.loading.bootstrap = false;
-      if (render) renderApp();
-    }
-  }
-}
-
-async function loadTransactions({ render = false, limit = 50, useFilters = appState.screen === SCREENS.history, silent = false } = {}) {
-  if (appState.auth.status !== "signedIn") return false;
-  const requestId = nextRequestId("transactions");
-  appState.loading.transactions = true;
-  if (render) renderApp();
-  try {
-    const historyFilters = useFilters ? appState.filters.history : { type: "all", from: "", to: "" };
-    const transactions = await dataService.listTransactions({
-      limit,
-      type: historyFilters.type !== "all" ? historyFilters.type : null,
-      from: historyFilters.from || null,
-      to: historyFilters.to || null,
-    });
-    if (!isCurrentRequest("transactions", requestId)) return;
-    appState.cache.transactions = transactions;
-    appState.cache.loaded.transactions = true;
-    return true;
-  } catch (error) {
-    if (!silent) showToast("error", "Không tải được lịch sử", error.message);
-    return false;
-  } finally {
-    if (isCurrentRequest("transactions", requestId)) {
-      appState.loading.transactions = false;
-      if (render) renderApp();
-    }
-  }
-}
-
-async function loadAccountData({ render = false, silent = false } = {}) {
-  if (!hasPermission(PERMISSIONS.manageAccounts)) return false;
-  const requestId = nextRequestId("accounts");
-  appState.loading.accounts = true;
-  if (render) renderApp();
-  try {
-    const [accounts, accountAudit] = await Promise.all([dataService.listAccounts(), dataService.listAccountAudit({ limit: 50 })]);
-    if (!isCurrentRequest("accounts", requestId)) return;
-    appState.cache.accounts = accounts;
-    appState.cache.accountAudit = accountAudit;
-    appState.cache.loaded.accounts = true;
-    appState.cache.loaded.accountAudit = true;
-    syncCurrentUserFromAccounts();
-    return true;
-  } catch (error) {
-    if (!silent) showToast("error", "Không tải được dữ liệu tài khoản", error.message);
-    return false;
-  } finally {
-    if (isCurrentRequest("accounts", requestId)) {
-      appState.loading.accounts = false;
-      if (render) renderApp();
-    }
-  }
-}
-
-async function refreshInventoryAndHistory({ render = true } = {}) {
-  await loadBootstrap({ render: false });
-  if (appState.auth.status === "signedIn") await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50 });
-  if (render) renderApp();
-}
-
-function realtimeStatusMeta() {
-  if (dataService.mode !== "supabase") return { hidden: true, state: "local", label: "" };
-  if (!navigator.onLine || appState.realtime.status === "offline") return { hidden: false, state: "offline", label: "Mất mạng" };
-  if (appState.realtime.status === "error") return { hidden: false, state: "error", label: "Đang kết nối lại" };
-  return { hidden: true, state: "online", label: "" };
-}
-
-function renderRealtimeStatusLine() {
-  const meta = realtimeStatusMeta();
-  return `<div class="status-line" data-realtime-status="true" data-state="${meta.state}" ${meta.hidden ? "hidden" : ""}><span class="status-dot"></span><span>${escapeHTML(meta.label)}</span></div>`;
-}
-
-function updateRealtimeStatusLine() {
-  const line = $("[data-realtime-status='true']");
-  if (!line) return;
-  const meta = realtimeStatusMeta();
-  line.dataset.state = meta.state;
-  line.hidden = meta.hidden;
-  const label = line.querySelector("span:last-child");
-  if (label) label.textContent = meta.label;
-}
-
-function setRealtimeStatus(status) {
-  appState.realtime.status = status;
-  updateRealtimeStatusLine();
-}
-
-function scheduleRealtimeRefresh(wait = 180) {
-  if (appState.auth.status !== "signedIn" || dataService.mode !== "supabase") return;
-  appState.realtime.refreshPending = true;
-  if (appState.realtime.refreshInFlight || appState.realtime.refreshTimer) return;
-  appState.realtime.refreshTimer = window.setTimeout(() => {
-    appState.realtime.refreshTimer = null;
-    void performRealtimeRefresh();
-  }, wait);
-}
-
-async function performRealtimeRefresh() {
-  if (appState.auth.status !== "signedIn" || dataService.mode !== "supabase") return;
-  if (!navigator.onLine) {
-    setRealtimeStatus("offline");
-    return;
-  }
-  if (appState.realtime.refreshInFlight) {
-    appState.realtime.refreshPending = true;
-    return;
-  }
-
-  appState.realtime.refreshPending = false;
-  appState.realtime.refreshInFlight = true;
-  let ok = true;
-  let retryAfter = 0;
-  try {
-    ok = Boolean(await loadBootstrap({ render: false, silent: true }));
-    if (!ok || appState.auth.status !== "signedIn") {
-      if (appState.auth.status !== "signedIn") {
-        closeModal(true);
-        renderApp();
-      } else {
-        setRealtimeStatus("error");
-        retryAfter = 4000;
-      }
-      return;
-    }
-    if (hasPermission(PERMISSIONS.viewHistory)) {
-      const historyScreen = appState.screen === SCREENS.history;
-      ok = Boolean(await loadTransactions({ render: false, limit: historyScreen ? 200 : 50, useFilters: historyScreen, silent: true })) && ok;
-    }
-    if (appState.screen === SCREENS.manage && appState.manageTab === MANAGE_TABS.accounts && hasPermission(PERMISSIONS.manageAccounts)) {
-      ok = Boolean(await loadAccountData({ render: false, silent: true })) && ok;
-    }
-    setRealtimeStatus(ok ? "connected" : "error");
-    if (!ok) retryAfter = 4000;
-    renderApp();
-    if (appState.ui.modalName === "transaction-form") updateTransactionPreview();
-  } finally {
-    appState.realtime.refreshInFlight = false;
-    if (appState.auth.status === "signedIn") {
-      if (appState.realtime.refreshPending) scheduleRealtimeRefresh(120);
-      else if (retryAfter) scheduleRealtimeRefresh(retryAfter);
-    }
-  }
-}
-
-function clearRealtimeReconnectTimer() {
-  clearTimeout(appState.realtime.reconnectTimer);
-  appState.realtime.reconnectTimer = null;
-}
-
-function scheduleRealtimeReconnect(wait = 1800) {
-  if (dataService.mode !== "supabase" || appState.auth.status !== "signedIn" || !navigator.onLine || appState.realtime.stopping || appState.realtime.reconnectTimer) return;
-  appState.realtime.reconnectTimer = window.setTimeout(async () => {
-    appState.realtime.reconnectTimer = null;
-    if (appState.auth.status !== "signedIn" || !navigator.onLine || appState.realtime.stopping) return;
-
-    const unsubscribe = appState.realtime.unsubscribe;
-    appState.realtime.unsubscribe = null;
-    appState.realtime.stopping = true;
-    try {
-      if (unsubscribe) await unsubscribe();
-      else if (typeof dataService.unsubscribeRealtime === "function") await dataService.unsubscribeRealtime();
-    } catch { /* Reconnect cleanup is best-effort. */ }
-    finally { appState.realtime.stopping = false; }
-
-    if (appState.auth.status === "signedIn" && navigator.onLine) startRealtimeSync();
-  }, wait);
-}
-
-function handleRealtimeStatus(status) {
-  if (appState.realtime.stopping) return;
-  if (status === "SUBSCRIBED") {
-    clearRealtimeReconnectTimer();
-    appState.realtime.hasSubscribed = true;
-    setRealtimeStatus("connected");
-    // Refetch ngay sau khi subscribe de dong khe ho event giua lan tai dau va luc WebSocket san sang.
-    scheduleRealtimeRefresh(60);
-    return;
-  }
-  if (status === "DISABLED") {
-    clearRealtimeReconnectTimer();
-    setRealtimeStatus("idle");
-    return;
-  }
-  if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
-    appState.realtime.hasSubscribed = false;
-    setRealtimeStatus(navigator.onLine ? "error" : "offline");
-    if (navigator.onLine) scheduleRealtimeReconnect(status === "CLOSED" ? 900 : 1800);
-  }
-}
-
-async function stopRealtimeSync() {
-  clearTimeout(appState.realtime.refreshTimer);
-  appState.realtime.refreshTimer = null;
-  clearRealtimeReconnectTimer();
-  appState.realtime.refreshPending = false;
-  appState.realtime.hasSubscribed = false;
-  appState.realtime.stopping = true;
-  const unsubscribe = appState.realtime.unsubscribe;
-  appState.realtime.unsubscribe = null;
-  try {
-    if (unsubscribe) await unsubscribe();
-    else if (typeof dataService.unsubscribeRealtime === "function") await dataService.unsubscribeRealtime();
-  } catch { /* Cleanup only. */ }
-  finally { appState.realtime.stopping = false; }
-  setRealtimeStatus(navigator.onLine ? "idle" : "offline");
-}
-
-function startRealtimeSync() {
-  if (dataService.mode !== "supabase" || appState.auth.status !== "signedIn" || typeof dataService.subscribeRealtime !== "function") return;
-  if (appState.realtime.unsubscribe || !navigator.onLine) {
-    if (!navigator.onLine) setRealtimeStatus("offline");
-    return;
-  }
-  setRealtimeStatus("connecting");
-  appState.realtime.unsubscribe = dataService.subscribeRealtime({
-    onEvent: () => scheduleRealtimeRefresh(140),
-    onStatus: handleRealtimeStatus,
   });
+  if (currentSegment.length) {
+    segments.push(currentSegment);
+  }
+
+  const lines = segments
+    .filter(segment => segment.length > 1)
+    .map(segment => `<polyline class="salary-chart-line" points="${segment.join(" ")}"></polyline>`)
+    .join("");
+
+  const selectedIndex = appState.salaryChartSelectedIndex;
+  const selected = entries.find(item => item.monthIndex === selectedIndex);
+  const guide = selected
+    ? `<line class="salary-chart-guide" x1="${x(selected.monthIndex)}" y1="${margin.top}" x2="${x(selected.monthIndex)}" y2="${margin.top + plotHeight}"></line>`
+    : "";
+
+  const minEntry = entries.length
+    ? entries.reduce((a, b) => b.value < a.value ? b : a)
+    : null;
+  const maxEntry = entries.length
+    ? entries.reduce((a, b) => b.value > a.value ? b : a)
+    : null;
+
+  const points = entries.map(item => {
+    const active = item.monthIndex === selectedIndex;
+    const extreme = item === minEntry || item === maxEntry;
+    const classes = [
+      "salary-chart-point",
+      item.savedOfficial ? "saved" : "estimate",
+      active ? "selected" : "",
+      extreme ? "extreme" : ""
+    ].filter(Boolean).join(" ");
+    const label = `${formatSalaryHistoryMonth(item.monthKey)}: ${metric.format(item.value)}`;
+    return `
+      <circle
+        class="${classes}"
+        cx="${x(item.monthIndex)}"
+        cy="${y(item.value)}"
+        r="${active ? 8 : 6}"
+        tabindex="0"
+        role="button"
+        aria-label="${escapeHTML(label)}"
+        data-salary-chart-index="${item.monthIndex}">
+      </circle>
+    `;
+  }).join("");
+
+  const extremeLabels = [minEntry, maxEntry]
+    .filter((item, index, list) => item && list.indexOf(item) === index)
+    .map(item => {
+      const yy = Math.max(16, y(item.value) - 12);
+      return `<text class="salary-chart-point-label" x="${x(item.monthIndex)}" y="${yy}" text-anchor="middle">${escapeHTML(metric.compact(item.value))}</text>`;
+    }).join("");
+
+  return `
+    <svg id="salaryChartSvg" class="salary-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" aria-label="Biểu đồ ${escapeHTML(metric.title)}">
+      ${grid}
+      ${monthLabels}
+      ${guide}
+      ${lines}
+      ${points}
+      ${extremeLabels}
+    </svg>
+  `;
 }
 
-function invalidatePendingDataRequests() {
-  ["bootstrap", "transactions", "accounts", "accountAudit"].forEach((key) => nextRequestId(key));
+
+function renderSalaryChartSummary(entries) {
+  const metric = getSalaryChartMetricConfig();
+  const values = entries.map(item => item.value);
+  const total = values.reduce((sum, value) => sum + value, 0);
+  const average = values.length ? total / values.length : 0;
+  const maxEntry = entries.length
+    ? entries.reduce((a, b) => b.value > a.value ? b : a)
+    : null;
+
+  setText("#salaryChartTotal", entries.length ? metric.format(total) : "--");
+  setText("#salaryChartMax", maxEntry ? metric.format(maxEntry.value) : "--");
+  setText(
+    "#salaryChartMaxMonth",
+    maxEntry ? formatSalaryHistoryMonth(maxEntry.monthKey) : "Chưa có dữ liệu"
+  );
+  setText("#salaryChartAverage", entries.length ? metric.format(average) : "--");
+  setText(
+    "#salaryChartAverageHint",
+    entries.length ? `Trung bình ${entries.length} tháng có dữ liệu` : "Chưa có dữ liệu"
+  );
+  setText(
+    "#salaryChartTotalHint",
+    entries.length ? `${entries.length} tháng có dữ liệu trong năm` : "Theo dữ liệu hiện có"
+  );
 }
 
-function bindRealtimeLifecycle() {
-  window.addEventListener("offline", () => {
-    appState.realtime.hasSubscribed = false;
-    clearRealtimeReconnectTimer();
-    setRealtimeStatus("offline");
-  });
-  window.addEventListener("online", () => {
-    if (appState.auth.status !== "signedIn") return;
-    if (!appState.realtime.unsubscribe) startRealtimeSync();
-    else if (!appState.realtime.hasSubscribed) scheduleRealtimeReconnect(100);
-    scheduleRealtimeRefresh(80);
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden || appState.auth.status !== "signedIn" || !navigator.onLine) return;
-    if (!appState.realtime.unsubscribe) startRealtimeSync();
-    else if (!appState.realtime.hasSubscribed) scheduleRealtimeReconnect(150);
-    scheduleRealtimeRefresh(120);
-  });
-}
 
-async function restoreSession() {
-  if (dataService.mode === "supabase") {
-    const profile = await dataService.getSessionProfile();
-    if (!profile) {
-      clearAuthSession();
-      setAuthenticatedAccount(null);
-      return;
-    }
-    setAuthenticatedAccount(profile);
-    await loadBootstrap({ render: false });
-    if (appState.auth.status === "signedIn") await loadTransactions({ render: false, limit: 50 });
+function renderSalaryChartDetail() {
+  const metric = getSalaryChartMetricConfig();
+  const entry = appState.salaryChartData?.entries?.[appState.salaryChartSelectedIndex];
+
+  if (!entry?.available || !entry.result) {
+    setText("#salaryChartSelectedMonth", "Chọn một tháng");
+    setText("#salaryChartSelectedValue", "--");
+    setText("#salaryChartSelectedStatus", "Chạm vào điểm trên biểu đồ để xem số liệu.");
     return;
   }
 
-  const session = readAuthSession();
-  if (!session) {
-    setAuthenticatedAccount(null);
-    return;
+  const value = metric.value(entry.result);
+  setText("#salaryChartSelectedMonth", formatSalaryHistoryMonth(entry.monthKey));
+  setText("#salaryChartSelectedValue", metric.format(value));
+
+  let status;
+  if (appState.salaryChartMetric === "ot-hours") {
+    status = entry.savedOfficial
+      ? "Dữ liệu OT thuộc bảng lương đã chốt."
+      : "Dữ liệu OT theo chấm công hiện tại.";
+  } else {
+    status = entry.savedOfficial
+      ? "Bảng lương tháng này đã được chốt."
+      : "Tạm tính từ dữ liệu và cấu hình hiện tại; tháng này chưa chốt bảng lương.";
   }
-  const profile = await dataService.getSessionProfile(session.accountId);
-  if (!profile) {
-    clearAuthSession();
-    setAuthenticatedAccount(null);
-    return;
-  }
-  setAuthenticatedAccount(profile);
-  await loadBootstrap({ render: false });
-  if (appState.auth.status === "signedIn") await loadTransactions({ render: false, limit: 50 });
+  setText("#salaryChartSelectedStatus", status);
 }
 
-function screenMeta() {
-  const map = {
-    [SCREENS.dashboard]: ["Tổng quan", "Kho Khuôn Bế"],
-    [SCREENS.inventory]: ["Kho vật liệu", "Quản lý tồn"],
-    [SCREENS.history]: ["Lịch sử", "Giao dịch kho"],
-    [SCREENS.manage]: ["Quản lý", roleLabel(appState.currentUser.role)],
+
+function renderSalaryChart() {
+  const metric = getSalaryChartMetricConfig();
+  const entries = getSalaryChartEntriesWithValues();
+  const canvas = $("#salaryChartCanvas");
+
+  setText("#salaryChartMetricEyebrow", metric.eyebrow);
+  setText("#salaryChartMetricTitle", metric.title);
+  setText("#salaryChartYearLabel", `Năm ${appState.salaryChartYear}`);
+
+  $$('[data-salary-chart-metric]').forEach(button => {
+    const active = button.dataset.salaryChartMetric === appState.salaryChartMetric;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
+  renderSalaryChartSummary(entries);
+
+  if (canvas) {
+    canvas.dataset.metric = appState.salaryChartMetric;
+    canvas.innerHTML = entries.length
+      ? renderSalaryChartSvg(entries)
+      : renderComparisonEmpty("Chưa có dữ liệu để vẽ biểu đồ cho năm này.");
+  }
+
+  renderSalaryChartDetail();
+}
+
+
+function selectSalaryChartPoint(index) {
+  const entry = appState.salaryChartData?.entries?.[index];
+  if (!entry?.available) {
+    return;
+  }
+  appState.salaryChartSelectedIndex = index;
+  renderSalaryChart();
+}
+
+
+function setSalaryChartMetric(metric) {
+  if (!SALARY_CHART_METRICS[metric]) {
+    return;
+  }
+  appState.salaryChartMetric = metric;
+  renderSalaryChart();
+}
+
+
+async function changeSalaryChartYear(direction) {
+  const nextYear = appState.salaryChartYear + direction;
+  const currentYear = new Date().getFullYear();
+  if (nextYear > currentYear) {
+    return;
+  }
+  await loadSalaryChartYear(nextYear);
+}
+
+
+function openSalaryChart() {
+  appState.salaryChartMetric = "ot-hours";
+  appState.salaryChartYear = appState.salaryDate.getFullYear();
+  openModal("salaryChartModal");
+  runLockedAction(
+    "salaryChartLoad",
+    ["#openSalaryChartButton", "#salaryChartPrevYear", "#salaryChartNextYear"],
+    () => loadSalaryChartYear(appState.salaryChartYear)
+  );
+}
+
+
+function monthKeyToDate(monthKey) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || ""));
+
+  if (!match) {
+    return new Date();
+  }
+
+  return new Date(Number(match[1]), Number(match[2]) - 1, 1);
+}
+
+
+function getPayrollResultForComparison(monthKey) {
+  const draft = ensurePayrollDraft(monthKey);
+  const saved = appState.payrollMonths[monthKey];
+  const result =
+    saved &&
+    !draft.dirty &&
+    isPayrollSnapshotUsable(saved.calculatedSnapshot)
+      ? saved.calculatedSnapshot
+      : calculatePayroll(monthKey, draft);
+
+  return {
+    monthKey,
+    result,
+    draft,
+    saved,
+    policy: getIncomePolicyForMonth(monthKey)
   };
-  return map[appState.screen] || map[SCREENS.dashboard];
 }
 
-function renderApp() {
-  const app = $("#app");
-  if (!app) return;
-  if (appState.auth.status === "checking") {
-    app.setAttribute("aria-busy", "true");
-    app.innerHTML = renderAuthLoadingScreen();
-    return;
+
+function formatSignedMoney(value) {
+  const amount = Number(value) || 0;
+  const prefix = amount > 0 ? "+" : amount < 0 ? "−" : "";
+  return `${prefix}${formatPayrollMoney(Math.abs(amount))}`;
+}
+
+
+function formatSignedNumber(value, unit = "") {
+  const amount = Number(value) || 0;
+  const prefix = amount > 0 ? "+" : amount < 0 ? "−" : "";
+  return `${prefix}${formatNumber(Math.abs(amount))}${unit ? ` ${unit}` : ""}`;
+}
+
+
+function comparisonDiffClass(value, invert = false) {
+  const amount = Number(value) || 0;
+
+  if (Math.abs(amount) < 0.0001) {
+    return "neutral";
   }
-  if (appState.auth.status !== "signedIn" || !appState.currentUser) {
-    app.setAttribute("aria-busy", "false");
-    app.innerHTML = renderLoginScreen();
-    return;
+
+  const positive = invert ? amount < 0 : amount > 0;
+  return positive ? "positive" : "negative";
+}
+
+
+function renderComparisonEmpty(message) {
+  return `
+    <div class="salary-compare-empty">
+      <i data-lucide="equal"></i>
+      <span>${escapeHTML(message)}</span>
+    </div>
+  `;
+}
+
+
+function renderSalaryComparePolicyRows(current, baseline, changedOnly) {
+  const rows = INCOME_POLICY_FIELDS
+    .map(key => {
+      const meta = INCOME_POLICY_META[key] || { label: key, kind: "number" };
+      const currentValue = current.policy[key];
+      const baselineValue = baseline.policy[key];
+      const numericDiff = meta.kind === "mode"
+        ? null
+        : Number(currentValue || 0) - Number(baselineValue || 0);
+      const changed = meta.kind === "mode"
+        ? String(currentValue) !== String(baselineValue)
+        : Math.abs(numericDiff) > 0.0001;
+
+      return {
+        key,
+        label: meta.label,
+        currentValue,
+        baselineValue,
+        numericDiff,
+        changed,
+        meta
+      };
+    })
+    .filter(item => !changedOnly || item.changed);
+
+  if (!rows.length) {
+    return renderComparisonEmpty("Không có thay đổi cấu hình thu nhập giữa hai tháng.");
   }
-  const [title, eyebrow] = screenMeta();
-  app.setAttribute("aria-busy", String(Boolean(appState.loading.bootstrap)));
-  app.innerHTML = `
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="topbar-row">
-          <div class="brand-block">
-            <div class="eyebrow">${escapeHTML(eyebrow)}</div>
-            <h1 class="page-title">${escapeHTML(title)}</h1>
-          </div>
-          <div class="topbar-actions">
-            <button class="icon-btn" type="button" data-action="toggle-theme" aria-label="Chuyển sang giao diện ${appState.theme === "dark" ? "sáng" : "tối"}">
-              ${icon(appState.theme === "dark" ? "sun" : "moon")}
-            </button>
-            <button class="icon-btn" type="button" data-action="open-profile" aria-label="Mở thông tin người dùng">
-              ${icon("account")}
-            </button>
-          </div>
-        </div>
-      </header>
 
-      <main id="main-content" class="main-content" tabindex="-1">
-        ${renderCurrentScreen()}
-      </main>
+  return rows.map(item => {
+    const diff = item.meta.kind === "mode"
+      ? item.changed
+        ? "Đã đổi"
+        : "Không đổi"
+      : item.meta.kind === "money" || item.meta.kind === "money-rate"
+        ? `${item.numericDiff > 0 ? "+" : item.numericDiff < 0 ? "−" : ""}${formatIncomePolicyValue(item.key, Math.abs(item.numericDiff))}`
+        : formatSignedNumber(item.numericDiff, item.meta.unit);
 
-      ${renderBottomNavigation()}
-    </div>`;
+    return `
+      <div class="salary-compare-row ${item.changed ? "is-changed" : ""}">
+        <span class="salary-compare-row-copy">
+          <strong>${escapeHTML(item.label)}</strong>
+          <small>${escapeHTML(formatIncomePolicyValue(item.key, item.baselineValue))} → ${escapeHTML(formatIncomePolicyValue(item.key, item.currentValue))}</small>
+        </span>
+        <strong class="salary-compare-diff ${item.meta.kind === "mode" ? "neutral" : comparisonDiffClass(item.numericDiff)}">${escapeHTML(diff)}</strong>
+      </div>
+    `;
+  }).join("");
 }
 
-function renderAuthLoadingScreen() {
-  return `<main class="auth-shell" aria-label="Đang kiểm tra phiên đăng nhập"><section class="auth-card"><div class="auth-logo">${icon("inventory")}</div><div class="skeleton" style="height:28px;width:68%;margin:auto"></div><div class="skeleton" style="height:52px;margin-top:24px"></div></section></main>`;
-}
 
-function renderLoginScreen() {
-  const needsBootstrap = dataService.mode === "supabase" && appState.ui.initialized === false;
-  return `<main class="auth-shell">
-    <section class="auth-card" aria-labelledby="login-title">
-      <div class="auth-top-actions"><button class="icon-btn" type="button" data-action="toggle-theme" aria-label="Chuyển sang giao diện ${appState.theme === "dark" ? "sáng" : "tối"}">${icon(appState.theme === "dark" ? "sun" : "moon")}</button></div>
-      <div class="auth-logo">${icon("inventory")}</div>
-      <div class="auth-copy"><div class="eyebrow">Quản lý vật liệu</div><h1 id="login-title" class="auth-title">Kho Khuôn Bế</h1><p class="auth-subtitle">${needsBootstrap ? "Tạo Super Admin đầu tiên để bắt đầu sử dụng." : "Đăng nhập bằng tên tài khoản do Super Admin cấp."}</p></div>
-      ${needsBootstrap ? `<form id="bootstrap-form" class="field-grid auth-form" novalidate>
-        <label class="field" for="bootstrap-username"><span class="field-label">Tên đăng nhập Super Admin</span><input id="bootstrap-username" name="username" class="input" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" value="superadmin" required autofocus></label>
-        <label class="field" for="bootstrap-display-name"><span class="field-label">Tên hiển thị</span><input id="bootstrap-display-name" name="displayName" class="input" type="text" autocomplete="name" value="Super Admin" required></label>
-        <label class="field" for="bootstrap-password"><span class="field-label">Mật khẩu</span><input id="bootstrap-password" name="password" class="input" type="password" autocomplete="new-password" minlength="8" required></label>
-        <label class="field" for="bootstrap-password-confirm"><span class="field-label">Nhập lại mật khẩu</span><input id="bootstrap-password-confirm" name="passwordConfirm" class="input" type="password" autocomplete="new-password" minlength="8" required></label>
-        <button class="btn btn-primary btn-full" type="submit">Tạo Super Admin</button>
-      </form>` : `<form id="login-form" class="field-grid auth-form" novalidate>
-        <label class="field" for="login-username"><span class="field-label">Tên đăng nhập</span><input id="login-username" name="username" class="input" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></label>
-        <label class="field" for="login-password"><span class="field-label">Mật khẩu</span><input id="login-password" name="password" class="input" type="password" autocomplete="current-password" required></label>
-        <button class="btn btn-primary btn-full" type="submit">Đăng nhập</button>
-      </form>`}
-      ${dataService.mode === "local"
-        ? `<div class="notice"><div class="notice-icon">${icon("info")}</div><div><div class="notice-title">Tài khoản thử nghiệm</div><div class="notice-text"><strong>superadmin-demo</strong> · mật khẩu <strong>${escapeHTML(DEFAULT_DEMO_PASSWORD)}</strong>.</div></div></div>`
-        : dataServiceConfigurationError
-          ? `<div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Supabase chưa cấu hình</div><div class="notice-text">${escapeHTML(dataServiceConfigurationError.message)}</div></div></div>`
-          : appState.ui.bootstrapError
-            ? `<div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Database chưa sẵn sàng</div><div class="notice-text">${escapeHTML(appState.ui.bootstrapError)} Hãy chạy file database.sql trong Supabase SQL Editor.</div></div></div>`
-            : `<div class="notice"><div class="notice-icon">${icon("cloud")}</div><div><div class="notice-title">Dữ liệu Supabase</div><div class="notice-text">Dùng được trên iPhone, iPad và máy tính. Không cần email thật.</div></div></div>`}
-      <div class="app-footer-note">Phiên bản ${APP_VERSION}</div>
-    </section>
-  </main>`;
-}
-
-function renderCurrentScreen() {
-  if (appState.loading.bootstrap && !appState.cache.schema) return renderLoadingScreen();
-  if (appState.ui.bootstrapError && !appState.cache.schema) {
-    return `<section class="screen"><div class="card">${renderEmptyState("warning", "Không tải được dữ liệu", appState.ui.bootstrapError)}<button class="btn btn-primary btn-block" type="button" data-action="retry-bootstrap">Thử tải lại</button></div></section>`;
-  }
-  if (appState.screen === SCREENS.inventory) return renderInventoryScreen();
-  if (appState.screen === SCREENS.history) return renderHistoryScreen();
-  if (appState.screen === SCREENS.manage) return renderManageScreen();
-  return renderDashboardScreen();
-}
-
-function renderLoadingScreen() {
-  return `<section class="screen" aria-label="Đang tải dữ liệu">
-    <div class="skeleton loading-block"></div>
-    <div class="metric-grid"><div class="skeleton loading-block"></div><div class="skeleton loading-block"></div></div>
-    <div class="card"><div class="skeleton" style="height:240px"></div></div>
-  </section>`;
-}
-
-function renderBottomNavigation() {
-  const items = [
-    [SCREENS.dashboard, "dashboard", "Tổng quan"],
-    [SCREENS.inventory, "inventory", "Kho"],
-    ["quick", "plus", "Nhập / Xuất"],
-    [SCREENS.history, "history", "Lịch sử"],
-    [SCREENS.manage, "manage", "Quản lý"],
+function renderSalaryComparePayrollRows(current, baseline, changedOnly) {
+  const a = current.result;
+  const b = baseline.result;
+  const rows = [
+    ["Lương làm việc", "workingSalary", false],
+    ["Tiền tăng ca", "overtimeMoney", false],
+    ["Phụ cấp", "allowances.main.value", false],
+    ["Phụ cấp khác", "allowances.other.value", false],
+    ["Phụ cấp chuyên cần", "allowances.attendance.value", false],
+    ["Phụ cấp trách nhiệm", "allowances.responsibility.value", false],
+    ["Hỗ trợ giao hàng", "fuelMoney", false],
+    ["Khoản cộng khác", "otherIncome", false],
+    ["Bảo hiểm", "insuranceMoney", true],
+    ["Ứng trước", "advance", true],
+    ["Khoản trừ khác", "otherDeduction", true]
   ];
-  return `<nav class="bottom-nav" aria-label="Điều hướng chính">
-    ${items.map(([key, iconName, label]) => {
-      const quick = key === "quick";
-      const active = !quick && appState.screen === key;
-      return `<button class="nav-item${quick ? " nav-primary" : ""}" type="button" data-nav="${key}" ${active ? 'aria-current="page"' : ""} aria-label="${escapeHTML(label)}">
-        ${icon(iconName)}<span>${escapeHTML(label)}</span>
-      </button>`;
-    }).join("")}
-  </nav>`;
-}
 
-function renderDashboardScreen() {
-  if (!hasPermission(PERMISSIONS.viewInventory)) return renderAccessDenied("Bạn chưa có quyền xem tổng quan kho.");
-  const products = visibleProducts();
-  const quantityProducts = products.filter((product) => hasPermission(PERMISSIONS.viewQuantity, product.categoryId));
-  const historyTransactions = visibleTransactions();
-  const canViewQuantity = quantityProducts.length > 0;
-  const canViewHistory = historyTransactions.length > 0 || hasPermission(PERMISSIONS.viewHistory);
-  const totalQuantity = canViewQuantity ? quantityProducts.reduce((sum, product) => sum + toNumber(product.quantity), 0) : null;
-  const outCount = canViewQuantity ? quantityProducts.filter((product) => productStatus(product).key === "out").length : null;
-  const lowProducts = canViewQuantity
-    ? quantityProducts.filter((product) => productStatus(product).key !== "ok").sort((a, b) => toNumber(a.quantity) - toNumber(b.quantity))
-    : [];
-  const today = formatISODate(new Date());
-  const todayTransactions = historyTransactions.filter((transaction) => formatISODate(transaction.createdAt) === today);
-  const recentTransactions = historyTransactions.slice(0, 4);
+  const get = (obj, path) => path.split(".").reduce((value, key) => value?.[key], obj) ?? 0;
+  const items = rows
+    .map(([label, path, deduction]) => {
+      const currentValue = Number(get(a, path)) || 0;
+      const baselineValue = Number(get(b, path)) || 0;
+      const diff = currentValue - baselineValue;
+      return { label, currentValue, baselineValue, diff, deduction };
+    })
+    .filter(item => !changedOnly || Math.abs(item.diff) > 0.5);
 
-  return `<section class="screen" aria-label="Tổng quan kho">
-    <div class="notice">
-      <div class="notice-icon">${icon(dataService.mode === "supabase" ? "cloud" : "database")}</div>
-      <div>
-        <div class="notice-title">${dataService.mode === "supabase" ? "Đã kết nối Supabase" : "Bản thử nghiệm trên thiết bị"}</div>
-        <div class="notice-text">${dataService.mode === "supabase" ? "Dữ liệu được lưu trên cloud và dùng chung giữa iPhone, iPad và máy tính." : "Dữ liệu hiện tại chỉ dùng để kiểm thử giao diện và nghiệp vụ."}</div>
-      </div>
-    </div>
-
-    <article class="hero-card">
-      <div class="hero-label">${canViewQuantity ? "Tổng số lượng đang quản lý" : "Tổng quan tồn kho"}</div>
-      <div class="hero-value">${canViewQuantity ? formatQuantity(totalQuantity) : "Đã ẩn"}</div>
-      <div class="hero-meta">${products.length} quy cách trong phạm vi · ${canViewQuantity ? `${quantityProducts.length} quy cách được xem số lượng` : "không có quyền xem số lượng"}</div>
-    </article>
-
-    <div class="metric-grid" aria-label="Chỉ số kho">
-      ${renderMetric(products.length, "Quy cách hoạt động")}
-      ${renderMetric(canViewQuantity ? lowProducts.length : "—", "Cần chú ý")}
-      ${renderMetric(canViewQuantity ? outCount : "—", "Đã hết hàng")}
-      ${renderMetric(canViewHistory ? todayTransactions.length : "—", "Giao dịch hôm nay")}
-    </div>
-
-    <section>
-      <div class="section-head">
-        <div class="section-copy"><h2 class="section-title">Cần xử lý</h2><p class="section-subtitle">${canViewQuantity ? "Vật liệu hết hoặc dưới mức cảnh báo." : "Số lượng đang được ẩn theo quyền."}</p></div>
-        <button class="btn btn-compact btn-secondary" type="button" data-nav="inventory">Mở kho</button>
-      </div>
-      <div class="card list-card" style="margin-top:10px">
-        ${canViewQuantity ? (lowProducts.length ? lowProducts.slice(0, 5).map(renderProductRow).join("") : renderEmptyState("check", "Tồn kho ổn định", "Chưa có vật liệu nào dưới mức cảnh báo.")) : renderEmptyState("shield", "Đã ẩn số lượng", "Vai trò hiện tại không được xem cảnh báo tồn kho.")}
-      </div>
-    </section>
-
-    ${canViewHistory ? `<section>
-      <div class="section-head">
-        <div class="section-copy"><h2 class="section-title">Giao dịch gần đây</h2><p class="section-subtitle">Bốn thay đổi mới nhất trong kho.</p></div>
-      </div>
-      <div class="card list-card" style="margin-top:10px">
-        ${recentTransactions.length ? recentTransactions.map(renderTransactionRow).join("") : renderEmptyState("history", "Chưa có giao dịch", "Giao dịch mới sẽ xuất hiện tại đây.")}
-      </div>
-    </section>` : ""}
-
-    <div class="app-footer-note">Phiên bản ${APP_VERSION}</div>
-  </section>`;
-}
-
-function renderMetric(value, label) {
-  return `<article class="metric"><div class="metric-value">${formatQuantity(value)}</div><div class="metric-label">${escapeHTML(label)}</div></article>`;
-}
-
-function filteredProducts() {
-  const { search, category, status, quantityBelow } = appState.filters.inventory;
-  const tokens = searchTokens(search);
-  const hasQuantityBelow = String(quantityBelow ?? "").trim() !== "";
-  const quantityBelowValue = hasQuantityBelow ? toNumber(quantityBelow, Number.NaN) : null;
-  return visibleProducts().filter((product) => {
-    const categoryItem = categoryById(product.categoryId);
-    const searchText = productSearchText(product, categoryItem);
-    const matchesSearch = !tokens.length || tokens.every((token) => searchText.includes(token));
-    const matchesCategory = category === "all" || product.categoryId === category;
-    const matchesStatus = status === "all" || (hasPermission(PERMISSIONS.viewQuantity, product.categoryId) && productStatus(product).key === status);
-    const matchesQuantity = !hasQuantityBelow
-      || (Number.isFinite(quantityBelowValue)
-        && quantityBelowValue >= 0
-        && hasPermission(PERMISSIONS.viewQuantity, product.categoryId)
-        && toNumber(product.quantity) < quantityBelowValue);
-    return matchesSearch && matchesCategory && matchesStatus && matchesQuantity;
-  }).sort((a, b) => productDisplayName(a).localeCompare(productDisplayName(b), "vi"));
-}
-
-function renderInventoryScreen() {
-  if (!hasPermission(PERMISSIONS.viewInventory)) return renderAccessDenied("Bạn chưa có quyền xem kho vật liệu.");
-  const categories = categoriesWithPermission(PERMISSIONS.viewInventory);
-  const visibleInventoryProducts = visibleProducts();
-  const canFilterStatus = visibleInventoryProducts.length > 0 && visibleInventoryProducts.every((product) => hasPermission(PERMISSIONS.viewQuantity, product.categoryId));
-  const canFilterQuantity = canFilterStatus;
-  if (!canFilterStatus && appState.filters.inventory.status !== "all") appState.filters.inventory.status = "all";
-  if (!canFilterQuantity && appState.filters.inventory.quantityBelow !== "") appState.filters.inventory.quantityBelow = "";
-  const products = filteredProducts();
-  return `<section class="screen" aria-label="Kho vật liệu">
-    <div class="toolbar">
-      <div class="toolbar-row">
-        <label class="search-wrap" for="inventory-search">
-          <span class="search-icon">${icon("search")}</span>
-          <input id="inventory-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Ví dụ: dao cắt 0.7 23.8" value="${escapeHTML(appState.filters.inventory.search)}">
-        </label>
-        ${categoriesWithPermission(PERMISSIONS.addProduct).length ? `<button class="icon-btn" type="button" data-action="add-product" aria-label="Thêm vật liệu">${icon("plus")}</button>` : ""}
-      </div>
-      <div class="filter-grid">
-        <label class="field" for="inventory-category">
-          <span class="field-label">Nhóm vật liệu</span>
-          <select id="inventory-category" class="select">
-            <option value="all">Tất cả nhóm</option>
-            ${categories.map((category) => `<option value="${escapeHTML(category.id)}" ${category.id === appState.filters.inventory.category ? "selected" : ""}>${escapeHTML(category.name)}</option>`).join("")}
-          </select>
-        </label>
-        <label class="field" for="inventory-status">
-          <span class="field-label">Tình trạng</span>
-          <select id="inventory-status" class="select" ${canFilterStatus ? "" : "disabled"}>
-            ${[["all", "Tất cả"], ["ok", "Đủ hàng"], ["low", "Sắp hết"], ["out", "Hết hàng"]].map(([value, label]) => `<option value="${value}" ${value === appState.filters.inventory.status ? "selected" : ""}>${label}</option>`).join("")}
-          </select>${canFilterStatus ? "" : '<span class="field-help">Đã tắt để tránh suy luận tồn của nhóm bị ẩn số lượng.</span>'}
-        </label>
-        <label class="field inventory-quantity-filter" for="inventory-quantity-below">
-          <span class="field-label">Số lượng dưới</span>
-          <input id="inventory-quantity-below" class="input" type="number" inputmode="decimal" min="0" step="any" placeholder="Ví dụ: 5" value="${escapeHTML(appState.filters.inventory.quantityBelow)}" ${canFilterQuantity ? "" : "disabled"}>
-        </label>
-      </div>
-    </div>
-
-    <div class="section-head">
-      <div class="section-copy"><h2 class="section-title">Danh sách vật liệu</h2><p id="inventory-result-count" class="section-subtitle">${products.length} kết quả</p></div>
-      ${renderRealtimeStatusLine()}
-    </div>
-
-    <div id="inventory-list" class="card list-card">
-      ${renderInventoryListContent(products)}
-    </div>
-  </section>`;
-}
-
-function renderInventoryListContent(products = filteredProducts()) {
-  return products.length
-    ? products.map(renderProductRow).join("")
-    : renderEmptyState("search", "Không tìm thấy vật liệu", "Thử thay đổi từ khóa hoặc bộ lọc.");
-}
-
-function renderProductRow(product) {
-  const category = categoryById(product.categoryId);
-  const canViewQuantity = hasPermission(PERMISSIONS.viewQuantity, product.categoryId);
-  const status = canViewQuantity ? productStatus(product) : null;
-  const quantityText = canViewQuantity ? `${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}` : "Đã ẩn";
-  return `<button class="list-row list-row-button" type="button" data-action="open-product" data-product-id="${escapeHTML(product.id)}">
-    <div class="row-main">
-      <div class="row-title">${escapeHTML(productDisplayName(product))}</div>
-      <div class="row-sub">${escapeHTML(category?.name || "Chưa phân nhóm")} · ${product.note ? escapeHTML(product.note) : "Không có ghi chú"}</div>
-    </div>
-    <div class="row-copy">
-      <div class="row-value">${quantityText}</div>
-      ${status ? `<div style="margin-top:5px;text-align:right"><span class="badge ${status.className}">${escapeHTML(status.label)}</span></div>` : ""}
-    </div>
-  </button>`;
-}
-
-function filteredTransactions() {
-  const { search, type, from, to } = appState.filters.history;
-  const searchKey = normalizeText(search);
-  return visibleTransactions().filter((transaction) => {
-    const date = formatISODate(transaction.createdAt);
-    const matchesSearch = !searchKey || normalizeText(`${transaction.productName} ${transaction.note} ${transaction.actor}`).includes(searchKey);
-    const matchesType = type === "all" || transaction.type === type;
-    const matchesFrom = !from || date >= from;
-    const matchesTo = !to || date <= to;
-    return matchesSearch && matchesType && matchesFrom && matchesTo;
-  });
-}
-
-function renderHistoryScreen() {
-  if (!hasPermission(PERMISSIONS.viewHistory)) return renderAccessDenied("Vai trò hiện tại chưa có quyền xem lịch sử giao dịch.");
-  const transactions = filteredTransactions();
-  return `<section class="screen" aria-label="Lịch sử giao dịch">
-    <div class="toolbar">
-      <label class="search-wrap" for="history-search">
-        <span class="search-icon">${icon("search")}</span>
-        <input id="history-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Tìm vật liệu, ghi chú, người tạo" value="${escapeHTML(appState.filters.history.search)}">
-      </label>
-      <div class="filter-grid history-filter-grid">
-        <label class="field" for="history-type"><span class="field-label">Loại giao dịch</span><select id="history-type" class="select">
-          <option value="all">Tất cả</option>
-          ${Object.entries(TRANSACTION_LABELS).map(([value, label]) => `<option value="${value}" ${value === appState.filters.history.type ? "selected" : ""}>${escapeHTML(label)}</option>`).join("")}
-        </select></label>
-        <div class="field-grid two history-date-grid">
-          <label class="field" for="history-from"><span class="field-label">Từ ngày</span><input id="history-from" class="input" type="date" value="${escapeHTML(appState.filters.history.from)}"></label>
-          <label class="field" for="history-to"><span class="field-label">Đến ngày</span><input id="history-to" class="input" type="date" value="${escapeHTML(appState.filters.history.to)}"></label>
-        </div>
-      </div>
-    </div>
-
-    <div class="section-head history-section-head">
-      <div class="section-copy"><h2 class="section-title">Các thay đổi trong kho</h2><p id="history-result-count" class="section-subtitle">${transactions.length} giao dịch</p></div>
-      <div class="inline-actions">
-        <button class="btn btn-compact btn-secondary" type="button" data-action="clear-history-filters">Xóa lọc</button>
-        ${normalizeRoleCode(appState.currentUser.role) === "superadmin" && hasPermission(PERMISSIONS.manageData) ? `<button class="btn btn-compact btn-danger-soft" type="button" data-action="open-history-cleanup">${icon("trash")} Xóa lịch sử</button>` : ""}
-      </div>
-    </div>
-
-    <div id="history-list" class="card list-card">
-      ${transactions.length ? transactions.map(renderTransactionRow).join("") : renderEmptyState("history", "Không có giao dịch phù hợp", "Thử xóa bộ lọc hoặc chọn khoảng ngày khác.")}
-    </div>
-  </section>`;
-}
-
-function transactionPresentation(transaction) {
-  if (transaction.type === TRANSACTION_TYPES.import) return { sign: "+", className: "positive", badge: "badge-success" };
-  if (transaction.type === TRANSACTION_TYPES.export) return { sign: "−", className: "negative", badge: "badge-danger" };
-  if (transaction.type === TRANSACTION_TYPES.reverse) return { sign: "↶", className: "warning", badge: "badge-warning" };
-  return { sign: "→", className: "neutral", badge: "badge-purple" };
-}
-
-function renderTransactionRow(transaction) {
-  const presentation = transactionPresentation(transaction);
-  const quantityText = [TRANSACTION_TYPES.adjust, TRANSACTION_TYPES.initial, TRANSACTION_TYPES.reverse].includes(transaction.type)
-    ? `${formatQuantity(transaction.beforeQuantity)} → ${formatQuantity(transaction.afterQuantity)}`
-    : `${presentation.sign}${formatQuantity(transaction.amount)}`;
-  const reversedBadge = transaction.reversalTransactionId ? '<span class="badge badge-warning">Đã đảo</span>' : "";
-  const reversalLink = transaction.reversalOf ? '<span class="badge badge-purple">Bản ghi đảo</span>' : "";
-  return `<button class="list-row list-row-button transaction-row ${transaction.reversalTransactionId ? "transaction-row-reversed" : ""}" type="button" data-action="open-transaction-detail" data-transaction-id="${escapeHTML(transaction.id)}">
-    <div class="row-main">
-      <div class="row-title">${escapeHTML(transaction.productName)}</div>
-      <div class="row-sub">${escapeHTML(transaction.actor)} · ${formatDateTime(transaction.createdAt)}${transaction.note ? ` · ${escapeHTML(transaction.note)}` : ""}</div>
-    </div>
-    <div class="row-copy">
-      <div class="row-value transaction-value ${presentation.className}">${quantityText} ${escapeHTML(transaction.unit)}</div>
-      <div class="transaction-status"><span class="badge ${presentation.badge}">${escapeHTML(TRANSACTION_LABELS[transaction.type] || transaction.type)}</span>${reversedBadge}${reversalLink}</div>
-    </div>
-  </button>`;
-}
-
-function renderManageScreen() {
-  const tabs = [
-    [MANAGE_TABS.accounts, "account", "Tài khoản"],
-    [MANAGE_TABS.categories, "category", "Danh mục"],
-    [MANAGE_TABS.access, "shield", "Phân quyền"],
-    [MANAGE_TABS.data, "database", "Dữ liệu"],
-  ];
-  return `<section class="screen" aria-label="Quản lý ứng dụng">
-    <div class="manage-tabs" role="tablist" aria-label="Nhóm cài đặt">
-      ${tabs.map(([key, iconName, label]) => `<button class="manage-tab" type="button" role="tab" data-manage-tab="${key}" aria-selected="${appState.manageTab === key}">${icon(iconName)}<span>${escapeHTML(label)}</span></button>`).join("")}
-    </div>
-    <div role="tabpanel">${renderManagePanel()}</div>
-  </section>`;
-}
-
-function renderManagePanel() {
-  if (appState.manageTab === MANAGE_TABS.categories) return renderCategoriesPanel();
-  if (appState.manageTab === MANAGE_TABS.access) return renderAccessPanel();
-  if (appState.manageTab === MANAGE_TABS.data) return renderDataPanel();
-  return renderAccountsPanel();
-}
-
-function renderAccountsPanel() {
-  if (!hasPermission(PERMISSIONS.manageAccounts)) return renderAccessDenied("Vai trò hiện tại chưa được quản lý tài khoản.");
-  if (appState.loading.accounts && !appState.cache.loaded.accounts) return renderLoadingScreen();
-  const audits = appState.cache.accountAudit.slice(0, 5);
-  return `<div class="screen">
-    <div class="section-head">
-      <div class="section-copy"><h2 class="section-title">Tài khoản</h2><p class="section-subtitle">Vai trò, trạng thái và quyền riêng theo từng nhóm vật liệu.</p></div>
-      ${canManageAccount() ? `<button class="btn btn-compact btn-primary" type="button" data-action="add-account">${icon("plus")} Tạo</button>` : ""}
-    </div>
-    <div class="notice ${dataService.mode === "supabase" ? "notice-success" : "notice-warning"}">
-      <div class="notice-icon">${icon(dataService.mode === "supabase" ? "shield" : "warning")}</div>
-      <div><div class="notice-title">${dataService.mode === "supabase" ? "Tài khoản lưu trên Supabase" : "Tài khoản thử nghiệm trên thiết bị"}</div><div class="notice-text">${dataService.mode === "supabase" ? "Mật khẩu chỉ lưu dạng bcrypt hash; Super Admin quản lý tài khoản ngay trong app." : "Dữ liệu local chỉ dùng kiểm thử giao diện."}</div></div>
-    </div>
-    <div class="card list-card">
-      ${appState.cache.accounts.length ? appState.cache.accounts.map((account) => {
-        const status = accountStatus(account);
-        const statusClass = status === ACCOUNT_STATUSES.active ? "badge-success" : status === ACCOUNT_STATUSES.locked ? "badge-warning" : "badge-danger";
-        const scopeText = account.scopeMode === "custom" ? `${Object.values(account.categoryPermissions || {}).filter((permissions) => permissions.includes(PERMISSIONS.viewInventory)).length} nhóm được cấp` : "Tất cả nhóm theo vai trò";
-        return `<button class="list-row list-row-button" type="button" data-action="edit-account" data-account-id="${escapeHTML(account.id)}" ${canManageAccount(account) ? "" : 'aria-disabled="true"'}>
-          <div class="row-main"><div class="row-title">${escapeHTML(account.displayName)}</div><div class="row-sub">${escapeHTML(account.username)} · ${escapeHTML(roleLabel(account.role))} · ${escapeHTML(scopeText)}</div></div>
-          <div class="row-copy"><span class="badge ${statusClass}">${escapeHTML(accountStatusLabel(account))}</span></div>
-        </button>`;
-      }).join("") : renderEmptyState("account", "Chưa có tài khoản", "Tạo tài khoản đầu tiên để kiểm thử phân quyền.")}
-    </div>
-    <div class="section-head"><div class="section-copy"><h2 class="section-title">Nhật ký tài khoản gần đây</h2><p class="section-subtitle">Các thay đổi được giữ riêng để phục vụ đối soát.</p></div></div>
-    <div class="card list-card">
-      ${audits.length ? audits.map((audit) => `<div class="list-row"><div class="row-main"><div class="row-title">${escapeHTML(audit.targetUsername || "Tài khoản")}</div><div class="row-sub">${escapeHTML(audit.actorName)} · ${escapeHTML(audit.detail || audit.action)}</div></div><div class="row-copy"><div class="row-value row-value-small">${formatDateTime(audit.createdAt)}</div></div></div>`).join("") : renderEmptyState("history", "Chưa có thay đổi", "Nhật ký sẽ xuất hiện khi tạo hoặc sửa tài khoản.")}
-    </div>
-  </div>`;
-}
-
-function renderCategoriesPanel() {
-  if (!hasPermission(PERMISSIONS.manageSchema)) return renderAccessDenied("Vai trò hiện tại chưa được quản lý danh mục.");
-  const categories = appState.cache.schema.categories;
-  return `<div class="screen">
-    <div class="section-head">
-      <div class="section-copy"><h2 class="section-title">Nhóm và thuộc tính</h2><p class="section-subtitle">Thứ tự hiển thị điều khiển form và tên; khóa chống trùng được giữ độc lập.</p></div>
-      <button class="btn btn-compact btn-primary" type="button" data-action="add-category">${icon("plus")} Thêm</button>
-    </div>
-    <div class="notice">
-      <div class="notice-icon">${icon("info")}</div>
-      <div><div class="notice-title">Thứ tự hiển thị không đổi khóa chống trùng</div><div class="notice-text">Bạn có thể sắp xếp lại thuộc tính an toàn. Chỉ khi thêm, bỏ hoặc đổi thuộc tính nhận diện mới cần migration chữ ký trong production.</div></div>
-    </div>
-    <div class="card list-card">
-      ${categories.map((category) => `<button class="list-row list-row-button" type="button" data-action="edit-category" data-category-id="${escapeHTML(category.id)}">
-        <div class="row-main"><div class="row-title">${escapeHTML(category.icon)} ${escapeHTML(category.name)}</div><div class="row-sub">${category.attributes.filter((item) => item.active !== false).length} thuộc tính · ${escapeHTML(category.units.join(", "))}</div></div>
-        <div class="row-copy"><span class="badge ${category.active !== false ? "badge-success" : "badge-danger"}">${category.active !== false ? "Đang dùng" : "Ngừng dùng"}</span></div>
-      </button>`).join("")}
-    </div>
-  </div>`;
-}
-
-function renderAccessPanel() {
-  const permissions = rolePermissions(appState.currentUser.role);
-  const effectivePermissions = permissions.includes("*") ? Object.keys(PERMISSION_META) : permissions;
-  const categories = appState.cache.schema.categories.filter((category) => category.active !== false);
-  return `<div class="screen">
-    <div class="card card-pad">
-      <div class="detail-grid">
-        <div class="detail-row"><div class="detail-key">Tài khoản đăng nhập</div><div class="detail-value">${escapeHTML(appState.currentUser.username)}</div></div>
-        <div class="detail-row"><div class="detail-key">Vai trò</div><div class="detail-value">${escapeHTML(roleLabel(appState.currentUser.role))}</div></div>
-      </div>
-      <span class="field-help" style="margin-top:10px">Phiên đăng nhập hiện tại được kiểm tra lại theo vai trò, trạng thái và phạm vi nhóm vật liệu.</span>
-    </div>
-    <div class="section-head"><div class="section-copy"><h2 class="section-title">Quyền theo vai trò</h2><p class="section-subtitle">${effectivePermissions.length} quyền nền · ${escapeHTML(roleLabel(appState.currentUser.role))}.</p></div></div>
-    <div class="permission-grid">
-      ${Object.entries(PERMISSION_META).map(([permission, [name, description]]) => {
-        const allowed = hasBasePermission(appState.currentUser, permission);
-        return `<div class="permission-item"><input type="checkbox" ${allowed ? "checked" : ""} disabled aria-label="${escapeHTML(name)}"><div><div class="permission-name">${escapeHTML(name)}</div><div class="permission-desc">${escapeHTML(description)}</div></div></div>`;
-      }).join("")}
-    </div>
-    <div class="section-head"><div class="section-copy"><h2 class="section-title">Phạm vi nhóm vật liệu</h2><p class="section-subtitle">${appState.currentUser.scopeMode === "custom" ? "Quyền tùy chỉnh theo từng nhóm." : "Áp dụng quyền vai trò cho tất cả nhóm."}</p></div></div>
-    <div class="scope-summary-grid">
-      ${categories.map((category) => {
-        const allowed = CATEGORY_SCOPED_PERMISSIONS.filter((permission) => hasPermission(permission, category.id));
-        return `<article class="scope-summary-card"><div class="scope-summary-head"><strong>${escapeHTML(category.icon)} ${escapeHTML(category.name)}</strong><span class="badge ${allowed.includes(PERMISSIONS.viewInventory) ? "badge-success" : "badge-danger"}">${allowed.includes(PERMISSIONS.viewInventory) ? "Có quyền" : "Ẩn"}</span></div><div class="scope-chip-list">${allowed.length ? allowed.map((permission) => `<span class="scope-chip">${escapeHTML(PERMISSION_META[permission]?.[0] || permission)}</span>`).join("") : '<span class="permission-desc">Không có quyền trong nhóm này.</span>'}</div></article>`;
-      }).join("")}
-    </div>
-  </div>`;
-}
-
-function renderDataPanel() {
-  if (!hasPermission(PERMISSIONS.manageData)) return renderAccessDenied("Vai trò hiện tại chưa được quản lý dữ liệu.");
-
-  if (!dataService.capabilities?.localBackup) {
-    return `<div class="screen">
-      <div class="notice notice-success">
-        <div class="notice-icon">${icon("check")}</div>
-        <div><div class="notice-title">Dữ liệu đang lưu trên Supabase</div><div class="notice-text">Ứng dụng không cho tải toàn bộ database hoặc phục hồi JSON trực tiếp từ trình duyệt.</div></div>
-      </div>
-      <div class="card list-card">
-        <div class="list-row">
-          <div class="row-main"><div class="row-title">Sao lưu database</div><div class="row-sub">Thiết lập backup hoặc Point-in-Time Recovery trong Supabase Dashboard.</div></div><div class="row-actions">${icon("shield")}</div>
-        </div>
-        <div class="list-row">
-          <div class="row-main"><div class="row-title">Khôi phục dữ liệu</div><div class="row-sub">Thực hiện bằng backup của Supabase, không ghi đè từ file JSON trên trình duyệt.</div></div><div class="row-actions">${icon("history")}</div>
-        </div>
-        <div class="list-row">
-          <div class="row-main"><div class="row-title">Tầng dữ liệu</div><div class="row-sub">${escapeHTML(dataService.label)} · RLS và RPC kiểm tra quyền phía server.</div></div><div class="row-actions">${icon("cloud")}</div>
-        </div>
-        ${normalizeRoleCode(appState.currentUser.role) === "superadmin" ? `<button class="list-row list-row-button" type="button" data-action="open-history-cleanup">
-          <div class="row-main"><div class="row-title" style="color:var(--danger)">Xóa lịch sử kho</div><div class="row-sub">Xóa khỏi màn hình theo ngày hoặc toàn bộ. Tồn kho hiện tại không thay đổi và thao tác vẫn được ghi nhật ký quản trị.</div></div><div class="row-actions" style="color:var(--danger)">${icon("trash")}</div>
-        </button>` : ""}
-      </div>
-      <div class="helper-block">File <strong>database.sql</strong> là file cài đặt database cho ứng dụng này.</div>
-    </div>`;
+  if (!items.length) {
+    return renderComparisonEmpty("Các khoản tiền trong bảng lương không thay đổi.");
   }
 
-  return `<div class="screen">
-    <div class="notice notice-warning">
-      <div class="notice-icon">${icon("warning")}</div>
-      <div><div class="notice-title">Chỉ áp dụng cho dữ liệu thử nghiệm trên thiết bị</div><div class="notice-text">Backup JSON có thể chứa dữ liệu nghiệp vụ và hash mật khẩu demo. Không gửi file cho người không có quyền.</div></div>
+  return items.map(item => `
+    <div class="salary-compare-row ${Math.abs(item.diff) > 0.5 ? "is-changed" : ""}">
+      <span class="salary-compare-row-copy">
+        <strong>${escapeHTML(item.label)}</strong>
+        <small>${formatPayrollMoney(item.baselineValue)} → ${formatPayrollMoney(item.currentValue)}</small>
+      </span>
+      <strong class="salary-compare-diff ${comparisonDiffClass(item.diff, item.deduction)}">${formatSignedMoney(item.diff)}</strong>
     </div>
-    <div class="card list-card">
-      <button class="list-row list-row-button" type="button" data-action="export-backup">
-        <div class="row-main"><div class="row-title">Xuất bản sao lưu JSON</div><div class="row-sub">Tải toàn bộ dữ liệu thử nghiệm trên thiết bị.</div></div><div class="row-actions">${icon("download")}</div>
-      </button>
-      <button class="list-row list-row-button" type="button" data-action="trigger-import">
-        <div class="row-main"><div class="row-title">Phục hồi từ JSON</div><div class="row-sub">Kiểm tra cấu trúc trước khi ghi đè dữ liệu thử nghiệm.</div></div><div class="row-actions">${icon("upload")}</div>
-      </button>
-      <button class="list-row list-row-button" type="button" data-action="restore-rollback">
-        <div class="row-main"><div class="row-title">Khôi phục thao tác ghi đè gần nhất</div><div class="row-sub">Hoán đổi với snapshot trước lần phục hồi hoặc đặt lại gần nhất.</div></div><div class="row-actions">${icon("history")}</div>
-      </button>
-      <button class="list-row list-row-button" type="button" data-action="reset-demo">
-        <div class="row-main"><div class="row-title" style="color:var(--danger)">Đặt lại dữ liệu thử nghiệm</div><div class="row-sub">Khôi phục dữ liệu mẫu ban đầu trên thiết bị này.</div></div><div class="row-actions" style="color:var(--danger)">${icon("trash")}</div>
-      </button>
-    </div>
-    <input id="backup-file-input" type="file" accept="application/json,.json" hidden>
-    <div class="helper-block code-like">Adapter hiện tại: ${escapeHTML(dataService.label)} · cache key: ${escapeHTML(STORAGE_KEYS.demoData)}</div>
-  </div>`;
+  `).join("");
 }
 
-function renderAccessDenied(message) {
-  return `<div class="card">${renderEmptyState("shield", "Không có quyền truy cập", message)}</div>`;
-}
 
-function renderEmptyState(iconName, title, text) {
-  return `<div class="empty-state"><div class="empty-icon">${icon(iconName)}</div><div class="empty-title">${escapeHTML(title)}</div><div class="empty-text">${escapeHTML(text)}</div></div>`;
-}
-
-function openModal({ name, title, subtitle = "", body, footer = "", size = "sheet" }) {
-  const root = $("#modal-root");
-  if (!root) return;
-  appState.ui.modalName = name;
-  appState.ui.modalLastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const content = size === "dialog"
-    ? `<div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="dialog-body"><h2 id="modal-title" class="sheet-title">${escapeHTML(title)}</h2>${subtitle ? `<p class="sheet-subtitle">${escapeHTML(subtitle)}</p>` : ""}<div style="margin-top:14px">${body}</div></div>${footer ? `<div class="dialog-actions">${footer}</div>` : ""}</div>`
-    : `<section class="sheet" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div><div class="sheet-handle" aria-hidden="true"></div><header class="sheet-head"><div><h2 id="modal-title" class="sheet-title">${escapeHTML(title)}</h2>${subtitle ? `<p class="sheet-subtitle">${escapeHTML(subtitle)}</p>` : ""}</div><button class="icon-btn" type="button" data-action="close-modal" aria-label="Đóng">${icon("close")}</button></header></div><div class="sheet-body">${body}</div>${footer ? `<footer class="sheet-footer">${footer}</footer>` : ""}</section>`;
-  root.innerHTML = `<div class="modal-layer" data-modal-backdrop="true">${content}</div>`;
-  document.body.style.overflow = "hidden";
-  window.setTimeout(() => {
-    const focusTarget = $("[autofocus], .sheet-body input:not([type='hidden']):not(:disabled), .sheet-body select:not(:disabled), .sheet-body textarea:not(:disabled), .dialog-body button:not(:disabled), .sheet-head button:not(:disabled)", root);
-    focusTarget?.focus();
-  }, 20);
-}
-
-function closeModal(force = false) {
-  if (appState.ui.modalBusy && !force) {
-    showToast("info", "Đang xử lý", "Hãy đợi thao tác hiện tại hoàn tất.");
-    return;
-  }
-  const root = $("#modal-root");
-  if (root) root.innerHTML = "";
-  document.body.style.overflow = "";
-  appState.ui.modalName = null;
-  appState.ui.categoryDraft = null;
-  if (appState.ui.confirmCallbackId) {
-    confirmCallbacks.delete(appState.ui.confirmCallbackId);
-    appState.ui.confirmCallbackId = null;
-  }
-  const lastFocus = appState.ui.modalLastFocus;
-  appState.ui.modalLastFocus = null;
-  if (lastFocus?.isConnected) lastFocus.focus();
-}
-
-function openConfirm({ title, message, confirmLabel = "Xác nhận", danger = false, onConfirm }) {
-  const callbackId = makeId("confirm");
-  confirmCallbacks.set(callbackId, onConfirm);
-  appState.ui.confirmCallbackId = callbackId;
-  openModal({
-    name: "confirm",
-    title,
-    size: "dialog",
-    body: `<p style="color:var(--sub)">${escapeHTML(message)}</p>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn ${danger ? "btn-danger" : "btn-primary"}" type="button" data-action="confirm-callback" data-callback-id="${callbackId}">${escapeHTML(confirmLabel)}</button>`,
-  });
-}
-
-const confirmCallbacks = new Map();
-
-function openHistoryCleanupModal() {
-  if (normalizeRoleCode(appState.currentUser?.role) !== "superadmin" || !hasPermission(PERMISSIONS.manageData)) {
-    showToast("error", "Không có quyền", "Chỉ Super Admin được xóa lịch sử kho.");
-    return;
-  }
-  const today = formatISODate(new Date());
-  openModal({
-    name: "history-cleanup",
-    title: "Xóa lịch sử kho",
-    subtitle: "Lịch sử sẽ biến mất khỏi ứng dụng; tồn kho hiện tại và nhật ký quản trị vẫn được giữ.",
-    body: `<form id="history-cleanup-form" class="field-grid" novalidate>
-      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không dùng để sửa tồn kho</div><div class="notice-text">Giao dịch sai nên dùng Đảo giao dịch. Xóa lịch sử chỉ dùng để dọn dữ liệu hiển thị.</div></div></div>
-      <label class="field" for="history-cleanup-scope"><span class="field-label">Phạm vi xóa</span><select id="history-cleanup-scope" name="scope" class="select"><option value="before">Đến hết một ngày</option><option value="all">Toàn bộ lịch sử</option></select></label>
-      <label class="field" id="history-cleanup-date-field" for="history-cleanup-before"><span class="field-label">Xóa đến hết ngày</span><input id="history-cleanup-before" name="before" class="input" type="date" value="${escapeHTML(today)}"></label>
-      <label class="field" for="history-cleanup-reason"><span class="field-label">Lý do</span><textarea id="history-cleanup-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Dọn dữ liệu thử nghiệm trước khi sử dụng chính thức"></textarea></label>
-      <label class="field" for="history-cleanup-confirmation"><span class="field-label">Nhập XOA LICH SU để xác nhận</span><input id="history-cleanup-confirmation" name="confirmation" class="input" type="text" autocapitalize="characters" autocomplete="off" required></label>
-    </form>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="history-cleanup-form">Xóa lịch sử</button>`,
-  });
-}
-
-function updateHistoryCleanupFields() {
-  const form = $("#history-cleanup-form");
-  if (!form) return;
-  const deleteAll = $("#history-cleanup-scope", form)?.value === "all";
-  const dateField = $("#history-cleanup-date-field", form);
-  const dateInput = $("#history-cleanup-before", form);
-  if (dateField) dateField.hidden = deleteAll;
-  if (dateInput) dateInput.required = !deleteAll;
-}
-
-function openProfileModal() {
-  const permissions = rolePermissions(appState.currentUser.role);
-  openModal({
-    name: "profile",
-    title: appState.currentUser.displayName,
-    subtitle: roleLabel(appState.currentUser.role),
-    body: `<div class="detail-grid">
-      <div class="detail-row"><div class="detail-key">Tên đăng nhập</div><div class="detail-value">${escapeHTML(appState.currentUser.username)}</div></div>
-      <div class="detail-row"><div class="detail-key">Phiên bản</div><div class="detail-value">${escapeHTML(APP_VERSION)}</div></div>
-      <div class="detail-row"><div class="detail-key">Tầng dữ liệu</div><div class="detail-value">${escapeHTML(dataService.label)}</div></div>
-      <div class="detail-row"><div class="detail-key">Quyền nền</div><div class="detail-value">${permissions.includes("*") ? "Toàn bộ" : permissions.length}</div></div>
-      <div class="detail-row"><div class="detail-key">Phạm vi</div><div class="detail-value">${appState.currentUser.scopeMode === "custom" ? "Theo từng nhóm" : "Tất cả nhóm"}</div></div>
-      <div class="detail-row"><div class="detail-key">Trạng thái</div><div class="detail-value"><span class="badge badge-success">Đã đăng nhập</span></div></div>
-    </div>
-    ${dataService.mode === "local"
-      ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Dữ liệu chỉ nằm trên thiết bị</div><div class="notice-text">Chế độ local chỉ dùng xem thử; dữ liệu không đồng bộ giữa các thiết bị.</div></div></div>`
-      : `<div class="notice notice-success" style="margin-top:14px"><div class="notice-icon">${icon("check")}</div><div><div class="notice-title">Đang dùng dữ liệu cloud</div><div class="notice-text">Quyền và giao dịch được kiểm tra lại tại Supabase.</div></div></div>`}`,
-    footer: `<button class="btn btn-danger" type="button" data-action="logout">Đăng xuất</button><button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>`,
-  });
-}
-
-function openProductDetail(productId) {
-  const product = productById(productId);
-  if (!product) return showToast("error", "Không tìm thấy vật liệu");
-  if (!hasPermission(PERMISSIONS.viewDetail, product.categoryId)) {
-    showToast("error", "Không có quyền", "Tài khoản hiện tại không được xem chi tiết vật liệu trong nhóm này.");
-    return;
-  }
-  const category = categoryById(product.categoryId);
-  const status = hasPermission(PERMISSIONS.viewQuantity, product.categoryId) ? productStatus(product) : null;
-  const attributeRows = orderedCategoryAttributes(category).map((attribute) => `<div class="detail-row"><div class="detail-key">${escapeHTML(attribute.name)}</div><div class="detail-value">${escapeHTML(attributeDisplayValue(attribute, product.attributes[attribute.id]))}</div></div>`).join("");
-  const quantityRows = hasPermission(PERMISSIONS.viewQuantity, product.categoryId)
-    ? `<div class="detail-row"><div class="detail-key">Tồn hiện tại</div><div class="detail-value"><strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong></div></div><div class="detail-row"><div class="detail-key">Cảnh báo</div><div class="detail-value">${formatQuantity(product.warningLevel)} ${escapeHTML(product.unit)}</div></div>`
-    : `<div class="detail-row"><div class="detail-key">Tồn kho</div><div class="detail-value">Đã ẩn theo quyền</div></div>`;
-  const stockActions = [
-    hasPermission(PERMISSIONS.importInventory, product.categoryId) ? `<button class="btn btn-primary" type="button" data-action="quick-transaction" data-type="${TRANSACTION_TYPES.import}" data-product-id="${escapeHTML(product.id)}">Nhập kho</button>` : "",
-    hasPermission(PERMISSIONS.exportInventory, product.categoryId) ? `<button class="btn btn-secondary" type="button" data-action="quick-transaction" data-type="${TRANSACTION_TYPES.export}" data-product-id="${escapeHTML(product.id)}">Xuất kho</button>` : "",
-    hasPermission(PERMISSIONS.countInventory, product.categoryId) ? `<button class="btn btn-secondary" type="button" data-action="quick-transaction" data-type="${TRANSACTION_TYPES.adjust}" data-product-id="${escapeHTML(product.id)}">Điều chỉnh</button>` : "",
-  ].filter(Boolean).join("");
-  const editButton = hasPermission(PERMISSIONS.editProduct, product.categoryId)
-    ? `<button class="btn btn-secondary" type="button" data-action="edit-product" data-product-id="${escapeHTML(product.id)}">Sửa thông tin</button>`
-    : "";
-
-  openModal({
-    name: "product-detail",
-    title: productDisplayName(product),
-    subtitle: `${category?.name || "Chưa phân nhóm"}${status ? ` · ${status.label}` : ""}`,
-    body: `<div class="detail-grid">${quantityRows}</div>
-      ${stockActions ? `<div class="stock-action-grid" aria-label="Thao tác tồn kho">${stockActions}</div>` : ""}
-      <div class="detail-grid" style="margin-top:14px"><div class="detail-row"><div class="detail-key">Đơn vị</div><div class="detail-value">${escapeHTML(product.unit)}</div></div>${attributeRows}<div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(product.note || "—")}</div></div><div class="detail-row"><div class="detail-key">Cập nhật</div><div class="detail-value">${formatDateTime(product.updatedAt)}</div></div></div>
-      ${hasPermission(PERMISSIONS.archiveProduct, product.categoryId) ? `<button class="btn btn-danger-soft btn-block" style="margin-top:14px" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}">${icon("archive")} Lưu trữ vật liệu</button>` : ""}
-      ${canDeleteTestProduct() ? `<button class="btn btn-danger-soft btn-block" style="margin-top:10px" type="button" data-action="delete-test-product" data-product-id="${escapeHTML(product.id)}">${icon("trash")} Xóa vật liệu test</button>` : ""}`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>${editButton}`,
-  });
-}
-
-function productFormBody(product = null, categoryId = null) {
-  const categories = product ? appState.cache.schema.categories.filter((category) => category.id === product.categoryId && hasPermission(PERMISSIONS.editProduct, category.id)) : categoriesWithPermission(PERMISSIONS.addProduct);
-  const selectedCategory = categoryById(categoryId || product?.categoryId || categories[0]?.id);
-  if (!selectedCategory) return renderEmptyState("warning", "Chưa có nhóm vật liệu", "Hãy tạo nhóm trước khi thêm vật liệu.");
-  const attributes = product?.attributes || {};
-  const generatedName = product ? productDisplayName(product) : buildProductDisplayName(selectedCategory, attributes);
-  return `<form id="product-form" class="field-grid" novalidate>
-    <input type="hidden" name="id" value="${escapeHTML(product?.id || "")}">
-    <input type="hidden" name="expectedRevision" value="${escapeHTML(product?.revision ?? "")}">
-    <label class="field" for="product-category"><span class="field-label">Nhóm vật liệu</span><select id="product-category" name="categoryId" class="select" ${product ? "disabled" : ""}>
-      ${categories.map((category) => `<option value="${escapeHTML(category.id)}" ${category.id === selectedCategory.id ? "selected" : ""}>${escapeHTML(category.icon)} ${escapeHTML(category.name)}</option>`).join("")}
-    </select>${product ? `<input type="hidden" name="categoryId" value="${escapeHTML(selectedCategory.id)}">` : ""}</label>
-
-    <div id="product-attribute-fields" class="field-grid">
-      ${orderedCategoryAttributes(selectedCategory).map((attribute) => renderProductAttributeField(attribute, attributes[attribute.id])).join("")}
-    </div>
-
-    <label class="field" for="product-custom-name"><span class="field-label">Tên hiển thị tùy chỉnh</span><input id="product-custom-name" name="customName" class="input" type="text" autocomplete="off" value="${escapeHTML(product?.customName || "")}" placeholder="Để trống để tạo tên tự động"><span class="field-help">Tên tự động dự kiến theo thứ tự thuộc tính: <strong id="generated-product-name">${escapeHTML(generatedName)}</strong></span></label>
-
-    <div class="field-grid two">
-      <label class="field" for="product-unit"><span class="field-label">Đơn vị</span><select id="product-unit" name="unit" class="select">${selectedCategory.units.map((unit) => `<option value="${escapeHTML(unit)}" ${unit === (product?.unit || selectedCategory.defaultUnit) ? "selected" : ""}>${escapeHTML(unit)}</option>`).join("")}</select></label>
-      <label class="field" for="product-warning"><span class="field-label">Mức cảnh báo</span><input id="product-warning" name="warningLevel" class="input" type="number" inputmode="decimal" min="0" step="any" value="${escapeHTML(product?.warningLevel ?? selectedCategory.warningDefault)}"></label>
-    </div>
-
-    ${product ? "" : `<label class="field" for="product-initial-stock"><span class="field-label">Tồn khởi tạo</span><input id="product-initial-stock" name="initialStock" class="input" type="number" inputmode="decimal" min="0" step="any" value="0"><span class="field-help">Tạo cùng giao dịch khởi tạo. Production sẽ thực hiện trong một transaction database.</span></label>`}
-
-    <label class="field" for="product-note"><span class="field-label">Ghi chú</span><textarea id="product-note" name="note" class="textarea" rows="3" placeholder="Thông tin cần lưu ý">${escapeHTML(product?.note || "")}</textarea></label>
-  </form>`;
-}
-
-function renderProductAttributeField(attribute, value = "") {
-  const required = attribute.required ? "required" : "";
-  const label = `${escapeHTML(attribute.name)}${attribute.required ? " *" : ""}`;
-  if (attribute.type === "select") {
-    return `<label class="field" for="attr-${escapeHTML(attribute.id)}"><span class="field-label">${label}</span><select id="attr-${escapeHTML(attribute.id)}" name="attr:${escapeHTML(attribute.id)}" class="select" ${required}><option value="">Chọn ${escapeHTML(attribute.name.toLowerCase())}</option>${attribute.options.map((option) => `<option value="${escapeHTML(option)}" ${String(value) === String(option) ? "selected" : ""}>${escapeHTML(option)}</option>`).join("")}</select></label>`;
-  }
-  return `<label class="field" for="attr-${escapeHTML(attribute.id)}"><span class="field-label">${label}</span><input id="attr-${escapeHTML(attribute.id)}" name="attr:${escapeHTML(attribute.id)}" class="input" type="${attribute.type === "number" ? "number" : "text"}" ${attribute.type === "number" ? 'inputmode="decimal" min="0" step="any"' : 'autocomplete="off"'} value="${escapeHTML(value)}" ${required}><span class="field-help">${attribute.unit ? `Đơn vị thuộc tính: ${escapeHTML(attribute.unit)}.` : attribute.identity ? "Thuộc tính tham gia chống trùng." : ""}</span></label>`;
-}
-
-function openProductForm(productId = null) {
-  const product = productId ? productById(productId) : null;
-  if (product && !hasPermission(PERMISSIONS.editProduct, product.categoryId)) return showToast("error", "Không có quyền sửa vật liệu");
-  if (!product && !categoriesWithPermission(PERMISSIONS.addProduct).length) return showToast("error", "Không có quyền thêm vật liệu");
-  closeModal(true);
-  openModal({
-    name: "product-form",
-    title: product ? "Sửa vật liệu" : "Thêm vật liệu",
-    subtitle: product ? "Số tồn chỉ thay đổi bằng giao dịch kho." : "Khóa chống trùng được tạo từ thuộc tính nhận diện.",
-    body: productFormBody(product),
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="product-form">${product ? "Lưu thay đổi" : "Tạo vật liệu"}</button>`,
-  });
-}
-
-function refreshProductFormForCategory(categoryId) {
-  const form = $("#product-form");
-  if (!form) return;
-  const existingValues = Object.fromEntries(new FormData(form).entries());
-  const body = productFormBody(null, categoryId);
-  const sheetBody = $("#modal-root .sheet-body");
-  if (!sheetBody) return;
-  sheetBody.innerHTML = body;
-  setValue("#product-custom-name", existingValues.customName || "", sheetBody);
-  setValue("#product-note", existingValues.note || "", sheetBody);
-  updateGeneratedProductName();
-}
-
-function updateGeneratedProductName() {
-  const form = $("#product-form");
-  if (!form) return;
-  const formData = new FormData(form);
-  const category = categoryById(formData.get("categoryId"));
-  if (!category) return;
-  const attributes = {};
-  for (const attribute of orderedCategoryAttributes(category)) {
-    attributes[attribute.id] = formData.get(`attr:${attribute.id}`) ?? "";
-  }
-  setText("#generated-product-name", buildProductDisplayName(category, attributes), form);
-}
-
-function transactionTypeOptionsForCategory(categoryId) {
-  return [
-    hasPermission(PERMISSIONS.importInventory, categoryId) ? [TRANSACTION_TYPES.import, "Nhập kho"] : null,
-    hasPermission(PERMISSIONS.exportInventory, categoryId) ? [TRANSACTION_TYPES.export, "Xuất kho"] : null,
-    hasPermission(PERMISSIONS.countInventory, categoryId) ? [TRANSACTION_TYPES.adjust, "Điều chỉnh tồn"] : null,
-  ].filter(Boolean);
-}
-
-function renderTransactionTypeButtons(categoryId, selectedType = "") {
-  const options = transactionTypeOptionsForCategory(categoryId);
-  const effectiveType = options.some(([type]) => type === selectedType) ? selectedType : options[0]?.[0] || "";
-  return options.map(([type, label]) => `<button class="segmented-item" type="button" data-action="select-transaction-type" data-type="${type}" aria-pressed="${type === effectiveType}">${label}</button>`).join("");
-}
-
-function transactionSubmitLabel(type) {
-  if (type === TRANSACTION_TYPES.import) return "Nhập kho";
-  if (type === TRANSACTION_TYPES.export) return "Xuất kho";
-  if (type === TRANSACTION_TYPES.adjust) return "Lưu tồn";
-  return "Lưu";
-}
-
-function transactionFormBody(productId = null, preferredType = null) {
-  const products = appState.cache.products.filter((product) => !product.archived && canCreateAnyInventoryTransaction(product.categoryId));
-  const selected = products.find((product) => product.id === productId) || products[0];
-  if (!selected) return renderEmptyState("inventory", "Chưa có vật liệu", "Vai trò hiện tại chưa có vật liệu nào được phép giao dịch.");
-  const allowedTypes = transactionTypeOptionsForCategory(selected.categoryId);
-  const fixedProduct = Boolean(productId && products.some((product) => product.id === productId));
-  const requestedType = String(preferredType || "");
-  const firstType = allowedTypes.some(([type]) => type === requestedType) ? requestedType : allowedTypes[0]?.[0] || "";
-  const fixedType = fixedProduct && Boolean(preferredType) && allowedTypes.some(([type]) => type === requestedType);
-  const productField = fixedProduct
-    ? `<input type="hidden" name="productId" value="${escapeHTML(selected.id)}">`
-    : `<label class="field" for="transaction-product"><span class="field-label">Vật liệu</span><select id="transaction-product" name="productId" class="select">${products.map((product) => `<option value="${escapeHTML(product.id)}" ${product.id === selected.id ? "selected" : ""}>${escapeHTML(productDisplayName(product))}</option>`).join("")}</select></label>`;
-  const typeField = fixedType
-    ? `<input id="transaction-type" type="hidden" name="type" value="${firstType}">`
-    : `<fieldset class="field"><legend class="field-label">Thao tác</legend><div id="transaction-type-buttons" class="segmented" role="group">${renderTransactionTypeButtons(selected.categoryId, firstType)}</div><input id="transaction-type" type="hidden" name="type" value="${firstType}"></fieldset>`;
-  return `<form id="transaction-form" class="field-grid" novalidate>
-    <input type="hidden" name="requestKey" value="${escapeHTML(makeId("request"))}">
-    ${productField}
-    ${typeField}
-    <label class="field" for="transaction-amount"><span id="transaction-amount-label" class="field-label">${firstType === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng"}</span>
-      <div class="quantity-stepper">
-        <button class="quantity-stepper-btn" type="button" data-action="transaction-step" data-delta="-1" aria-label="Giảm 1">−</button>
-        <input id="transaction-amount" name="amount" class="input quantity-stepper-input" type="number" inputmode="decimal" min="0" max="${MAX_QUANTITY}" step="any" required value="${firstType === TRANSACTION_TYPES.adjust ? escapeHTML(String(normalizeQuantity(selected.quantity, 0))) : ""}">
-        <button class="quantity-stepper-btn" type="button" data-action="transaction-step" data-delta="1" aria-label="Tăng 1">+</button>
-      </div>
-      <span id="transaction-unit-help" class="field-help">${escapeHTML(selected.unit)}</span>
-    </label>
-    <div id="transaction-preview" class="helper-block">Tồn hiện tại: <strong>${formatQuantity(selected.quantity)} ${escapeHTML(selected.unit)}</strong></div>
-    <label class="field" for="transaction-note"><span class="field-label">Ghi chú <span class="optional-label">(không bắt buộc)</span></span><textarea id="transaction-note" name="note" class="textarea" rows="2" placeholder=""></textarea></label>
-  </form>`;
-}
-
-function openTransactionModal(productId = null, preferredType = null) {
-  if (!canCreateAnyInventoryTransaction()) return showToast("error", "Không có quyền giao dịch");
-  const product = productId ? productById(productId) : null;
-  if (product && preferredType) {
-    const permission = transactionPermission(preferredType);
-    if (!permission || !hasPermission(permission, product.categoryId)) return showToast("error", "Không có quyền thực hiện thao tác này");
-  }
-  const title = preferredType ? (TRANSACTION_LABELS[preferredType] || "Giao dịch kho") : "Nhập / xuất kho";
-  closeModal(true);
-  openModal({
-    name: "transaction-form",
-    title,
-    subtitle: product ? productDisplayName(product) : "",
-    body: transactionFormBody(productId, preferredType),
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button id="transaction-submit" class="btn btn-primary" type="submit" form="transaction-form">${transactionSubmitLabel(preferredType || $("#transaction-type")?.value)}</button>`,
-  });
-  updateTransactionPreview();
-  window.setTimeout(() => $("#transaction-amount")?.focus(), 0);
-}
-
-function updateTransactionPreview() {
-  const form = $("#transaction-form");
-  if (!form) return;
-  const formData = new FormData(form);
-  const product = productById(formData.get("productId"));
-  if (!product) return;
-  let type = formData.get("type");
-  const typeOptions = transactionTypeOptionsForCategory(product.categoryId);
-  if (!typeOptions.some(([value]) => value === type)) {
-    type = typeOptions[0]?.[0] || "";
-    setValue("#transaction-type", type, form);
-  }
-  const typeButtons = $("#transaction-type-buttons", form);
-  if (typeButtons) typeButtons.innerHTML = renderTransactionTypeButtons(product.categoryId, type);
-  const rawAmount = String(formData.get("amount") ?? "").trim();
-  const hasAmount = rawAmount !== "";
-  const amount = hasAmount ? normalizeQuantity(rawAmount, Number.NaN) : Number.NaN;
-  let after = normalizeQuantity(product.quantity, 0);
-  if (hasAmount && Number.isFinite(amount)) {
-    if (type === TRANSACTION_TYPES.import) after = normalizeQuantity(after + amount, 0);
-    if (type === TRANSACTION_TYPES.export) after = normalizeQuantity(after - amount, 0);
-    if (type === TRANSACTION_TYPES.adjust) after = amount;
-  }
-  setText("#transaction-amount-label", type === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng", form);
-  setText("#transaction-unit-help", product.unit, form);
-  setText("#transaction-submit", transactionSubmitLabel(type));
-  const preview = $("#transaction-preview", form);
-  if (preview) {
-    const invalid = hasAmount && (!Number.isFinite(amount) || after < 0 || after > MAX_QUANTITY || ([TRANSACTION_TYPES.import, TRANSACTION_TYPES.export].includes(type) && amount <= 0));
-    preview.classList.toggle("helper-danger", invalid);
-    if (!hasAmount) {
-      preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong>`;
-    } else if (invalid) {
-      preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong> · <strong>Số lượng không hợp lệ</strong>`;
-    } else {
-      preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong> → <strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`;
+function renderSalaryCompareActivityRows(current, baseline, changedOnly) {
+  const rows = [
+    {
+      label: "Tổng OT",
+      current: Number(current.result.totalOT) || 0,
+      baseline: Number(baseline.result.totalOT) || 0,
+      format: value => formatHours(value),
+      diff: value => formatSignedNumber(value, "giờ")
+    },
+    {
+      label: "Công hưởng lương",
+      current: Number(current.result.paidDays) || 0,
+      baseline: Number(baseline.result.paidDays) || 0,
+      format: value => `${formatNumber(value)} công`,
+      diff: value => formatSignedNumber(value, "công")
+    },
+    {
+      label: "Kilomet giao hàng",
+      current: Number(current.result.monthlyKm) || 0,
+      baseline: Number(baseline.result.monthlyKm) || 0,
+      format: value => `${formatNumber(value)} km`,
+      diff: value => formatSignedNumber(value, "km")
     }
+  ];
+
+  const items = rows
+    .map(item => ({ ...item, difference: item.current - item.baseline }))
+    .filter(item => !changedOnly || Math.abs(item.difference) > 0.0001);
+
+  if (!items.length) {
+    return renderComparisonEmpty("OT, ngày công và kilomet giao hàng không thay đổi.");
+  }
+
+  return items.map(item => `
+    <div class="salary-compare-row ${Math.abs(item.difference) > 0.0001 ? "is-changed" : ""}">
+      <span class="salary-compare-row-copy">
+        <strong>${escapeHTML(item.label)}</strong>
+        <small>${escapeHTML(item.format(item.baseline))} → ${escapeHTML(item.format(item.current))}</small>
+      </span>
+      <strong class="salary-compare-diff ${comparisonDiffClass(item.difference)}">${escapeHTML(item.diff(item.difference))}</strong>
+    </div>
+  `).join("");
+}
+
+
+function renderLastSalaryComparison() {
+  const comparison = appState.salaryComparison;
+
+  if (!comparison) {
+    return;
+  }
+
+  const { current, baseline } = comparison;
+  const changedOnly = $("#salaryCompareChangedOnly")?.checked !== false;
+  const netDiff = Number(current.result.netSalary || 0) - Number(baseline.result.netSalary || 0);
+  const incomeDiff = Number(current.result.totalIncome || 0) - Number(baseline.result.totalIncome || 0);
+  const deductionDiff = Number(current.result.totalDeductions || 0) - Number(baseline.result.totalDeductions || 0);
+  const baselineNet = Number(baseline.result.netSalary || 0);
+  const netPercent = Math.abs(baselineNet) > 0.5
+    ? netDiff / Math.abs(baselineNet) * 100
+    : null;
+
+  setText("#salaryCompareCurrentMonth", formatSalaryHistoryMonth(current.monthKey));
+  setText("#salaryCompareNetDiff", formatSignedMoney(netDiff));
+  setText(
+    "#salaryCompareNetPercent",
+    netPercent == null
+      ? "Không có cơ sở %"
+      : `${netPercent > 0 ? "+" : netPercent < 0 ? "−" : ""}${formatNumber(Math.abs(netPercent))}% so với ${formatSalaryHistoryMonth(baseline.monthKey).replace("Tháng ", "T")}`
+  );
+  setText("#salaryCompareIncomeDiff", formatSignedMoney(incomeDiff));
+  setText("#salaryCompareDeductionDiff", formatSignedMoney(deductionDiff));
+
+  [
+    ["#salaryCompareNetDiff", netDiff, false],
+    ["#salaryCompareIncomeDiff", incomeDiff, false],
+    ["#salaryCompareDeductionDiff", deductionDiff, true]
+  ].forEach(([selector, value, invert]) => {
+    const element = $(selector);
+    element?.classList.remove("positive", "negative", "neutral");
+    element?.classList.add(comparisonDiffClass(value, invert));
+  });
+
+  const policyList = $("#salaryComparePolicyList");
+  const payrollList = $("#salaryComparePayrollList");
+  const activityList = $("#salaryCompareActivityList");
+
+  if (policyList) {
+    policyList.innerHTML = renderSalaryComparePolicyRows(current, baseline, changedOnly);
+  }
+  if (payrollList) {
+    payrollList.innerHTML = renderSalaryComparePayrollRows(current, baseline, changedOnly);
+  }
+  if (activityList) {
+    activityList.innerHTML = renderSalaryCompareActivityRows(current, baseline, changedOnly);
+  }
+
+  refreshIcons();
+}
+
+
+async function runSalaryComparison() {
+  const currentMonth = getMonthKey(appState.salaryDate);
+  const baselineMonth = String($("#salaryCompareMonth")?.value || "");
+
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(baselineMonth)) {
+    showToast("Hãy chọn tháng muốn so sánh.", true);
+    return;
+  }
+
+  if (baselineMonth === currentMonth) {
+    showToast("Hãy chọn một tháng khác tháng đang xem.", true);
+    return;
+  }
+
+  $("#salaryCompareLoading")?.classList.remove("hidden");
+  $("#salaryCompareContent")?.classList.add("is-loading");
+
+  try {
+    await Promise.all([
+      loadMonthData(monthKeyToDate(currentMonth), { showLoader: false, force: false }),
+      loadMonthData(monthKeyToDate(baselineMonth), { showLoader: false, force: false })
+    ]);
+
+    appState.salaryComparison = {
+      current: getPayrollResultForComparison(currentMonth),
+      baseline: getPayrollResultForComparison(baselineMonth)
+    };
+    renderLastSalaryComparison();
+  } finally {
+    $("#salaryCompareLoading")?.classList.add("hidden");
+    $("#salaryCompareContent")?.classList.remove("is-loading");
   }
 }
 
-function canReverseTransactionRecord(transaction) {
-  if (!transaction || !hasPermission(PERMISSIONS.reverseTransaction, transaction.categoryId)) return false;
-  if ([TRANSACTION_TYPES.initial, TRANSACTION_TYPES.reverse].includes(transaction.type)) return false;
-  if (transaction.reversalTransactionId || transaction.reversedAt) return false;
-  const latest = latestTransactionForProduct(transaction.productId);
-  const product = productById(transaction.productId);
-  return Boolean(latest?.id === transaction.id && product && quantitiesEqual(product.quantity, transaction.afterQuantity));
+
+function openSalaryCompare() {
+  const currentMonth = getMonthKey(appState.salaryDate);
+  const currentDate = monthKeyToDate(currentMonth);
+  currentDate.setMonth(currentDate.getMonth() - 1);
+  const defaultBaseline = getMonthKey(currentDate);
+
+  setText("#salaryCompareCurrentMonth", formatSalaryHistoryMonth(currentMonth));
+  setValue("#salaryCompareMonth", defaultBaseline);
+  setChecked("#salaryCompareChangedOnly", true);
+  appState.salaryComparison = null;
+  openModal("salaryCompareModal");
+  runLockedAction(
+    "salaryCompare",
+    ["#salaryCompareRunButton"],
+    runSalaryComparison
+  );
 }
 
-function transactionSnapshotRows(transaction) {
-  const snapshot = transaction.productSnapshot;
-  if (!snapshot?.attributes?.length) return "";
-  return snapshot.attributes.map((attribute) => `<div class="detail-row"><div class="detail-key">${escapeHTML(attribute.name)}</div><div class="detail-value">${escapeHTML(`${attribute.value ?? ""}${attribute.unit ? ` ${attribute.unit}` : ""}` || "—")}</div></div>`).join("");
+
+async function openMeal() {
+  appState.mealDate = new Date();
+  syncMealPriceInputs("settings");
+  openModal("mealModal");
+  await loadMealReportData(appState.mealDate, { showLoader: true, force: true });
+  renderMeal();
 }
 
-function openTransactionDetail(transactionId) {
-  const transaction = transactionById(transactionId);
-  if (!transaction || !hasPermission(PERMISSIONS.viewHistory, transaction.categoryId)) return showToast("error", "Không có quyền xem lịch sử nhóm này");
-  if (!transaction) return showToast("error", "Không tìm thấy giao dịch");
-  const delta = normalizeQuantity(transaction.afterQuantity - transaction.beforeQuantity, 0);
-  const statusNotice = transaction.reversalTransactionId
-    ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Giao dịch đã được đảo</div><div class="notice-text">${escapeHTML(transaction.reversedBy || "Người có quyền")} đã tạo bản ghi đảo lúc ${formatDateTime(transaction.reversedAt)}.</div></div></div>`
-    : transaction.reversalOf
-      ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("history")}</div><div><div class="notice-title">Đây là giao dịch đảo</div><div class="notice-text">Bản ghi này khôi phục tồn trước giao dịch ${escapeHTML(transaction.reversalOf)}.</div></div></div>`
-      : "";
-  const reverseButton = canReverseTransactionRecord(transaction)
-    ? `<button class="btn btn-danger" type="button" data-action="open-reverse-transaction" data-transaction-id="${escapeHTML(transaction.id)}">Đảo giao dịch</button>`
-    : "";
-  openModal({
-    name: "transaction-detail",
-    title: TRANSACTION_LABELS[transaction.type] || "Chi tiết giao dịch",
-    subtitle: `${transaction.productName} · ${formatDateTime(transaction.createdAt)}`,
-    body: `<div class="detail-grid">
-      <div class="detail-row"><div class="detail-key">Người thực hiện</div><div class="detail-value">${escapeHTML(transaction.actor)}</div></div>
-      <div class="detail-row"><div class="detail-key">Tồn trước</div><div class="detail-value">${formatQuantity(transaction.beforeQuantity)} ${escapeHTML(transaction.unit)}</div></div>
-      <div class="detail-row"><div class="detail-key">Tồn sau</div><div class="detail-value">${formatQuantity(transaction.afterQuantity)} ${escapeHTML(transaction.unit)}</div></div>
-      <div class="detail-row"><div class="detail-key">Chênh lệch</div><div class="detail-value">${delta > 0 ? "+" : ""}${formatQuantity(delta)} ${escapeHTML(transaction.unit)}</div></div>
-      <div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(transaction.note || "—")}</div></div>
-      <div class="detail-row"><div class="detail-key">Nhóm lúc giao dịch</div><div class="detail-value">${escapeHTML(transaction.productSnapshot?.categoryName || transaction.categoryId || "—")}</div></div>
-      ${transactionSnapshotRows(transaction)}
-      <div class="detail-row"><div class="detail-key">Mã giao dịch</div><div class="detail-value code-like">${escapeHTML(transaction.id)}</div></div>
-    </div>${statusNotice}`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>${reverseButton}`,
-  });
+
+async function changeMealMonth(direction) {
+  appState.mealDate.setDate(1);
+  appState.mealDate.setMonth(appState.mealDate.getMonth() + direction);
+  await loadMealReportData(appState.mealDate, { showLoader: true, force: false });
+  renderMeal();
 }
 
-function openReverseTransactionModal(transactionId) {
-  const transaction = transactionById(transactionId);
-  if (!canReverseTransactionRecord(transaction)) return showToast("error", "Không thể đảo giao dịch", "Chỉ giao dịch mới nhất, chưa bị đảo và còn khớp tồn hiện tại mới được phép đảo.");
-  closeModal(true);
-  openModal({
-    name: "reverse-transaction-form",
-    title: "Đảo giao dịch",
-    subtitle: `${transaction.productName} · ${TRANSACTION_LABELS[transaction.type]}`,
-    body: `<form id="reverse-transaction-form" class="field-grid" novalidate>
-      <input type="hidden" name="transactionId" value="${escapeHTML(transaction.id)}">
-      <input type="hidden" name="requestKey" value="${escapeHTML(makeId("reverse-request"))}">
-      <div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không xóa lịch sử</div><div class="notice-text">Hệ thống sẽ tạo một giao dịch mới để đưa tồn từ ${formatQuantity(transaction.afterQuantity)} về ${formatQuantity(transaction.beforeQuantity)} ${escapeHTML(transaction.unit)}.</div></div></div>
-      <label class="field" for="reverse-reason"><span class="field-label">Lý do đảo giao dịch *</span><textarea id="reverse-reason" name="reason" class="textarea" rows="4" required autofocus placeholder="Ví dụ: Nhập nhầm số lượng hoặc chọn nhầm vật liệu"></textarea></label>
-    </form>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="reverse-transaction-form">Xác nhận đảo</button>`,
-  });
+
+function handleReportMealPriceInput(event) {
+  appState.settings.mealPrice = sanitizeNonNegativeNumber(event.target.value);
+  saveSettings();
+  syncMealPriceInputs("report");
+  renderMeal();
 }
 
-function accountFormBody(account = null) {
-  const roles = assignableRoles(account);
-  const model = account || { role: roles[0] || "viewer", status: ACCOUNT_STATUSES.active, scopeMode: "all", categoryPermissions: {} };
-  const basePermissions = rolePermissions(model.role);
-  const allowedScoped = new Set(basePermissions.includes("*") ? CATEGORY_SCOPED_PERMISSIONS : basePermissions.filter((permission) => isCategoryScopedPermission(permission)));
-  const normalizedPermissions = normalizeCategoryPermissions(model);
-  const canChangeStatus = Boolean(account && hasPermission(PERMISSIONS.lockAccounts) && account.id !== appState.currentUser.id);
-  const passwordFields = account ? "" : `<div class="field-grid two">
-    <label class="field" for="account-password"><span class="field-label">Mật khẩu</span><input id="account-password" name="password" class="input" type="password" autocomplete="new-password" minlength="8" required><span class="field-help">Tối thiểu 8 ký tự, có chữ và số.</span></label>
-    <label class="field" for="account-password-confirm"><span class="field-label">Xác nhận mật khẩu</span><input id="account-password-confirm" name="passwordConfirm" class="input" type="password" autocomplete="new-password" minlength="8" required></label>
-  </div>`;
-  return `<form id="account-form" class="field-grid" novalidate>
-    <input type="hidden" name="id" value="${escapeHTML(account?.id || "")}">
-    <input type="hidden" name="expectedRevision" value="${escapeHTML(account?.revision ?? "")}">
-    <label class="field" for="account-display-name"><span class="field-label">Tên hiển thị</span><input id="account-display-name" name="displayName" class="input" type="text" autocomplete="name" required value="${escapeHTML(account?.displayName || "")}"></label>
-    <label class="field" for="account-username"><span class="field-label">Tên đăng nhập</span><input id="account-username" name="username" class="input" type="text" autocapitalize="none" autocomplete="username" required ${account ? "readonly" : ""} value="${escapeHTML(account?.username || "")}"><span class="field-help">Không cần email thật. Tên đăng nhập không đổi sau khi tạo.</span></label>
-    ${passwordFields}
-    <div class="field-grid two">
-      <label class="field" for="account-role"><span class="field-label">Vai trò</span><select id="account-role" name="role" class="select">${roles.map((role) => `<option value="${role}" ${role === model.role ? "selected" : ""}>${escapeHTML(roleLabel(role))}</option>`).join("")}</select></label>
-      <label class="field" for="account-status"><span class="field-label">Trạng thái</span>${canChangeStatus ? "" : `<input type="hidden" name="status" value="${escapeHTML(accountStatus(model))}">`}<select id="account-status" ${canChangeStatus ? 'name="status"' : ""} class="select" ${canChangeStatus ? "" : "disabled"}>${Object.entries(ACCOUNT_STATUS_LABELS).map(([value, label]) => `<option value="${value}" ${value === accountStatus(model) ? "selected" : ""}>${escapeHTML(label)}</option>`).join("")}</select>${!canChangeStatus ? '<span class="field-help">Không thể tự khóa tài khoản đang đăng nhập.</span>' : ""}</label>
-    </div>
-    <label class="field" for="account-scope-mode"><span class="field-label">Phạm vi nhóm vật liệu</span><select id="account-scope-mode" name="scopeMode" class="select"><option value="all" ${model.scopeMode !== "custom" ? "selected" : ""}>Tất cả nhóm theo vai trò</option><option value="custom" ${model.scopeMode === "custom" ? "selected" : ""}>Tùy chỉnh theo từng nhóm</option></select><span class="field-help">Quyền quản trị hệ thống vẫn theo vai trò. Quyền thao tác cần kèm Xem kho; quyền giao dịch cần kèm Xem số lượng; Đảo giao dịch cần kèm Xem lịch sử.</span></label>
-    <div id="account-category-permissions" class="account-scope-editor">
-      ${appState.cache.schema.categories.filter((category) => category.active !== false).map((category) => `<fieldset class="scope-permission-card" data-account-category="${escapeHTML(category.id)}"><legend>${escapeHTML(category.icon)} ${escapeHTML(category.name)}</legend><div class="scope-permission-grid">${CATEGORY_SCOPED_PERMISSIONS.map((permission) => {
-        const checked = model.scopeMode === "custom" ? normalizedPermissions[category.id]?.includes(permission) : allowedScoped.has(permission);
-        const [name] = PERMISSION_META[permission] || [permission];
-        return `<label class="scope-permission-item"><input type="checkbox" data-account-scope-permission data-category-id="${escapeHTML(category.id)}" data-permission="${escapeHTML(permission)}" ${checked ? "checked" : ""} ${allowedScoped.has(permission) && model.scopeMode === "custom" ? "" : "disabled"}><span>${escapeHTML(name)}</span></label>`;
-      }).join("")}</div></fieldset>`).join("")}
-    </div>
-    <div class="notice"><div class="notice-icon">${icon("info")}</div><div><div class="notice-title">Không bắt buộc đổi mật khẩu lần đầu</div><div class="notice-text">Tài khoản mới đăng nhập và sử dụng ngay theo quyền được cấp. Super Admin có thể đặt mật khẩu mới khi cần.</div></div></div>
-  </form>`;
+
+function syncMealPriceInputs(source) {
+  const value = appState.settings?.mealPrice ?? 30000;
+
+  if (source !== "report") {
+    setValue("#mealPriceInput", value);
+  }
+
+  if (source !== "settings") {
+    setValue("#settingsMealPrice", value);
+  }
 }
 
-function openPasswordResetForm(accountId) {
-  const account = appState.cache.accounts.find((item) => item.id === accountId);
-  if (!account || !canManageAccount(account) || !hasPermission(PERMISSIONS.resetAccountPassword)) return showToast("error", "Không có quyền đặt lại mật khẩu");
-  openModal({
-    name: "password-reset-form",
-    title: "Đặt mật khẩu mới",
-    subtitle: `${account.displayName} · ${account.username}`,
-    body: `<form id="password-reset-form" class="field-grid" novalidate>
-      <input type="hidden" name="accountId" value="${escapeHTML(account.id)}">
-      <label class="field" for="reset-password"><span class="field-label">Mật khẩu mới</span><input id="reset-password" name="password" class="input" type="password" autocomplete="new-password" minlength="8" required autofocus><span class="field-help">Tối thiểu 8 ký tự, có chữ và số.</span></label>
-      <label class="field" for="reset-password-confirm"><span class="field-label">Xác nhận mật khẩu</span><input id="reset-password-confirm" name="passwordConfirm" class="input" type="password" autocomplete="new-password" minlength="8" required></label>
-      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Có hiệu lực ngay</div><div class="notice-text">Tài khoản không bị bắt buộc đổi lại mật khẩu ở lần đăng nhập sau.</div></div></div>
-    </form>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="password-reset-form">Lưu mật khẩu</button>`,
-  });
+
+function getMealReceiptStorageKey() {
+  return `ot_meal_weekly_receipts_${appState.currentUser || "guest"}`;
 }
 
-function updateAccountPermissionEditor() {
-  const form = $("#account-form");
-  if (!form) return;
-  const role = $("#account-role", form)?.value || "viewer";
-  const scopeMode = $("#account-scope-mode", form)?.value || "all";
-  const permissions = rolePermissions(role);
-  const allowed = new Set(permissions.includes("*") ? CATEGORY_SCOPED_PERMISSIONS : permissions.filter((permission) => isCategoryScopedPermission(permission)));
-  $$('[data-account-scope-permission]', form).forEach((checkbox) => {
-    const isAllowed = allowed.has(checkbox.dataset.permission);
-    if (!isAllowed) checkbox.checked = false;
-    if (scopeMode === "all") checkbox.checked = isAllowed;
-    checkbox.disabled = scopeMode !== "custom" || !isAllowed;
-  });
+
+function loadMealReceiptLocalData() {
+  appState.mealReceipts = {};
+  appState.mealReportRowsByMonth = {};
+  appState.mealReportLoadedMonths = new Set();
+  appState.mealReportRequestTokens = {};
+  appState.selectedMealReceiptWeek = null;
+
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(getMealReceiptStorageKey()) || "{}"
+    );
+
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      Object.values(stored).forEach(item => {
+        const normalized = normalizeMealReceipt(item);
+
+        if (normalized) {
+          appState.mealReceipts[normalized.weekStart] = normalized;
+        }
+      });
+    }
+  } catch {
+    appState.mealReceipts = {};
+  }
 }
 
-function readAccountCategoryPermissions(form) {
-  const result = {};
-  for (const category of appState.cache.schema.categories) result[category.id] = [];
-  $$('[data-account-scope-permission]:checked', form).forEach((checkbox) => {
-    const categoryId = checkbox.dataset.categoryId;
-    const permission = checkbox.dataset.permission;
-    if (result[categoryId] && CATEGORY_SCOPED_PERMISSION_SET.has(permission)) result[categoryId].push(permission);
-  });
+
+function saveMealReceiptCache() {
+  localStorage.setItem(
+    getMealReceiptStorageKey(),
+    JSON.stringify(appState.mealReceipts)
+  );
+}
+
+
+function normalizeMealReceipt(value) {
+  const weekStart = String(value?.weekStart || value?.week_start || "").slice(0, 10);
+  const weekEnd = String(value?.weekEnd || value?.week_end || "").slice(0, 10);
+
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(weekStart) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(weekEnd)
+  ) {
+    return null;
+  }
+
+  const status = value?.status === "received" ? "received" : "pending";
+
+  return {
+    weekStart,
+    weekEnd,
+    mealCountSnapshot: Math.max(
+      0,
+      Math.floor(Number(value?.mealCountSnapshot ?? value?.meal_count_snapshot) || 0)
+    ),
+    mealPriceSnapshot: sanitizeNonNegativeNumber(
+      value?.mealPriceSnapshot ?? value?.meal_price_snapshot
+    ),
+    amountSnapshot: sanitizeNonNegativeNumber(
+      value?.amountSnapshot ?? value?.amount_snapshot
+    ),
+    status,
+    receivedAt: value?.receivedAt || value?.received_at || null,
+    note: String(value?.note || ""),
+    updatedAt: value?.updatedAt || value?.updated_at || null
+  };
+}
+
+
+function isMissingMealReceiptTableError(error) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "").toLowerCase();
+  const mentionsMealReceiptTable = message.includes("meal_weekly_receipts");
+
+  return (
+    mentionsMealReceiptTable &&
+    (
+      code === "42P01" ||
+      code === "PGRST205" ||
+      message.includes("not found") ||
+      message.includes("does not exist")
+    )
+  );
+}
+
+
+function addCalendarDays(date, amount) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + amount);
   return result;
 }
 
-function openAccountForm(accountId = null) {
-  if (!hasPermission(PERMISSIONS.manageAccounts)) return showToast("error", "Không có quyền quản lý tài khoản");
-  const account = accountId ? appState.cache.accounts.find((item) => item.id === accountId) : null;
-  if (accountId && !account) return showToast("error", "Không tìm thấy tài khoản");
-  if (!canManageAccount(account)) return showToast("error", "Bạn không có quyền quản lý tài khoản này");
-  const extraButton = account && canManageAccount(account) && hasPermission(PERMISSIONS.resetAccountPassword)
-    ? `<button class="btn btn-soft" type="button" data-action="open-password-reset" data-account-id="${escapeHTML(account.id)}">Đặt mật khẩu mới</button>`
-    : "";
-  openModal({
-    name: "account-form",
-    title: account ? "Sửa tài khoản" : "Tạo tài khoản",
-    subtitle: "Cấp vai trò và quyền riêng theo từng nhóm vật liệu.",
-    body: `${accountFormBody(account)}${extraButton ? `<div style="margin-top:12px">${extraButton}</div>` : ""}`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="account-form">${account ? "Lưu thay đổi" : "Tạo tài khoản"}</button>`,
-  });
-  updateAccountPermissionEditor();
+
+function getMonday(date) {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = result.getDay();
+  const offset = day === 0 ? -6 : 1 - day;
+  result.setDate(result.getDate() + offset);
+  return result;
 }
 
-function categoryFormBody(category = null, draft = null) {
-  const model = draft || category || {
-    id: "",
-    name: "",
-    icon: "◇",
-    units: ["cái"],
-    defaultUnit: "cái",
-    warningDefault: 5,
-    active: true,
-    attributes: [{ id: "", name: "Tên vật liệu", type: "text", options: [], unit: "", required: true, identity: true, list: true, identityOrder: 0 }],
-  };
-  const attributes = model.attributes?.length
-    ? model.attributes
-      .filter((attribute) => attribute.active !== false)
-      .map((attribute, index) => ({ ...attribute, sortOrder: Number.isFinite(Number(attribute.sortOrder)) ? Number(attribute.sortOrder) : index }))
-      .sort((left, right) => left.sortOrder - right.sortOrder)
-    : [];
-  return `<form id="category-form" class="field-grid" novalidate>
-    <input type="hidden" name="id" value="${escapeHTML(model.id || "")}">
-    <input type="hidden" name="expectedRevision" value="${escapeHTML(model.revision ?? "")}">
-    <div class="field-grid two">
-      <label class="field" for="category-name"><span class="field-label">Tên nhóm</span><input id="category-name" name="name" class="input" type="text" required value="${escapeHTML(model.name || "")}"></label>
-      <label class="field" for="category-icon"><span class="field-label">Ký hiệu</span><input id="category-icon" name="icon" class="input" type="text" maxlength="2" value="${escapeHTML(model.icon || "◇")}"></label>
-    </div>
-    <label class="field" for="category-units"><span class="field-label">Danh sách đơn vị</span><input id="category-units" name="units" class="input" type="text" required value="${escapeHTML((model.units || []).join(", "))}"><span class="field-help">Phân tách bằng dấu phẩy, ví dụ: cái, hộp, m.</span></label>
-    <div class="field-grid two">
-      <label class="field" for="category-default-unit"><span class="field-label">Đơn vị mặc định</span><input id="category-default-unit" name="defaultUnit" class="input" type="text" required value="${escapeHTML(model.defaultUnit || "")}"></label>
-      <label class="field" for="category-warning"><span class="field-label">Cảnh báo mặc định</span><input id="category-warning" name="warningDefault" class="input" type="number" inputmode="decimal" min="0" step="any" value="${escapeHTML(model.warningDefault ?? 0)}"></label>
-    </div>
-    ${category ? `<label class="checkbox-row" for="category-active"><input id="category-active" name="active" type="checkbox" ${model.active !== false ? "checked" : ""}><span>Nhóm đang hoạt động</span></label>` : ""}
 
-    <div class="section-head"><div class="section-copy"><h3 class="section-title">Thuộc tính</h3><p class="section-subtitle">Sắp xếp tại đây; form, chi tiết và tên tự động sẽ dùng đúng thứ tự này. Việc sắp xếp không làm thay đổi khóa chống trùng.</p></div><button class="btn btn-compact btn-soft" type="button" data-action="add-attribute-row">${icon("plus")} Thuộc tính</button></div>
-    <div id="attribute-editor-list" class="field-grid">${attributes.map((attribute, index) => renderAttributeEditorRow(attribute, index, attributes.length)).join("")}</div>
-  </form>`;
-}
+function getMealMonthRange(value) {
+  const monthKey = getMonthKey(value);
+  const [year, month] = monthKey.split("-").map(Number);
+  const firstDay = new Date(year, month - 1, 1);
+  const lastDay = new Date(year, month, 0);
+  const rangeStartDate = getMonday(firstDay);
+  const lastWeekStartDate = getMonday(lastDay);
+  const rangeEndDate = addCalendarDays(lastWeekStartDate, 6);
 
-function renderAttributeEditorRow(attribute, index, total = appState.ui.categoryDraft?.attributes?.length || 0) {
-  return `<fieldset class="card card-pad" data-attribute-row data-attribute-id="${escapeHTML(attribute.id || "")}" data-identity-order="${toOptionalNumber(attribute.identityOrder) ?? ""}">
-    <div class="section-head">
-      <legend class="section-title">Thuộc tính ${index + 1}</legend>
-      <div class="attribute-row-actions" aria-label="Sắp xếp thuộc tính ${index + 1}">
-        <button class="icon-btn" type="button" data-action="move-attribute-up" aria-label="Đưa thuộc tính ${index + 1} lên trên" ${index === 0 ? "disabled" : ""}>${icon("up")}</button>
-        <button class="icon-btn" type="button" data-action="move-attribute-down" aria-label="Đưa thuộc tính ${index + 1} xuống dưới" ${index >= total - 1 ? "disabled" : ""}>${icon("down")}</button>
-        <button class="icon-btn" type="button" data-action="remove-attribute-row" aria-label="Xóa thuộc tính ${index + 1}">${icon("trash")}</button>
-      </div>
-    </div>
-    <div class="field-grid" style="margin-top:12px">
-      <label class="field"><span class="field-label">Tên thuộc tính</span><input class="input" data-attribute-field="name" type="text" required value="${escapeHTML(attribute.name || "")}"></label>
-      <div class="field-grid two">
-        <label class="field"><span class="field-label">Kiểu dữ liệu</span><select class="select" data-attribute-field="type">${[["text", "Văn bản"], ["number", "Số"], ["select", "Danh sách"]].map(([value, label]) => `<option value="${value}" ${attribute.type === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
-        <label class="field"><span class="field-label">Đơn vị</span><input class="input" data-attribute-field="unit" type="text" value="${escapeHTML(attribute.unit || "")}" placeholder="mm, cm..."></label>
-      </div>
-      <label class="field"><span class="field-label">Các lựa chọn</span><input class="input" data-attribute-field="options" type="text" value="${escapeHTML(Array.isArray(attribute.options) ? attribute.options.join(", ") : String(attribute.options || ""))}" placeholder="Chỉ dùng khi kiểu là Danh sách"><span class="field-help">Phân tách bằng dấu phẩy.</span></label>
-      <div class="field-grid two">
-        <label class="checkbox-row"><input type="checkbox" data-attribute-field="required" ${attribute.required ? "checked" : ""}><span>Bắt buộc</span></label>
-        <label class="checkbox-row"><input type="checkbox" data-attribute-field="identity" ${attribute.identity ? "checked" : ""}><span>Nhận diện</span></label>
-        <label class="checkbox-row"><input type="checkbox" data-attribute-field="list" ${attribute.list ? "checked" : ""}><span>Hiện danh sách</span></label>
-      </div>
-    </div>
-  </fieldset>`;
-}
-
-function readCategoryDraftFromForm() {
-  const form = $("#category-form");
-  if (!form) return appState.ui.categoryDraft;
-  const data = new FormData(form);
-  const attributes = $$("[data-attribute-row]", form).map((row, index) => ({
-    id: row.dataset.attributeId || "",
-    name: $("[data-attribute-field='name']", row)?.value || "",
-    type: $("[data-attribute-field='type']", row)?.value || "text",
-    unit: $("[data-attribute-field='unit']", row)?.value || "",
-    options: $("[data-attribute-field='options']", row)?.value || "",
-    required: Boolean($("[data-attribute-field='required']", row)?.checked),
-    identity: Boolean($("[data-attribute-field='identity']", row)?.checked),
-    list: Boolean($("[data-attribute-field='list']", row)?.checked),
-    sortOrder: index,
-    identityOrder: toOptionalNumber(row.dataset.identityOrder),
-  }));
   return {
-    id: data.get("id") || "",
-    expectedRevision: toOptionalNumber(data.get("expectedRevision")),
-    name: data.get("name") || "",
-    icon: data.get("icon") || "◇",
-    units: String(data.get("units") || "").split(",").map((item) => item.trim()).filter(Boolean),
-    defaultUnit: data.get("defaultUnit") || "",
-    warningDefault: data.get("warningDefault") || 0,
-    active: $("#category-active", form)?.checked ?? true,
-    attributes,
+    monthKey,
+    year,
+    monthIndex: month - 1,
+    rangeStart: getDateKey(rangeStartDate),
+    rangeEnd: getDateKey(rangeEndDate),
+    lastWeekStart: getDateKey(lastWeekStartDate)
   };
 }
 
-function openCategoryForm(categoryId = null) {
-  if (!hasPermission(PERMISSIONS.manageSchema)) return showToast("error", "Không có quyền quản lý danh mục");
-  const category = categoryId ? categoryById(categoryId) : null;
-  appState.ui.categoryDraft = clone(category || {
-    id: "",
-    name: "",
-    icon: "◇",
-    units: ["cái"],
-    defaultUnit: "cái",
-    warningDefault: 5,
-    active: true,
-    attributes: [{ id: "", name: "Tên vật liệu", type: "text", options: [], unit: "", required: true, identity: true, list: true, identityOrder: 0 }],
-  });
-  openModal({
-    name: "category-form",
-    title: category ? "Sửa nhóm vật liệu" : "Thêm nhóm vật liệu",
-    subtitle: "Không đổi ID nhóm khi đã có dữ liệu lịch sử.",
-    body: categoryFormBody(category, appState.ui.categoryDraft),
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="category-form">${category ? "Lưu thay đổi" : "Tạo nhóm"}</button>`,
-  });
-}
 
-function rerenderCategoryAttributes() {
-  const list = $("#attribute-editor-list");
-  if (!list || !appState.ui.categoryDraft) return;
-  list.innerHTML = appState.ui.categoryDraft.attributes.map((attribute, index) => renderAttributeEditorRow(attribute, index, appState.ui.categoryDraft.attributes.length)).join("");
-}
-
-function collectProductPayload(form) {
-  const data = new FormData(form);
-  const category = categoryById(data.get("categoryId"));
-  if (!category) throw new Error("Nhóm vật liệu không hợp lệ.");
-  const attributes = {};
-  for (const attribute of orderedCategoryAttributes(category)) {
-    attributes[attribute.id] = data.get(`attr:${attribute.id}`) ?? "";
+async function loadMealReportData(
+  target,
+  { showLoader = false, force = false } = {}
+) {
+  if (!appState.currentUser) {
+    return;
   }
-  return {
-    id: data.get("id") || null,
-    expectedRevision: toOptionalNumber(data.get("expectedRevision")),
-    categoryId: data.get("categoryId"),
-    customName: data.get("customName"),
-    unit: data.get("unit"),
-    warningLevel: data.get("warningLevel"),
-    initialStock: data.get("initialStock"),
-    note: data.get("note"),
-    attributes,
-  };
-}
 
-function downloadJSON(filename, data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
+  const range = getMealMonthRange(target);
 
-function updateInventoryListOnly() {
-  const list = $("#inventory-list");
-  if (!list) return;
-  const products = filteredProducts();
-  list.innerHTML = renderInventoryListContent(products);
-  setText("#inventory-result-count", `${products.length} kết quả`);
-}
+  if (appState.mealReportLoadedMonths.has(range.monthKey) && !force) {
+    renderMeal();
+    return;
+  }
 
-function updateHistoryListOnly() {
-  const list = $("#history-list");
-  if (!list) return;
-  const transactions = filteredTransactions();
-  list.innerHTML = transactions.length ? transactions.map(renderTransactionRow).join("") : renderEmptyState("history", "Không có giao dịch phù hợp", "Thử xóa bộ lọc hoặc chọn khoảng ngày khác.");
-  setText("#history-result-count", `${transactions.length} giao dịch`);
-}
+  const token = (appState.mealReportRequestTokens[range.monthKey] || 0) + 1;
+  appState.mealReportRequestTokens[range.monthKey] = token;
 
-const debouncedInventoryFilter = debounce(updateInventoryListOnly, 160);
-const debouncedHistoryFilter = debounce(updateHistoryListOnly, 160);
+  if (showLoader) {
+    setLoading(true);
+  }
 
-async function switchScreen(screen, manageTarget = null) {
-  if (!Object.values(SCREENS).includes(screen)) return;
-  appState.screen = screen;
-  if (manageTarget && Object.values(MANAGE_TABS).includes(manageTarget)) appState.manageTab = manageTarget;
-  closeModal(true);
-  if (screen === SCREENS.history) await loadTransactions({ render: false, limit: 200 });
-  if (screen === SCREENS.manage && appState.manageTab === MANAGE_TABS.accounts && hasPermission(PERMISSIONS.manageAccounts)) await loadAccountData({ render: false });
-  renderApp();
-  window.scrollTo({ top: 0, behavior: "auto" });
-  $("#main-content")?.focus({ preventScroll: true });
-}
-
-async function handleBootstrapSubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const submitButton = $("[type='submit']", form);
-  await withActionLock("bootstrap-superadmin", submitButton, async () => {
-    try {
-      const payload = {
-        username: data.get("username"),
-        displayName: data.get("displayName"),
-        password: data.get("password"),
-        passwordConfirm: data.get("passwordConfirm"),
-      };
-      await dataService.bootstrapFirstSuperadmin(payload);
-      appState.ui.initialized = true;
-      const account = await dataService.login(payload.username, payload.password);
-      setAuthenticatedAccount(account);
-      appState.screen = SCREENS.dashboard;
-      await loadBootstrap({ render: false });
-      await loadTransactions({ render: false, limit: 50 });
-      startRealtimeSync();
-      renderApp();
-      showToast("success", "Đã tạo Super Admin", "Ứng dụng đã sẵn sàng sử dụng.");
-    } catch (error) {
-      if (error.code === "ALREADY_INITIALIZED") appState.ui.initialized = true;
-      showToast("error", "Không thể khởi tạo", error.message);
-      renderApp();
-    }
-  });
-}
-
-async function handleLoginSubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const submitButton = $("[type='submit']", form);
-  await withActionLock("login", submitButton, async () => {
-    try {
-      const account = await dataService.login(data.get("username"), data.get("password"));
-      setAuthenticatedAccount(account);
-      appState.screen = SCREENS.dashboard;
-      appState.cache = { schema: null, products: [], transactions: [], accounts: [], accountAudit: [], loaded: { bootstrap: false, transactions: false, accounts: false, accountAudit: false } };
-      await loadBootstrap({ render: false });
-      if (appState.cache.schema && appState.auth.status === "signedIn") {
-        await loadTransactions({ render: false, limit: 50 });
-        startRealtimeSync();
-        showToast("success", "Đăng nhập thành công", `${account.displayName} · ${roleLabel(account.role)}`);
-      }
-      renderApp();
-    } catch (error) {
-      showToast("error", "Không thể đăng nhập", error.message);
-      $("#login-password")?.focus();
-    }
-  });
-}
-
-async function handlePasswordResetSubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const accountId = String(data.get("accountId") || "");
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock(`reset-password:${accountId}`, submitButton, async () => {
-    try {
-      await dataService.setAccountPassword(accountId, data.get("password"), data.get("passwordConfirm"));
-      await loadAccountData({ render: false });
-      closeModal(true);
-      renderApp();
-      showToast("success", "Đã đặt mật khẩu mới", "Tài khoản có thể đăng nhập ngay, không bắt buộc đổi lại.");
-    } catch (error) {
-      showToast("error", "Không thể đặt mật khẩu", error.message);
-    }
-  });
-}
-
-async function handleProductSubmit(event, form) {
-  event.preventDefault();
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock("save-product", submitButton, async () => {
-    try {
-      const payload = collectProductPayload(form);
-      const saved = await dataService.saveProduct(payload);
-      await refreshInventoryAndHistory({ render: false });
-      closeModal(true);
-      renderApp();
-      showToast("success", payload.id ? "Đã cập nhật vật liệu" : "Đã tạo vật liệu", saved.name);
-      announce("Đã lưu vật liệu thành công.");
-    } catch (error) {
-      showToast("error", "Không thể lưu vật liệu", error.message);
-    }
-  });
-}
-
-async function handleTransactionSubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const productId = String(data.get("productId") || "");
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock(`transaction:${productId}`, submitButton, async () => {
-    try {
-      const result = await dataService.applyTransaction({
-        productId,
-        type: data.get("type"),
-        amount: data.get("amount"),
-        note: data.get("note"),
-        requestKey: data.get("requestKey"),
-      });
-      await refreshInventoryAndHistory({ render: false });
-      closeModal(true);
-      renderApp();
-      showToast("success", result.duplicate ? "Giao dịch đã tồn tại" : "Đã lưu giao dịch", `${productDisplayName(result.product)}: ${formatQuantity(result.product.quantity)} ${result.product.unit}`);
-      announce("Đã lưu giao dịch kho thành công.");
-    } catch (error) {
-      showToast("error", "Không thể lưu giao dịch", error.message);
-    }
-  });
-}
-
-async function handleReverseTransactionSubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const transactionId = String(data.get("transactionId") || "");
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock(`reverse:${transactionId}`, submitButton, async () => {
-    try {
-      const result = await dataService.reverseTransaction({
-        transactionId,
-        reason: data.get("reason"),
-        requestKey: data.get("requestKey"),
-      });
-      await refreshInventoryAndHistory({ render: false });
-      closeModal(true);
-      renderApp();
-      showToast("success", result.duplicate ? "Giao dịch đảo đã tồn tại" : "Đã đảo giao dịch", `${productDisplayName(result.product)}: ${formatQuantity(result.product.quantity)} ${result.product.unit}`);
-      announce("Đã tạo giao dịch đảo và cập nhật tồn kho.");
-    } catch (error) {
-      showToast("error", "Không thể đảo giao dịch", error.message);
-    }
-  });
-}
-
-async function handleHistoryCleanupSubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock("delete-inventory-history", submitButton, async () => {
-    try {
-      const scope = data.get("scope") === "all" ? "all" : "before";
-      const before = scope === "all" ? null : String(data.get("before") || "");
-      if (scope === "before" && !before) throw new Error("Vui lòng chọn ngày kết thúc.");
-      const result = await dataService.deleteInventoryHistory({
-        before,
-        reason: data.get("reason"),
-        confirmation: data.get("confirmation"),
-      });
-      await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50, useFilters: appState.screen === SCREENS.history });
-      closeModal(true);
-      renderApp();
-      showToast("success", "Đã xóa lịch sử", `${toNumber(result?.deletedCount, 0)} giao dịch đã được xóa khỏi ứng dụng.`);
-    } catch (error) {
-      showToast("error", "Không thể xóa lịch sử", error.message);
-    }
-  });
-}
-
-async function handleAccountSubmit(event, form) {
-  event.preventDefault();
-  const data = new FormData(form);
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock("save-account", submitButton, async () => {
-    try {
-      await dataService.saveAccount({
-        id: data.get("id") || null,
-        expectedRevision: toOptionalNumber(data.get("expectedRevision")),
-        displayName: data.get("displayName"),
-        username: data.get("username"),
-        role: data.get("role"),
-        status: data.get("status") || ACCOUNT_STATUSES.active,
-        scopeMode: data.get("scopeMode") || "all",
-        categoryPermissions: readAccountCategoryPermissions(form),
-        password: data.get("password"),
-        passwordConfirm: data.get("passwordConfirm"),
-      });
-      await loadAccountData({ render: false });
-      closeModal(true);
-      renderApp();
-      showToast("success", "Đã lưu tài khoản");
-    } catch (error) {
-      showToast("error", "Không thể lưu tài khoản", error.message);
-    }
-  });
-}
-
-async function handleCategorySubmit(event, form) {
-  event.preventDefault();
-  const draft = readCategoryDraftFromForm();
-  const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
-  await withActionLock("save-category", submitButton, async () => {
-    try {
-      await dataService.saveCategory({
-        ...draft,
-        units: draft.units.join(", "),
-        attributes: draft.attributes,
-      });
-      await refreshInventoryAndHistory({ render: false });
-      closeModal(true);
-      renderApp();
-      showToast("success", "Đã lưu nhóm vật liệu");
-    } catch (error) {
-      showToast("error", "Không thể lưu nhóm", error.message);
-    }
-  });
-}
-
-function bindEvents() {
-  on(document, "click", "[data-nav]", async (event, button) => {
-    event.preventDefault();
-    const destination = button.dataset.nav;
-    if (destination === "quick") {
-      openTransactionModal();
-      return;
-    }
-    await switchScreen(destination, button.dataset.manageTarget || null);
-  });
-
-  on(document, "click", "[data-manage-tab]", async (event, button) => {
-    appState.manageTab = button.dataset.manageTab;
-    if (appState.manageTab === MANAGE_TABS.accounts && hasPermission(PERMISSIONS.manageAccounts)) await loadAccountData({ render: false });
-    renderApp();
-  });
-
-  on(document, "click", "[data-action='toggle-theme']", () => applyTheme(appState.theme === "dark" ? "light" : "dark") || renderApp());
-  on(document, "click", "[data-action='open-profile']", openProfileModal);
-  on(document, "click", "[data-action='retry-bootstrap']", async (event, button) => {
-    await withActionLock("retry-bootstrap", button, async () => {
-      await loadBootstrap({ render: false });
-      if (appState.cache.schema && appState.auth.status === "signedIn") await loadTransactions({ render: false, limit: 50 });
-      renderApp();
-    });
-  });
-  on(document, "click", "[data-action='logout']", async (event, button) => {
-    await withActionLock("logout", button, async () => {
-      invalidatePendingDataRequests();
-      await stopRealtimeSync();
-      await dataService.logout();
-      closeModal(true);
-      setAuthenticatedAccount(null);
-      appState.cache = { schema: null, products: [], transactions: [], accounts: [], accountAudit: [], loaded: { bootstrap: false, transactions: false, accounts: false, accountAudit: false } };
-      renderApp();
-      showToast("success", "Đã đăng xuất");
-    });
-  });
-  on(document, "click", "[data-action='close-modal']", () => closeModal());
-  on(document, "click", "[data-action='open-product']", (event, button) => openProductDetail(button.dataset.productId));
-  on(document, "click", "[data-action='add-product']", () => openProductForm());
-  on(document, "click", "[data-action='edit-product']", (event, button) => openProductForm(button.dataset.productId));
-  on(document, "click", "[data-action='open-transaction']", (event, button) => openTransactionModal(button.dataset.productId));
-  on(document, "click", "[data-action='quick-transaction']", (event, button) => openTransactionModal(button.dataset.productId, button.dataset.type));
-  on(document, "click", "[data-action='open-transaction-detail']", (event, button) => openTransactionDetail(button.dataset.transactionId));
-  on(document, "click", "[data-action='open-reverse-transaction']", (event, button) => openReverseTransactionModal(button.dataset.transactionId));
-  on(document, "click", "[data-action='add-account']", () => openAccountForm());
-  on(document, "click", "[data-action='edit-account']", (event, button) => openAccountForm(button.dataset.accountId));
-  on(document, "click", "[data-action='open-password-reset']", (event, button) => openPasswordResetForm(button.dataset.accountId));
-  on(document, "click", "[data-action='add-category']", () => openCategoryForm());
-  on(document, "click", "[data-action='edit-category']", (event, button) => openCategoryForm(button.dataset.categoryId));
-  on(document, "click", "[data-action='open-history-cleanup']", openHistoryCleanupModal);
-
-  on(document, "click", "[data-action='archive-product']", (event, button) => {
-    const product = productById(button.dataset.productId);
-    if (!product) return;
-    closeModal(true);
-    openConfirm({
-      title: "Lưu trữ vật liệu?",
-      message: `Vật liệu “${productDisplayName(product)}” sẽ ẩn khỏi kho nhưng lịch sử vẫn được giữ.`,
-      confirmLabel: "Lưu trữ",
-      danger: true,
-      onConfirm: async (confirmButton) => {
-        await withActionLock(`archive:${product.id}`, confirmButton, async () => {
-          try {
-            await dataService.archiveProduct(product.id, product.revision ?? null);
-            await refreshInventoryAndHistory({ render: false });
-            closeModal(true);
-            renderApp();
-            showToast("success", "Đã lưu trữ vật liệu");
-          } catch (error) {
-            showToast("error", "Không thể lưu trữ", error.message);
-          }
-        });
-      },
-    });
-  });
-
-  on(document, "click", "[data-action='delete-test-product']", (event, button) => {
-    const product = productById(button.dataset.productId);
-    if (!product) return;
-    if (!canDeleteTestProduct()) {
-      showToast("error", "Không có quyền", "Chỉ Admin hoặc Super Admin được xóa vật liệu test.");
-      return;
-    }
-    closeModal(true);
-    openConfirm({
-      title: "Xóa vật liệu test?",
-      message: `Chỉ dùng cho dữ liệu thử nghiệm. “${productDisplayName(product)}” và toàn bộ giao dịch riêng của vật liệu này sẽ bị xóa vĩnh viễn. Không thể hoàn tác.`,
-      confirmLabel: "Xóa vĩnh viễn",
-      danger: true,
-      onConfirm: async (confirmButton) => {
-        await withActionLock(`delete-test-product:${product.id}`, confirmButton, async () => {
-          try {
-            const result = await dataService.deleteTestProduct(product.id, product.revision ?? null, makeId("delete-test-product"));
-            await refreshInventoryAndHistory({ render: false });
-            closeModal(true);
-            renderApp();
-            const count = toNumber(result?.transactionCount, 0);
-            showToast("success", "Đã xóa vật liệu test", count ? `Đã xóa ${count} giao dịch liên quan.` : "Không còn dữ liệu của vật liệu trong kho.");
-          } catch (error) {
-            showToast("error", "Không thể xóa vật liệu", error.message);
-          }
-        });
-      },
-    });
-  });
-
-  on(document, "click", "[data-action='confirm-callback']", async (event, button) => {
-    const callback = confirmCallbacks.get(button.dataset.callbackId);
-    confirmCallbacks.delete(button.dataset.callbackId);
-    appState.ui.confirmCallbackId = null;
-    if (callback) await callback(button);
-  });
-
-  on(document, "click", "[data-action='transaction-step']", (event, button) => {
-    const form = $("#transaction-form");
-    const input = $("#transaction-amount", form || document);
-    if (!form || !input) return;
-    const delta = Number(button.dataset.delta || 0);
-    const type = String(new FormData(form).get("type") || "");
-    const product = productById(new FormData(form).get("productId"));
-    const blankBase = type === TRANSACTION_TYPES.adjust ? normalizeQuantity(product?.quantity, 0) : 0;
-    const current = String(input.value || "").trim() === "" ? blankBase : normalizeQuantity(input.value, blankBase);
-    input.value = String(Math.min(MAX_QUANTITY, Math.max(0, normalizeQuantity(current + delta, 0))));
-    updateTransactionPreview();
-    input.focus();
-  });
-
-  on(document, "click", "[data-action='select-transaction-type']", (event, button) => {
-    const form = $("#transaction-form");
-    if (!form) return;
-    const typeInput = $("#transaction-type", form);
-    const amountInput = $("#transaction-amount", form);
-    const previousType = typeInput?.value || "";
-    const nextType = String(button.dataset.type || "");
-    $$("[data-action='select-transaction-type']", form).forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
-    setValue("#transaction-type", nextType, form);
-    if (amountInput && nextType !== previousType) {
-      const product = productById(new FormData(form).get("productId"));
-      amountInput.value = nextType === TRANSACTION_TYPES.adjust ? String(normalizeQuantity(product?.quantity, 0)) : "";
-    }
-    updateTransactionPreview();
-  });
-
-  on(document, "click", "[data-action='clear-history-filters']", async () => {
-    appState.filters.history = { search: "", type: "all", from: "", to: "" };
-    if (dataService.mode === "supabase") await loadTransactions({ render: false, limit: 200, useFilters: true });
-    renderApp();
-  });
-
-  on(document, "click", "[data-action='add-attribute-row']", () => {
-    appState.ui.categoryDraft = readCategoryDraftFromForm();
-    appState.ui.categoryDraft.attributes.push({ id: "", name: "", type: "text", options: "", unit: "", required: false, identity: false, list: true, sortOrder: appState.ui.categoryDraft.attributes.length, identityOrder: null });
-    rerenderCategoryAttributes();
-  });
-
-  on(document, "click", "[data-action='move-attribute-up'], [data-action='move-attribute-down']", (event, button) => {
-    appState.ui.categoryDraft = readCategoryDraftFromForm();
-    const rows = $$("[data-attribute-row]");
-    const index = rows.indexOf(button.closest("[data-attribute-row]"));
-    if (index < 0) return;
-    const direction = button.dataset.action === "move-attribute-up" ? -1 : 1;
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= appState.ui.categoryDraft.attributes.length) return;
-    const [movedAttribute] = appState.ui.categoryDraft.attributes.splice(index, 1);
-    appState.ui.categoryDraft.attributes.splice(nextIndex, 0, movedAttribute);
-    appState.ui.categoryDraft.attributes.forEach((attribute, attributeIndex) => { attribute.sortOrder = attributeIndex; });
-    rerenderCategoryAttributes();
-    const movedRow = $$('[data-attribute-row]')[nextIndex];
-    movedRow?.querySelector("[data-attribute-field='name']")?.focus();
-  });
-
-  on(document, "click", "[data-action='remove-attribute-row']", (event, button) => {
-    appState.ui.categoryDraft = readCategoryDraftFromForm();
-    const rows = $$("[data-attribute-row]");
-    const index = rows.indexOf(button.closest("[data-attribute-row]"));
-    if (index < 0) return;
-    if (appState.ui.categoryDraft.attributes.length <= 1) return showToast("error", "Nhóm cần ít nhất một thuộc tính");
-    const attribute = appState.ui.categoryDraft.attributes[index];
-    if (attribute?.id) {
-      const accepted = window.confirm(`Xóa thuộc tính “${attribute.name || `Thuộc tính ${index + 1}`}”?\n\n• Chưa có dữ liệu: xóa hoàn toàn.\n• Đã có dữ liệu và không phải nhận diện: ngừng sử dụng, dữ liệu cũ vẫn được giữ.\n• Thuộc tính nhận diện đang dùng: hệ thống sẽ chặn để tránh trùng vật liệu.`);
-      if (!accepted) return;
-    }
-    appState.ui.categoryDraft.attributes.splice(index, 1);
-    appState.ui.categoryDraft.attributes.forEach((item, attributeIndex) => { item.sortOrder = attributeIndex; });
-    rerenderCategoryAttributes();
-  });
-
-  on(document, "click", "[data-action='export-backup']", () => {
-    try {
-      const backup = dataService.exportBackup();
-      downloadJSON(`kho-khuon-be-backup-${formatISODate(new Date())}.json`, backup);
-      showToast("success", "Đã tạo file sao lưu");
-    } catch (error) {
-      showToast("error", "Không thể tạo file sao lưu", error.message);
-    }
-  });
-
-  on(document, "click", "[data-action='trigger-import']", () => $("#backup-file-input")?.click());
-
-  on(document, "click", "[data-action='restore-rollback']", () => {
-    openConfirm({
-      title: "Khôi phục snapshot gần nhất?",
-      message: "Dữ liệu hiện tại sẽ hoán đổi với trạng thái trước lần phục hồi hoặc đặt lại gần nhất.",
-      confirmLabel: "Khôi phục",
-      onConfirm: async (button) => {
-        await withActionLock("restore-rollback", button, async () => {
-          try {
-            await dataService.restoreRollback();
-            await refreshAfterDataReplacement();
-            closeModal(true);
-            renderApp();
-            showToast("success", "Đã khôi phục snapshot gần nhất");
-          } catch (error) {
-            showToast("error", "Không thể khôi phục", error.message);
-          }
-        });
-      },
-    });
-  });
-
-  on(document, "click", "[data-action='reset-demo']", () => {
-    openConfirm({
-      title: "Đặt lại dữ liệu thử nghiệm?",
-      message: "Toàn bộ thay đổi trên thiết bị này sẽ được thay bằng dữ liệu mẫu ban đầu.",
-      confirmLabel: "Đặt lại",
-      danger: true,
-      onConfirm: async (button) => {
-        await withActionLock("reset-demo", button, async () => {
-          try {
-            await dataService.resetDemo();
-            await refreshAfterDataReplacement();
-            closeModal(true);
-            renderApp();
-            showToast("success", "Đã đặt lại dữ liệu thử nghiệm");
-          } catch (error) {
-            showToast("error", "Không thể đặt lại dữ liệu", error.message);
-          }
-        });
-      },
-    });
-  });
-
-  on(document, "change", "#history-cleanup-scope", updateHistoryCleanupFields);
-
-  document.addEventListener("submit", (event) => {
-    const form = event.target;
-    if (!(form instanceof HTMLFormElement)) return;
-    const formId = form.getAttribute("id") || "";
-    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "account-form", "password-reset-form", "category-form"]);
-    if (!handledForms.has(formId)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (formId === "bootstrap-form") handleBootstrapSubmit(event, form);
-    else if (formId === "login-form") handleLoginSubmit(event, form);
-    if (formId === "product-form") handleProductSubmit(event, form);
-    if (formId === "transaction-form") handleTransactionSubmit(event, form);
-    if (formId === "reverse-transaction-form") handleReverseTransactionSubmit(event, form);
-    if (formId === "history-cleanup-form") handleHistoryCleanupSubmit(event, form);
-    if (formId === "account-form") handleAccountSubmit(event, form);
-    if (formId === "password-reset-form") handlePasswordResetSubmit(event, form);
-    if (formId === "category-form") handleCategorySubmit(event, form);
-  }, true);
-
-  document.addEventListener("input", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) return;
-    if (target.id === "inventory-search") {
-      appState.filters.inventory.search = target.value;
-      debouncedInventoryFilter();
-    }
-    if (target.id === "inventory-quantity-below") {
-      appState.filters.inventory.quantityBelow = target.value;
-      debouncedInventoryFilter();
-    }
-    if (target.id === "history-search") {
-      appState.filters.history.search = target.value;
-      debouncedHistoryFilter();
-    }
-    if (target.closest("#product-form") && (target.name?.startsWith("attr:") || target.id === "product-custom-name")) updateGeneratedProductName();
-    if (target.closest("#transaction-form") && ["transaction-amount", "transaction-product"].includes(target.id)) updateTransactionPreview();
-  });
-
-  document.addEventListener("change", async (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
-    if (target.id === "inventory-category") {
-      appState.filters.inventory.category = target.value;
-      updateInventoryListOnly();
-    }
-    if (target.id === "inventory-status") {
-      appState.filters.inventory.status = target.value;
-      updateInventoryListOnly();
-    }
-    if (target.id === "history-type") {
-      appState.filters.history.type = target.value;
-      if (dataService.mode === "supabase") await loadTransactions({ render: false, limit: 200, useFilters: true });
-      renderApp();
-    }
-    if (target.id === "history-from") {
-      appState.filters.history.from = target.value;
-      if (dataService.mode === "supabase") await loadTransactions({ render: false, limit: 200, useFilters: true });
-      renderApp();
-    }
-    if (target.id === "history-to") {
-      appState.filters.history.to = target.value;
-      if (dataService.mode === "supabase") await loadTransactions({ render: false, limit: 200, useFilters: true });
-      renderApp();
-    }
-    if (target.id === "product-category") refreshProductFormForCategory(target.value);
-    if (target.id === "transaction-product") {
-      const form = target.closest("#transaction-form");
-      const amountInput = $("#transaction-amount", form || document);
-      const type = String($("#transaction-type", form || document)?.value || "");
-      const product = productById(target.value);
-      if (amountInput) amountInput.value = type === TRANSACTION_TYPES.adjust ? String(normalizeQuantity(product?.quantity, 0)) : "";
-      updateTransactionPreview();
-    }
-    if (["account-role", "account-scope-mode"].includes(target.id)) updateAccountPermissionEditor();
-    if (target.id === "backup-file-input" && target.files?.[0]) {
-      const file = target.files[0];
-      try {
-        const text = await file.text();
-        const data = JSON.parse(text);
-        openConfirm({
-          title: "Phục hồi bản sao lưu?",
-          message: `Dữ liệu thử nghiệm hiện tại sẽ được thay bằng file “${file.name}”.`,
-          confirmLabel: "Phục hồi",
-          danger: true,
-          onConfirm: async (button) => {
-            await withActionLock("import-backup", button, async () => {
-              try {
-                await dataService.importBackup(data);
-                await refreshAfterDataReplacement();
-                closeModal(true);
-                renderApp();
-                showToast("success", "Đã phục hồi bản sao lưu");
-              } catch (error) {
-                showToast("error", "Không thể phục hồi", error.message);
-              }
-            });
-          },
-        });
-      } catch (error) {
-        showToast("error", "File JSON không hợp lệ", error.message);
-      } finally {
-        target.value = "";
-      }
-    }
-  });
-
-  on(document, "click", "[data-modal-backdrop='true']", (event, layer) => {
-    if (event.target === layer) closeModal();
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && appState.ui.modalName) closeModal();
-  });
-
-}
-
-async function refreshAfterDataReplacement() {
-  const session = readAuthSession();
-  if (!session) { setAuthenticatedAccount(null); renderApp(); return; }
-  const profile = await dataService.getSessionProfile(session.accountId);
-  if (!profile) { clearAuthSession(); setAuthenticatedAccount(null); renderApp(); return; }
-  setAuthenticatedAccount(profile);
-  await loadBootstrap({ render: false });
-  await loadTransactions({ render: false, limit: 50 });
-  if (hasPermission(PERMISSIONS.manageAccounts)) await loadAccountData({ render: false });
-  renderApp();
-}
-
-function bindZoomPrevention() {
-  let lastTouchEnd = 0;
-
-  ["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
-    document.addEventListener(eventName, (event) => event.preventDefault(), { passive: false });
-  });
-
-  document.addEventListener("touchmove", (event) => {
-    if (event.touches?.length > 1) event.preventDefault();
-  }, { passive: false });
-
-  document.addEventListener("touchend", (event) => {
-    const now = Date.now();
-    if (now - lastTouchEnd <= 300) event.preventDefault();
-    lastTouchEnd = now;
-  }, { passive: false });
-
-  document.addEventListener("dblclick", (event) => event.preventDefault(), { passive: false });
-  document.addEventListener("wheel", (event) => {
-    if (event.ctrlKey || event.metaKey) event.preventDefault();
-  }, { passive: false });
-}
-
-async function registerServiceWorker() {
-  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
   try {
-    const registration = await navigator.serviceWorker.register(`./service-worker.js?v=${encodeURIComponent(APP_VERSION)}&b=${encodeURIComponent(BUILD_ID)}`);
-    registration.update().catch(() => {});
+    const workResult = await supabaseClient
+      .from("work_logs")
+      .select("work_date,meal_count")
+      .eq("username", appState.currentUser)
+      .gte("work_date", range.rangeStart)
+      .lte("work_date", range.rangeEnd)
+      .order("work_date", { ascending: true });
+
+    if (workResult.error) {
+      throw workResult.error;
+    }
+
+    const receiptResult = await supabaseClient
+      .from("meal_weekly_receipts")
+      .select(
+        "week_start,week_end,meal_count_snapshot,meal_price_snapshot,amount_snapshot,status,received_at,note,updated_at"
+      )
+      .eq("username", appState.currentUser)
+      .gte("week_start", range.rangeStart)
+      .lte("week_start", range.lastWeekStart)
+      .order("week_start", { ascending: true });
+
+    if (
+      appState.mealReportRequestTokens[range.monthKey] !== token ||
+      getMonthKey(appState.mealDate) !== range.monthKey
+    ) {
+      return;
+    }
+
+    appState.mealReportRowsByMonth[range.monthKey] = workResult.data || [];
+
+    if (receiptResult.error) {
+      if (isMissingMealReceiptTableError(receiptResult.error)) {
+        appState.mealReceiptSupabaseAvailable = false;
+        refreshSettingsSyncStatus();
+      } else {
+        console.warn(
+          "Không thể tải trạng thái nhận tiền cơm, đang dùng bộ nhớ máy:",
+          receiptResult.error.message
+        );
+      }
+    } else {
+      appState.mealReceiptSupabaseAvailable = true;
+      refreshSettingsSyncStatus();
+
+      (receiptResult.data || []).forEach(row => {
+        const normalized = normalizeMealReceipt(row);
+
+        if (normalized) {
+          appState.mealReceipts[normalized.weekStart] = normalized;
+        }
+      });
+
+      saveMealReceiptCache();
+    }
+
+    appState.mealReportLoadedMonths.add(range.monthKey);
+    renderMeal();
   } catch (error) {
-    console.warn("Không đăng ký được service worker.", error);
+    showToast(
+      `Không thể tải báo cáo tiền cơm: ${error.message || "Lỗi không xác định"}`,
+      true
+    );
+  } finally {
+    if (showLoader) {
+      setLoading(false);
+    }
   }
 }
 
-async function init() {
-  applyTheme(appState.theme);
-  bindZoomPrevention();
-  bindEvents();
-  bindRealtimeLifecycle();
-  renderApp();
-  await checkInitializationStatus();
-  await restoreSession();
-  if (appState.auth.status === "signedIn") startRealtimeSync();
-  renderApp();
-  registerServiceWorker();
-  console.info(`Kho Khuôn Bế ${APP_VERSION} · ${CACHE_VERSION}`);
+
+function buildMealWeeks() {
+  const range = getMealMonthRange(appState.mealDate);
+  const mealByDate = new Map();
+
+  const currentRows = appState.mealReportRowsByMonth[range.monthKey] || [];
+
+  currentRows.forEach(row => {
+    const dateKey = String(row?.work_date || "").slice(0, 10);
+    const count = Math.max(0, parseInt(row?.meal_count, 10) || 0);
+
+    if (dateKey) {
+      mealByDate.set(dateKey, count);
+    }
+  });
+
+  const weeks = [];
+  let weekStartDate = parseDateKey(range.rangeStart);
+  const lastWeekStartDate = parseDateKey(range.lastWeekStart);
+
+  while (weekStartDate <= lastWeekStartDate) {
+    const weekEndDate = addCalendarDays(weekStartDate, 6);
+    let meals = 0;
+    let monthMeals = 0;
+
+    for (let offset = 0; offset < 7; offset += 1) {
+      const dateKey = getDateKey(addCalendarDays(weekStartDate, offset));
+      const dayMeals = mealByDate.get(dateKey) || 0;
+      meals += dayMeals;
+
+      if (dateKey.startsWith(`${range.monthKey}-`)) {
+        monthMeals += dayMeals;
+      }
+    }
+
+    const weekStart = getDateKey(weekStartDate);
+    const weekEnd = getDateKey(weekEndDate);
+    const price = sanitizeNonNegativeNumber(appState.settings?.mealPrice, 30000);
+    const amount = meals * price;
+    const monthAmount = monthMeals * price;
+    const receipt = appState.mealReceipts[weekStart] || null;
+    const received = receipt?.status === "received";
+    const snapshotCount = Number(receipt?.mealCountSnapshot || 0);
+    const snapshotAmount = Number(receipt?.amountSnapshot || 0);
+    const receivedMonthAmount = received && snapshotCount > 0
+      ? Math.round(monthMeals * snapshotAmount / snapshotCount)
+      : 0;
+    const changed = Boolean(
+      received &&
+      (
+        Number(receipt.mealCountSnapshot) !== meals ||
+        Number(receipt.mealPriceSnapshot) !== price ||
+        Number(receipt.amountSnapshot) !== amount
+      )
+    );
+
+    weeks.push({
+      weekStart,
+      weekEnd,
+      meals,
+      monthMeals,
+      price,
+      amount,
+      monthAmount,
+      receipt,
+      received,
+      receivedMonthAmount,
+      changed,
+      difference: received ? amount - Number(receipt.amountSnapshot || 0) : amount
+    });
+
+    weekStartDate = addCalendarDays(weekStartDate, 7);
+  }
+
+  return weeks;
 }
 
-document.addEventListener("DOMContentLoaded", init, { once: true });
+
+function formatMealReceiptTime(value) {
+  if (!value) {
+    return "Không rõ thời điểm";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Không rõ thời điểm";
+  }
+
+  return date.toLocaleString("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  });
+}
+
+
+function formatSignedPayrollMoney(value) {
+  const number = Math.round(Number(value) || 0);
+
+  if (number === 0) {
+    return "0₫";
+  }
+
+  return `${number > 0 ? "+" : "−"}${formatPayrollMoney(Math.abs(number))}`;
+}
+
+
+function renderMeal() {
+  if (!appState.settings) {
+    return;
+  }
+
+  const year = appState.mealDate.getFullYear();
+  const month = appState.mealDate.getMonth();
+  const weeks = buildMealWeeks();
+  const visibleWeeks = weeks.filter(
+    week => week.monthMeals > 0 || (week.received && week.meals > 0)
+  );
+
+  setText("#mealMonthLabel", `Tháng ${month + 1}/${year}`);
+
+  const totalMeals = visibleWeeks.reduce((sum, week) => sum + week.monthMeals, 0);
+  const totalMoney = visibleWeeks.reduce((sum, week) => sum + week.monthAmount, 0);
+  const receivedTotal = visibleWeeks.reduce(
+    (sum, week) => sum + (week.received ? week.receivedMonthAmount : 0),
+    0
+  );
+  const pendingTotal = visibleWeeks.reduce(
+    (sum, week) => sum + (
+      week.received
+        ? Math.max(0, week.monthAmount - week.receivedMonthAmount)
+        : week.monthAmount
+    ),
+    0
+  );
+  const receivedWeeks = visibleWeeks.filter(week => week.received).length;
+  const pendingWeeks = visibleWeeks.filter(
+    week => !week.received || week.difference > 0
+  ).length;
+
+  setText("#totalMealCount", `${totalMeals} phần`);
+  setText("#totalMealMoney", formatPayrollMoney(totalMoney));
+  setText("#mealReceivedTotal", formatPayrollMoney(receivedTotal));
+  setText("#mealPendingTotal", formatPayrollMoney(pendingTotal));
+  setText("#mealReceivedWeekCount", `${receivedWeeks} tuần`);
+  setText("#mealPendingWeekCount", `${pendingWeeks} tuần`);
+
+  const container = $("#mealWeekList");
+  const emptyState = $("#mealEmptyState");
+
+  if (container) {
+    container.innerHTML = visibleWeeks.map((week, index) => {
+      const statusClass = week.changed
+        ? "changed"
+        : week.received
+          ? "received"
+          : "";
+      const statusIcon = week.changed
+        ? "triangle-alert"
+        : week.received
+          ? "circle-check"
+          : "clock-3";
+      const statusText = week.changed
+        ? "Dữ liệu thay đổi"
+        : week.received
+          ? "Đã nhận"
+          : "Chưa nhận";
+      const buttonDisabled =
+        appState.mealReceiptSupabaseAvailable === false ||
+        (!week.received && week.meals <= 0);
+      const buttonText = appState.mealReceiptSupabaseAvailable === false
+        ? "Chưa có bảng Supabase"
+        : week.received
+          ? "Hủy trạng thái đã nhận"
+          : "Đánh dấu đã nhận";
+      const buttonIcon = week.received ? "rotate-ccw" : "hand-coins";
+      const receivedMeta = week.received
+        ? `
+          <div class="meal-week-received-meta">
+            <i data-lucide="badge-check"></i>
+            <span>
+              Đã nhận ${formatPayrollMoney(week.receipt.amountSnapshot)} lúc
+              ${escapeHTML(formatMealReceiptTime(week.receipt.receivedAt))}.
+            </span>
+          </div>
+        `
+        : "";
+      const discrepancy = week.changed
+        ? `
+          <div class="meal-week-discrepancy">
+            <span>Theo dữ liệu hiện tại</span>
+            <strong>${formatPayrollMoney(week.amount)}</strong>
+            <span>Chênh lệch so với lúc nhận</span>
+            <strong>${formatSignedPayrollMoney(week.difference)}</strong>
+          </div>
+        `
+        : "";
+
+      return `
+        <article class="meal-week-card" data-meal-week="${week.weekStart}">
+          <header class="meal-week-card-header">
+            <div class="meal-week-title">
+              <span>TUẦN ${index + 1}</span>
+              <strong>${formatShortDate(week.weekStart)} – ${formatShortDate(week.weekEnd)}</strong>
+              <small>${
+                week.monthMeals !== week.meals
+                  ? `Toàn tuần ${week.meals} phần • Trong tháng ${week.monthMeals} phần`
+                  : "Thứ Hai đến Chủ nhật"
+              }</small>
+            </div>
+
+            <span class="meal-receipt-status ${statusClass}">
+              <i data-lucide="${statusIcon}"></i>
+              ${statusText}
+            </span>
+          </header>
+
+          <div class="meal-week-card-body">
+            <div class="meal-week-values">
+              <div class="meal-week-value">
+                <span>SỐ PHẦN</span>
+                <strong>${week.meals} phần</strong>
+              </div>
+
+              <div class="meal-week-value money-value">
+                <span>TIỀN TUẦN</span>
+                <strong>${formatPayrollMoney(week.amount)}</strong>
+              </div>
+            </div>
+
+            ${receivedMeta}
+            ${discrepancy}
+
+            <div class="meal-week-actions">
+              <button
+                type="button"
+                class="meal-receipt-button ${week.received ? "received" : ""}"
+                data-meal-receipt-action="${week.received ? "unreceive" : "receive"}"
+                data-week-start="${week.weekStart}"
+                ${buttonDisabled ? "disabled" : ""}
+              >
+                <i data-lucide="${buttonIcon}"></i>
+                ${buttonText}
+              </button>
+            </div>
+          </div>
+        </article>
+      `;
+    }).join("");
+  }
+
+  if (emptyState) {
+    emptyState.classList.toggle("hidden", visibleWeeks.length > 0);
+  }
+
+  refreshIcons();
+}
+
+
+function openMealReceiptConfirmation(weekStart) {
+  if (appState.mealReceiptSupabaseAvailable === false) {
+    showToast(
+      "Chưa có bảng meal_weekly_receipts. Hãy chạy file SQL nhận tiền cơm theo tuần trên Supabase.",
+      true
+    );
+    return;
+  }
+
+  const week = buildMealWeeks().find(item => item.weekStart === weekStart);
+
+  if (!week) {
+    showToast("Không tìm thấy dữ liệu tuần này.", true);
+    return;
+  }
+
+  if (!week.received && week.meals <= 0) {
+    showToast("Tuần này chưa có phần cơm để đánh dấu nhận.", true);
+    return;
+  }
+
+  appState.selectedMealReceiptWeek = {
+    ...week,
+    action: week.received ? "unreceive" : "receive"
+  };
+
+  const weekLabel = `Tuần ${formatShortDate(week.weekStart)} – ${formatShortDate(week.weekEnd)}`;
+  setText("#mealReceiptConfirmWeek", weekLabel);
+
+  if (week.received) {
+    setText("#mealReceiptConfirmTitle", "Hủy trạng thái đã nhận");
+    setText(
+      "#mealReceiptConfirmDescription",
+      `Tuần này đã ghi nhận ${formatPayrollMoney(week.receipt.amountSnapshot)}. Hủy trạng thái sẽ đưa tuần về chưa nhận nhưng không xóa dữ liệu phần cơm.`
+    );
+    setText("#confirmMealReceiptActionButton", "Hủy đã nhận");
+  } else {
+    setText("#mealReceiptConfirmTitle", "Xác nhận đã nhận tiền");
+    setText(
+      "#mealReceiptConfirmDescription",
+      `Xác nhận đã nhận ${formatPayrollMoney(week.amount)} cho ${week.meals} phần. Số liệu này sẽ được lưu làm bản chụp trên Supabase.`
+    );
+    setText("#confirmMealReceiptActionButton", "Đã nhận tiền");
+  }
+
+  openModal("mealReceiptConfirmModal");
+}
+
+
+async function confirmMealReceiptAction() {
+  const selected = appState.selectedMealReceiptWeek;
+
+  if (!selected || !appState.currentUser) {
+    closeModal("mealReceiptConfirmModal");
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const received = selected.action === "receive";
+  const payload = {
+    username: appState.currentUser,
+    week_start: selected.weekStart,
+    week_end: selected.weekEnd,
+    meal_count_snapshot: selected.meals,
+    meal_price_snapshot: selected.price,
+    amount_snapshot: selected.amount,
+    status: received ? "received" : "pending",
+    received_at: received ? now : null,
+    note: selected.receipt?.note || ""
+  };
+
+  const { data, error } = await supabaseClient
+    .from("meal_weekly_receipts")
+    .upsert(payload, { onConflict: "username,week_start" })
+    .select(
+      "week_start,week_end,meal_count_snapshot,meal_price_snapshot,amount_snapshot,status,received_at,note,updated_at"
+    )
+    .single();
+
+  if (error) {
+    if (isMissingMealReceiptTableError(error)) {
+      appState.mealReceiptSupabaseAvailable = false;
+      renderMeal();
+      throw new Error(
+        "Chưa có bảng meal_weekly_receipts. Hãy chạy file SQL nhận tiền cơm theo tuần trước."
+      );
+    }
+
+    throw error;
+  }
+
+  appState.mealReceiptSupabaseAvailable = true;
+  refreshSettingsSyncStatus();
+  const normalized = normalizeMealReceipt(data);
+
+  if (normalized) {
+    appState.mealReceipts[normalized.weekStart] = normalized;
+    saveMealReceiptCache();
+  }
+
+  closeModal("mealReceiptConfirmModal");
+  renderMeal();
+  showToast(received ? "Đã ghi nhận tuần này đã nhận tiền." : "Đã hủy trạng thái nhận tiền của tuần.");
+}
+
+
+
+// =====================================================
+// TÍNH NĂNG ẨN: BẢNG OT HR
+// =====================================================
+
+function getPrivateFeatureStorageKey(name) {
+  const username = encodeURIComponent(appState.currentUser || "guest");
+  return `otpro_${name}_${username}`;
+}
+
+
+function isAdvancedFeaturesUnlocked() {
+  if (!appState.currentUser) {
+    return false;
+  }
+
+  return localStorage.getItem(
+    getPrivateFeatureStorageKey("advanced_unlocked")
+  ) === "1";
+}
+
+
+function setAdvancedFeaturesUnlocked(enabled) {
+  if (!appState.currentUser) {
+    return;
+  }
+
+  localStorage.setItem(
+    getPrivateFeatureStorageKey("advanced_unlocked"),
+    enabled ? "1" : "0"
+  );
+}
+
+
+function isHrOtFeatureEnabled() {
+  if (!appState.currentUser) {
+    return false;
+  }
+
+  return localStorage.getItem(
+    getPrivateFeatureStorageKey("hr_ot_enabled")
+  ) === "1";
+}
+
+
+function setHrOtFeatureEnabled(enabled) {
+  if (!appState.currentUser) {
+    return;
+  }
+
+  localStorage.setItem(
+    getPrivateFeatureStorageKey("hr_ot_enabled"),
+    enabled ? "1" : "0"
+  );
+}
+
+
+function refreshAdvancedFeatureUI() {
+  const unlocked = isAdvancedFeaturesUnlocked();
+  const hrEnabled = isHrOtFeatureEnabled();
+
+  $("#advancedFeaturesSection")
+    ?.classList.toggle("hidden", !unlocked);
+
+  setChecked("#hrOtFeatureToggle", hrEnabled);
+
+  $("#hrOtButton")
+    ?.classList.toggle("hidden", !hrEnabled);
+}
+
+
+function handleSettingsVersionTap() {
+  if (!appState.currentUser || isAdvancedFeaturesUnlocked()) {
+    return;
+  }
+
+  window.clearTimeout(appState.advancedUnlockTimer);
+
+  appState.advancedUnlockTapCount += 1;
+
+  const remaining = Math.max(0, 7 - appState.advancedUnlockTapCount);
+
+  if (remaining === 0) {
+    appState.advancedUnlockTapCount = 0;
+    appState.advancedUnlockTimer = null;
+
+    setAdvancedFeaturesUnlocked(true);
+    refreshAdvancedFeatureUI();
+    refreshIcons();
+    showToast("Đã mở tính năng nâng cao.");
+    return;
+  }
+
+  if (remaining <= 3) {
+    showToast(`Còn ${remaining} lần để mở tính năng nâng cao.`);
+  }
+
+  appState.advancedUnlockTimer = window.setTimeout(() => {
+    appState.advancedUnlockTapCount = 0;
+    appState.advancedUnlockTimer = null;
+  }, 2500);
+}
+
+
+function getHrOtStorageKey() {
+  return getPrivateFeatureStorageKey("hr_ot_minutes");
+}
+
+
+function loadHrOtStorage() {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(getHrOtStorageKey()) || "{}"
+    );
+
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+
+function saveHrOtStorage(data) {
+  localStorage.setItem(
+    getHrOtStorageKey(),
+    JSON.stringify(data || {})
+  );
+}
+
+
+function getHrOtMonthKey(date = appState.hrOtDate) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+}
+
+
+function openHrOt() {
+  if (!isHrOtFeatureEnabled()) {
+    showToast("Bảng OT HR đang tắt.", true);
+    return;
+  }
+
+  closeAppMenu();
+
+  if (!(appState.hrOtDate instanceof Date) || Number.isNaN(appState.hrOtDate.getTime())) {
+    const now = new Date();
+    appState.hrOtDate = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+
+  renderHrOtTable();
+  openModal("hrOtModal");
+}
+
+
+function changeHrOtMonth(delta) {
+  const current = appState.hrOtDate instanceof Date
+    ? appState.hrOtDate
+    : new Date();
+
+  appState.hrOtDate = new Date(
+    current.getFullYear(),
+    current.getMonth() + delta,
+    1
+  );
+
+  renderHrOtTable();
+}
+
+
+function getHrOtWeekdayLabel(date) {
+  const labels = [
+    "Chủ Nhật",
+    "Thứ Hai",
+    "Thứ Ba",
+    "Thứ Tư",
+    "Thứ Năm",
+    "Thứ Sáu",
+    "Thứ Bảy"
+  ];
+
+  return labels[date.getDay()];
+}
+
+
+function normalizeHrOtMinutes(value) {
+  const digits = String(value ?? "").replace(/\D/g, "").slice(0, 4);
+
+  if (!digits) {
+    return "";
+  }
+
+  const number = Math.max(0, Math.min(9999, Number(digits)));
+  return Number.isFinite(number) ? String(number) : "";
+}
+
+
+function handleHrOtCellInput(event) {
+  const input = event.target.closest(".hr-ot-input");
+
+  if (!input) {
+    return;
+  }
+
+  const normalized = normalizeHrOtMinutes(input.value);
+
+  if (input.value !== normalized) {
+    input.value = normalized;
+  }
+
+  const row = input.dataset.hrRow;
+  const day = input.dataset.hrDay;
+  const monthKey = getHrOtMonthKey();
+
+  if (!["normal", "sunday"].includes(row) || !day) {
+    return;
+  }
+
+  const storage = loadHrOtStorage();
+  const month = storage[monthKey] && typeof storage[monthKey] === "object"
+    ? storage[monthKey]
+    : { normal: {}, sunday: {} };
+
+  month.normal =
+    month.normal && typeof month.normal === "object"
+      ? month.normal
+      : {};
+
+  month.sunday =
+    month.sunday && typeof month.sunday === "object"
+      ? month.sunday
+      : {};
+
+  if (normalized === "") {
+    delete month[row][day];
+  } else {
+    month[row][day] = Number(normalized);
+  }
+
+  const hasAnyValue =
+    Object.keys(month.normal).length > 0 ||
+    Object.keys(month.sunday).length > 0;
+
+  if (hasAnyValue) {
+    storage[monthKey] = month;
+  } else {
+    delete storage[monthKey];
+  }
+
+  saveHrOtStorage(storage);
+}
+
+
+function renderHrOtTable() {
+  const head = $("#hrOtTableHead");
+  const body = $("#hrOtTableBody");
+
+  if (!head || !body) {
+    return;
+  }
+
+  const date = appState.hrOtDate instanceof Date
+    ? appState.hrOtDate
+    : new Date();
+
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthKey = `${year}-${pad(month + 1)}`;
+  const storage = loadHrOtStorage();
+  const monthData = storage[monthKey] || {};
+  const normal = monthData.normal || {};
+  const sunday = monthData.sunday || {};
+
+  setText("#hrOtMonthLabel", `${pad(month + 1)}/${year}`);
+
+  const dayCells = [];
+  const normalCells = [];
+  const sundayCells = [];
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const currentDate = new Date(year, month, day);
+    const isSunday = currentDate.getDay() === 0;
+    const sundayClass = isSunday ? " is-sunday" : "";
+
+    dayCells.push(`
+      <th class="hr-ot-day${sundayClass}">
+        <strong>${day}</strong>
+        <small>${escapeHTML(getHrOtWeekdayLabel(currentDate))}</small>
+      </th>
+    `);
+
+    normalCells.push(`
+      <td class="hr-ot-cell${sundayClass}">
+        <input
+          class="hr-ot-input"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          aria-label="Tca thường ngày ${day}"
+          data-hr-row="normal"
+          data-hr-day="${day}"
+          value="${normal[day] ?? ""}"
+        />
+      </td>
+    `);
+
+    sundayCells.push(`
+      <td class="hr-ot-cell${sundayClass}">
+        <input
+          class="hr-ot-input"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          aria-label="Tca chủ nhật ngày ${day}"
+          data-hr-row="sunday"
+          data-hr-day="${day}"
+          value="${sunday[day] ?? ""}"
+        />
+      </td>
+    `);
+  }
+
+  head.innerHTML = `
+    <tr>
+      <th class="hr-ot-row-label hr-ot-corner"></th>
+      ${dayCells.join("")}
+    </tr>
+  `;
+
+  body.innerHTML = `
+    <tr>
+      <th class="hr-ot-row-label" scope="row">Tca thường</th>
+      ${normalCells.join("")}
+    </tr>
+    <tr>
+      <th class="hr-ot-row-label" scope="row">Tca chủ nhật</th>
+      ${sundayCells.join("")}
+    </tr>
+  `;
+}
+
+// =====================================================
+// MENU + CÀI ĐẶT + MODAL
+// =====================================================
+
+function openAppMenu() {
+  const menu =
+    $("#appMenu");
+
+  if (
+    !menu
+  ) {
+    return;
+  }
+
+  refreshAdvancedFeatureUI();
+
+  setText(
+    "#menuUserName",
+    appState.currentUser ||
+    "Người dùng"
+  );
+
+  setText(
+    "#menuVersionDisplay",
+    `Phiên bản: ${APP_VERSION}`
+  );
+
+  menu.classList
+    .add(
+      "show"
+    );
+
+  menu.setAttribute(
+    "aria-hidden",
+    "false"
+  );
+
+  $("#menuButton")
+    ?.setAttribute(
+      "aria-expanded",
+      "true"
+    );
+
+  document.body
+    .classList
+    .add(
+      "modal-open"
+    );
+
+  refreshIcons();
+}
+
+
+function closeAppMenu() {
+  const menu =
+    $("#appMenu");
+
+  if (
+    !menu
+  ) {
+    return;
+  }
+
+  menu.classList
+    .remove(
+      "show"
+    );
+
+  menu.setAttribute(
+    "aria-hidden",
+    "true"
+  );
+
+  $("#menuButton")
+    ?.setAttribute(
+      "aria-expanded",
+      "false"
+    );
+
+  if (
+    !$(".modal.show")
+  ) {
+    document.body
+      .classList
+      .remove(
+        "modal-open"
+      );
+  }
+}
+
+
+function openSettings() {
+  closeAppMenu();
+
+  syncSettingsUI();
+  resetSettingsAutosaveState();
+  setSettingsTab(
+    "general",
+    { focus: false, scroll: false }
+  );
+  refreshSettingsSyncStatus();
+
+  setConnectionStatus(
+    "",
+    "Chưa kiểm tra",
+    "Nhấn kiểm tra để xác nhận quyền đọc dữ liệu.",
+    "circle-help"
+  );
+
+  openModal(
+    "settingsModal"
+  );
+}
+
+
+function openModal(
+  id
+) {
+  closeAppMenu();
+
+  const modal =
+    document.getElementById(
+      id
+    );
+
+  if (
+    !modal
+  ) {
+    return;
+  }
+
+  modal.classList
+    .add(
+      "show"
+    );
+
+  document.body
+    .classList
+    .add(
+      "modal-open"
+    );
+
+  refreshIcons();
+}
+
+
+function closeModal(
+  id,
+  {
+    skipSettingsSave = false
+  } = {}
+) {
+  if (
+    id === "settingsModal" &&
+    !skipSettingsSave
+  ) {
+    requestCloseSettings();
+    return;
+  }
+
+  const modal =
+    document.getElementById(
+      id
+    );
+
+  if (
+    !modal
+  ) {
+    return;
+  }
+
+  modal.classList
+    .remove(
+      "show"
+    );
+
+  if (
+    id ===
+    "dayDetailModal"
+  ) {
+    appState.selectedDate =
+      null;
+
+    resetExtraEditor();
+  }
+
+  if (id === "salaryModal") {
+    setSalaryPrivacyState(false);
+  }
+
+  if (id === "settingsModal") {
+    resetSettingsAutosaveState();
+    setSettingsTab(
+      "general",
+      { focus: false, scroll: false }
+    );
+  }
+
+  if (id === "mealReceiptConfirmModal") {
+    appState.selectedMealReceiptWeek = null;
+  }
+
+  if (id === "endShiftNoteModal") {
+    appState.endShiftNoteContext = null;
+
+    const input = $("#endShiftNoteInput");
+
+    if (input) {
+      input.value = "";
+    }
+  }
+
+  const anyOpen =
+    Boolean(
+      $(".modal.show")
+    ) ||
+    $("#appMenu")
+      ?.classList
+      .contains(
+        "show"
+      );
+
+  if (
+    !anyOpen
+  ) {
+    document.body
+      .classList
+      .remove(
+        "modal-open"
+      );
+  }
+}
+
+
+// =====================================================
+// LOADING + TOAST
+// =====================================================
+
+function setLoading(
+  show
+) {
+  appState.loadingCount =
+    show
+      ? appState.loadingCount +
+        1
+      : Math.max(
+        0,
+        appState.loadingCount -
+        1
+      );
+
+  $("#loadingOverlay")
+    ?.classList
+    .toggle(
+      "show",
+      appState.loadingCount >
+      0
+    );
+}
+
+
+function showToast(
+  message,
+  isError = false
+) {
+  const toast =
+    $("#toast");
+
+  if (
+    !toast
+  ) {
+    return;
+  }
+
+  toast.classList
+    .toggle(
+      "error",
+      isError
+    );
+
+  toast.innerHTML = `
+    <i data-lucide="${
+      isError
+        ? "circle-alert"
+        : "circle-check"
+    }"></i>
+
+    <span>
+      ${escapeHTML(
+        message
+      )}
+    </span>
+  `;
+
+  toast.classList
+    .add(
+      "show"
+    );
+
+  refreshIcons();
+
+  clearTimeout(
+    showToast.timeoutId
+  );
+
+  showToast.timeoutId =
+    window.setTimeout(
+      () =>
+        toast.classList
+          .remove(
+            "show"
+          ),
+      isError
+        ? 4500
+        : 2800
+    );
+}
+
+
+function escapeHTML(
+  value
+) {
+  return String(
+    value
+  )
+    .replaceAll(
+      "&",
+      "&amp;"
+    )
+    .replaceAll(
+      "<",
+      "&lt;"
+    )
+    .replaceAll(
+      ">",
+      "&gt;"
+    )
+    .replaceAll(
+      '"',
+      "&quot;"
+    )
+    .replaceAll(
+      "'",
+      "&#039;"
+    );
+}
