@@ -119,7 +119,7 @@
     }
 
     let realtimeChannel = null;
-    const realtimeTopic = "kb2:sync";
+    const realtimeTopic = "kb2-sync-state";
 
     async function removeRealtimeChannel() {
       const channel = realtimeChannel;
@@ -136,8 +136,13 @@
 
       void removeRealtimeChannel();
       const channel = client
-        .channel(realtimeTopic, { config: { broadcast: { ack: false, self: false } } })
-        .on("broadcast", { event: "changed" }, (message) => onEvent?.(message))
+        .channel(realtimeTopic)
+        .on("postgres_changes", {
+          event: "UPDATE",
+          schema: "public",
+          table: "kb2_sync_state",
+          filter: "id=eq.1",
+        }, (payload) => onEvent?.(payload))
         .subscribe((status) => onStatus?.(status));
       realtimeChannel = channel;
 

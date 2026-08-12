@@ -1,14 +1,15 @@
 "use strict";
 
 const APP_VERSION = "2.0.2";
-const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-realtime-20260812`;
+const BUILD_ID = "20260812-simple-realtime";
+const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-${BUILD_ID}`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  `./style.css?v=${APP_VERSION}`,
+  `./style.css?v=${APP_VERSION}&b=${BUILD_ID}`,
   `./app-config.js?v=${APP_VERSION}`,
-  `./supabase-adapter.js?v=${APP_VERSION}`,
-  `./script.js?v=${APP_VERSION}`,
+  `./supabase-adapter.js?v=${APP_VERSION}&b=${BUILD_ID}`,
+  `./script.js?v=${APP_VERSION}&b=${BUILD_ID}`,
   `./manifest.json?v=${APP_VERSION}`,
   "./icons/icon-192.png",
   "./icons/icon-512.png"

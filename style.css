@@ -1821,3 +1821,54 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     width: 100%;
   }
 }
+
+
+/* Giao dịch kho đơn giản */
+.stock-action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.stock-action-grid .btn {
+  min-width: 0;
+  padding-inline: 10px;
+}
+
+.quantity-stepper {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.quantity-stepper-btn {
+  min-height: 48px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 24px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.quantity-stepper-btn:active {
+  transform: translateY(1px);
+}
+
+.quantity-stepper-input {
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+
+.optional-label {
+  font-weight: 500;
+  color: var(--muted);
+}
+
