@@ -7,7 +7,7 @@
  */
 
 const APP_VERSION = "2.0.2";
-const BUILD_ID = "20260812-simple-realtime";
+const BUILD_ID = "20260812-material-display";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-${BUILD_ID}`;
 const DATA_FORMAT_VERSION = 5;
 
@@ -489,7 +489,7 @@ function searchTokens(value) {
 }
 
 function productSearchText(product, category) {
-  const parts = [product?.name, product?.customName, product?.note, category?.name];
+  const parts = [productDisplayName(product), product?.name, product?.customName, product?.note, category?.name];
 
   if (product?.categoryId && hasPermission(PERMISSIONS.viewDetail, product.categoryId)) {
     for (const attribute of orderedCategoryAttributes(category)) {
@@ -978,6 +978,64 @@ function buildProductName(category, attributes) {
     })
     .filter(Boolean);
   return values.length ? `${category.name} · ${values.join(" · ")}` : category.name;
+}
+
+function formatProductNameNumber(value) {
+  const number = normalizeQuantity(value, Number.NaN);
+  return Number.isFinite(number) ? String(number) : String(value ?? "").trim();
+}
+
+function daoDimensionPriority(attribute, fallbackIndex = 0) {
+  const key = normalizeSearchText(`${attribute?.id || ""} ${attribute?.name || ""}`);
+  if (key.includes("do day")) return 10;
+  if (key.includes("chieu cao")) return 20;
+  return 100 + fallbackIndex;
+}
+
+function buildProductDisplayName(category, attributes = {}) {
+  const fallback = buildProductName(category, attributes);
+  const entries = orderedCategoryAttributes(category, { identityOnly: true })
+    .map((attribute, index) => ({ attribute, index, value: attributes?.[attribute.id] }))
+    .filter(({ value }) => value !== "" && value !== null && value !== undefined);
+
+  if (!entries.length) return fallback;
+
+  const categoryKey = normalizeSearchText(category?.name || "");
+  const textEntries = entries.filter(({ attribute }) => attribute.type !== "number");
+  const primaryEntry = textEntries.find(({ value }) => normalizeSearchText(value).startsWith("dao"));
+  const isDaoMaterial = categoryKey.includes("dao") || Boolean(primaryEntry);
+  if (!isDaoMaterial) return fallback;
+
+  const title = primaryEntry ? String(primaryEntry.value).trim() : String(category?.name || "Vật liệu").trim();
+  const dimensions = entries
+    .filter(({ attribute }) => attribute.type === "number")
+    .sort((left, right) => daoDimensionPriority(left.attribute, left.index) - daoDimensionPriority(right.attribute, right.index))
+    .map(({ value }) => formatProductNameNumber(value));
+  const details = entries
+    .filter(({ attribute }) => attribute.type !== "number")
+    .filter((entry) => entry !== primaryEntry)
+    .map(({ attribute, value }) => attributeDisplayValue(attribute, value));
+
+  let name = title || fallback;
+  if (dimensions.length) name += ` ${dimensions.join(" × ")}`;
+  if (details.length) name += ` · ${details.join(" · ")}`;
+  return name.trim() || fallback;
+}
+
+function productDisplayName(product) {
+  if (!product) return "Vật liệu";
+  if (String(product.customName || "").trim()) return String(product.name || product.customName).trim();
+  const category = categoryById(product.categoryId);
+  if (!category) return String(product.name || "Vật liệu");
+  const categoryKey = normalizeSearchText(category.name || "");
+  const hasDaoIdentity = orderedCategoryAttributes(category, { identityOnly: true }).some((attribute) => {
+    if (attribute.type === "number") return false;
+    const value = product.attributes?.[attribute.id];
+    return value !== "" && value !== null && value !== undefined && normalizeSearchText(value).startsWith("dao");
+  });
+  return categoryKey.includes("dao") || hasDaoIdentity
+    ? buildProductDisplayName(category, product.attributes || {})
+    : String(product.name || buildProductName(category, product.attributes || {}));
 }
 
 function validateProductPayload(payload, schema, products) {
@@ -2622,7 +2680,7 @@ function filteredProducts() {
         && hasPermission(PERMISSIONS.viewQuantity, product.categoryId)
         && toNumber(product.quantity) < quantityBelowValue);
     return matchesSearch && matchesCategory && matchesStatus && matchesQuantity;
-  }).sort((a, b) => a.name.localeCompare(b.name, "vi"));
+  }).sort((a, b) => productDisplayName(a).localeCompare(productDisplayName(b), "vi"));
 }
 
 function renderInventoryScreen() {
@@ -2688,7 +2746,7 @@ function renderProductRow(product) {
   const quantityText = canViewQuantity ? `${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}` : "Đã ẩn";
   return `<button class="list-row list-row-button" type="button" data-action="open-product" data-product-id="${escapeHTML(product.id)}">
     <div class="row-main">
-      <div class="row-title">${escapeHTML(product.name)}</div>
+      <div class="row-title">${escapeHTML(productDisplayName(product))}</div>
       <div class="row-sub">${escapeHTML(category?.name || "Chưa phân nhóm")} · ${product.note ? escapeHTML(product.note) : "Không có ghi chú"}</div>
     </div>
     <div class="row-copy">
@@ -3060,7 +3118,7 @@ function openProductDetail(productId) {
 
   openModal({
     name: "product-detail",
-    title: product.name,
+    title: productDisplayName(product),
     subtitle: `${category?.name || "Chưa phân nhóm"}${status ? ` · ${status.label}` : ""}`,
     body: `<div class="detail-grid">${quantityRows}</div>
       ${stockActions ? `<div class="stock-action-grid" aria-label="Thao tác tồn kho">${stockActions}</div>` : ""}
@@ -3075,7 +3133,7 @@ function productFormBody(product = null, categoryId = null) {
   const selectedCategory = categoryById(categoryId || product?.categoryId || categories[0]?.id);
   if (!selectedCategory) return renderEmptyState("warning", "Chưa có nhóm vật liệu", "Hãy tạo nhóm trước khi thêm vật liệu.");
   const attributes = product?.attributes || {};
-  const generatedName = product?.name || buildProductName(selectedCategory, attributes);
+  const generatedName = product ? productDisplayName(product) : buildProductDisplayName(selectedCategory, attributes);
   return `<form id="product-form" class="field-grid" novalidate>
     <input type="hidden" name="id" value="${escapeHTML(product?.id || "")}">
     <input type="hidden" name="expectedRevision" value="${escapeHTML(product?.revision ?? "")}">
@@ -3146,7 +3204,7 @@ function updateGeneratedProductName() {
   for (const attribute of orderedCategoryAttributes(category)) {
     attributes[attribute.id] = formData.get(`attr:${attribute.id}`) ?? "";
   }
-  setText("#generated-product-name", buildProductName(category, attributes), form);
+  setText("#generated-product-name", buildProductDisplayName(category, attributes), form);
 }
 
 function transactionTypeOptionsForCategory(categoryId) {
@@ -3181,7 +3239,7 @@ function transactionFormBody(productId = null, preferredType = null) {
   const fixedType = fixedProduct && Boolean(preferredType) && allowedTypes.some(([type]) => type === requestedType);
   const productField = fixedProduct
     ? `<input type="hidden" name="productId" value="${escapeHTML(selected.id)}">`
-    : `<label class="field" for="transaction-product"><span class="field-label">Vật liệu</span><select id="transaction-product" name="productId" class="select">${products.map((product) => `<option value="${escapeHTML(product.id)}" ${product.id === selected.id ? "selected" : ""}>${escapeHTML(product.name)}</option>`).join("")}</select></label>`;
+    : `<label class="field" for="transaction-product"><span class="field-label">Vật liệu</span><select id="transaction-product" name="productId" class="select">${products.map((product) => `<option value="${escapeHTML(product.id)}" ${product.id === selected.id ? "selected" : ""}>${escapeHTML(productDisplayName(product))}</option>`).join("")}</select></label>`;
   const typeField = fixedType
     ? `<input id="transaction-type" type="hidden" name="type" value="${firstType}">`
     : `<fieldset class="field"><legend class="field-label">Thao tác</legend><div id="transaction-type-buttons" class="segmented" role="group">${renderTransactionTypeButtons(selected.categoryId, firstType)}</div><input id="transaction-type" type="hidden" name="type" value="${firstType}"></fieldset>`;
@@ -3214,7 +3272,7 @@ function openTransactionModal(productId = null, preferredType = null) {
   openModal({
     name: "transaction-form",
     title,
-    subtitle: product ? product.name : "",
+    subtitle: product ? productDisplayName(product) : "",
     body: transactionFormBody(productId, preferredType),
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button id="transaction-submit" class="btn btn-primary" type="submit" form="transaction-form">${transactionSubmitLabel(preferredType || $("#transaction-type")?.value)}</button>`,
   });
@@ -3710,7 +3768,7 @@ async function handleTransactionSubmit(event, form) {
       await refreshInventoryAndHistory({ render: false });
       closeModal(true);
       renderApp();
-      showToast("success", result.duplicate ? "Giao dịch đã tồn tại" : "Đã lưu giao dịch", `${result.product.name}: ${formatQuantity(result.product.quantity)} ${result.product.unit}`);
+      showToast("success", result.duplicate ? "Giao dịch đã tồn tại" : "Đã lưu giao dịch", `${productDisplayName(result.product)}: ${formatQuantity(result.product.quantity)} ${result.product.unit}`);
       announce("Đã lưu giao dịch kho thành công.");
     } catch (error) {
       showToast("error", "Không thể lưu giao dịch", error.message);
@@ -3733,7 +3791,7 @@ async function handleReverseTransactionSubmit(event, form) {
       await refreshInventoryAndHistory({ render: false });
       closeModal(true);
       renderApp();
-      showToast("success", result.duplicate ? "Giao dịch đảo đã tồn tại" : "Đã đảo giao dịch", `${result.product.name}: ${formatQuantity(result.product.quantity)} ${result.product.unit}`);
+      showToast("success", result.duplicate ? "Giao dịch đảo đã tồn tại" : "Đã đảo giao dịch", `${productDisplayName(result.product)}: ${formatQuantity(result.product.quantity)} ${result.product.unit}`);
       announce("Đã tạo giao dịch đảo và cập nhật tồn kho.");
     } catch (error) {
       showToast("error", "Không thể đảo giao dịch", error.message);
@@ -3873,7 +3931,7 @@ function bindEvents() {
     closeModal(true);
     openConfirm({
       title: "Lưu trữ vật liệu?",
-      message: `Vật liệu “${product.name}” sẽ ẩn khỏi kho nhưng lịch sử vẫn được giữ.`,
+      message: `Vật liệu “${productDisplayName(product)}” sẽ ẩn khỏi kho nhưng lịch sử vẫn được giữ.`,
       confirmLabel: "Lưu trữ",
       danger: true,
       onConfirm: async (confirmButton) => {
