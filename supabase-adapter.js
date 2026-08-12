@@ -259,6 +259,15 @@
         return true;
       },
 
+      async deleteTestProduct(productId, expectedRevision = null, requestKey = "") {
+        return rpc("kb2_delete_test_product_v1", authenticatedArgs({
+          p_product_id: productId,
+          p_expected_revision: expectedRevision,
+          p_request_key: requestKey || makeRequestKey("delete-test-product"),
+          p_confirmation: "DELETE_TEST_PRODUCT",
+        }));
+      },
+
       async applyTransaction(payload) {
         return rpc("kb2_apply_inventory_transaction_v1", authenticatedArgs({ p_payload: payload }));
       },

@@ -7,7 +7,7 @@
  */
 
 const APP_VERSION = "2.0.2";
-const BUILD_ID = "20260812-material-display";
+const BUILD_ID = "20260812-test-product-delete";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-${BUILD_ID}`;
 const DATA_FORMAT_VERSION = 5;
 
@@ -897,6 +897,11 @@ function roleLabel(role) {
   return ROLE_LABELS[normalizeRoleCode(role)] || role;
 }
 
+function canDeleteTestProduct() {
+  const role = normalizeRoleCode(appState.currentUser?.role);
+  return ["admin", "superadmin"].includes(role) && hasPermission(PERMISSIONS.manageData);
+}
+
 function categoryById(categoryId) {
   return appState.cache.schema?.categories?.find((category) => category.id === categoryId) || null;
 }
@@ -1572,6 +1577,28 @@ const localDataService = {
     store.products[index] = { ...store.products[index], archived: true, updatedAt: new Date().toISOString() };
     this.writeStore(store);
     return true;
+  },
+
+  async deleteTestProduct(productId, expectedRevision = null, requestKey = "") {
+    await delay(180);
+    return withDemoWriteLock(async () => {
+      const store = this.readStore();
+      const actor = assertStorePermission(store, PERMISSIONS.manageData);
+      if (!["admin", "superadmin"].includes(normalizeRoleCode(actor.role))) {
+        throw new Error("Chỉ Admin hoặc Super Admin được xóa vật liệu test.");
+      }
+      const index = store.products.findIndex((item) => item.id === productId);
+      if (index < 0) throw new Error("Không tìm thấy vật liệu cần xóa.");
+      const product = store.products[index];
+      if (expectedRevision !== null && expectedRevision !== undefined && Number(product.revision ?? 1) !== Number(expectedRevision)) {
+        throw new Error("Vật liệu đã được cập nhật. Hãy tải lại rồi thử lại.");
+      }
+      const transactionCount = store.transactions.filter((transaction) => transaction.productId === productId).length;
+      store.transactions = store.transactions.filter((transaction) => transaction.productId !== productId);
+      store.products.splice(index, 1);
+      this.writeStore(store);
+      return { deleted: true, productId, transactionCount, requestKey: String(requestKey || ""), duplicate: false };
+    });
   },
 
   async applyTransaction(payload) {
@@ -3123,7 +3150,8 @@ function openProductDetail(productId) {
     body: `<div class="detail-grid">${quantityRows}</div>
       ${stockActions ? `<div class="stock-action-grid" aria-label="Thao tác tồn kho">${stockActions}</div>` : ""}
       <div class="detail-grid" style="margin-top:14px"><div class="detail-row"><div class="detail-key">Đơn vị</div><div class="detail-value">${escapeHTML(product.unit)}</div></div>${attributeRows}<div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(product.note || "—")}</div></div><div class="detail-row"><div class="detail-key">Cập nhật</div><div class="detail-value">${formatDateTime(product.updatedAt)}</div></div></div>
-      ${hasPermission(PERMISSIONS.archiveProduct, product.categoryId) ? `<button class="btn btn-danger-soft btn-block" style="margin-top:14px" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}">${icon("archive")} Lưu trữ vật liệu</button>` : ""}`,
+      ${hasPermission(PERMISSIONS.archiveProduct, product.categoryId) ? `<button class="btn btn-danger-soft btn-block" style="margin-top:14px" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}">${icon("archive")} Lưu trữ vật liệu</button>` : ""}
+      ${canDeleteTestProduct() ? `<button class="btn btn-danger-soft btn-block" style="margin-top:10px" type="button" data-action="delete-test-product" data-product-id="${escapeHTML(product.id)}">${icon("trash")} Xóa vật liệu test</button>` : ""}`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>${editButton}`,
   });
 }
@@ -3944,6 +3972,36 @@ function bindEvents() {
             showToast("success", "Đã lưu trữ vật liệu");
           } catch (error) {
             showToast("error", "Không thể lưu trữ", error.message);
+          }
+        });
+      },
+    });
+  });
+
+  on(document, "click", "[data-action='delete-test-product']", (event, button) => {
+    const product = productById(button.dataset.productId);
+    if (!product) return;
+    if (!canDeleteTestProduct()) {
+      showToast("error", "Không có quyền", "Chỉ Admin hoặc Super Admin được xóa vật liệu test.");
+      return;
+    }
+    closeModal(true);
+    openConfirm({
+      title: "Xóa vật liệu test?",
+      message: `Chỉ dùng cho dữ liệu thử nghiệm. “${productDisplayName(product)}” và toàn bộ giao dịch riêng của vật liệu này sẽ bị xóa vĩnh viễn. Không thể hoàn tác.`,
+      confirmLabel: "Xóa vĩnh viễn",
+      danger: true,
+      onConfirm: async (confirmButton) => {
+        await withActionLock(`delete-test-product:${product.id}`, confirmButton, async () => {
+          try {
+            const result = await dataService.deleteTestProduct(product.id, product.revision ?? null, makeId("delete-test-product"));
+            await refreshInventoryAndHistory({ render: false });
+            closeModal(true);
+            renderApp();
+            const count = toNumber(result?.transactionCount, 0);
+            showToast("success", "Đã xóa vật liệu test", count ? `Đã xóa ${count} giao dịch liên quan.` : "Không còn dữ liệu của vật liệu trong kho.");
+          } catch (error) {
+            showToast("error", "Không thể xóa vật liệu", error.message);
           }
         });
       },
