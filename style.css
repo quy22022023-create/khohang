@@ -774,6 +774,10 @@ html[data-theme="dark"] .btn-primary {
   background: var(--success);
 }
 
+.status-line[data-state="connecting"] .status-dot {
+  background: var(--warning);
+}
+
 .status-line[data-state="offline"] .status-dot,
 .status-line[data-state="error"] .status-dot {
   background: var(--danger);

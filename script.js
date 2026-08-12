@@ -7,7 +7,7 @@
  */
 
 const APP_VERSION = "2.0.2";
-const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
+const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-realtime-20260812`;
 const DATA_FORMAT_VERSION = 5;
 
 const STORAGE_KEYS = Object.freeze({
@@ -417,6 +417,15 @@ const appState = {
     confirmCallbackId: null,
     bootstrapError: null,
     initialized: null,
+  },
+  realtime: {
+    status: navigator.onLine ? "idle" : "offline",
+    unsubscribe: null,
+    refreshTimer: null,
+    refreshInFlight: false,
+    pendingScopes: new Set(),
+    hasSubscribed: false,
+    lastSyncedAt: null,
   },
 };
 
@@ -2100,7 +2109,7 @@ async function checkInitializationStatus() {
   }
 }
 
-async function loadBootstrap({ render = true } = {}) {
+async function loadBootstrap({ render = true, silent = false } = {}) {
   const requestId = nextRequestId("bootstrap");
   appState.loading.bootstrap = true;
   appState.ui.bootstrapError = null;
@@ -2119,10 +2128,11 @@ async function loadBootstrap({ render = true } = {}) {
       await dataService.logout().catch(() => {});
       clearAuthSession();
       setAuthenticatedAccount(null);
+      await stopRealtimeSync();
       showToast("error", "Phiên đăng nhập không còn hợp lệ", error.message);
     } else {
       appState.ui.bootstrapError = error.message || "Không tải được dữ liệu từ máy chủ.";
-      showToast("error", "Không tải được dữ liệu", appState.ui.bootstrapError);
+      if (!silent) showToast("error", "Không tải được dữ liệu", appState.ui.bootstrapError);
     }
   } finally {
     if (isCurrentRequest("bootstrap", requestId)) {
@@ -2132,7 +2142,7 @@ async function loadBootstrap({ render = true } = {}) {
   }
 }
 
-async function loadTransactions({ render = false, limit = 50, useFilters = appState.screen === SCREENS.history } = {}) {
+async function loadTransactions({ render = false, limit = 50, useFilters = appState.screen === SCREENS.history, silent = false } = {}) {
   if (appState.auth.status !== "signedIn") return;
   const requestId = nextRequestId("transactions");
   appState.loading.transactions = true;
@@ -2149,7 +2159,7 @@ async function loadTransactions({ render = false, limit = 50, useFilters = appSt
     appState.cache.transactions = transactions;
     appState.cache.loaded.transactions = true;
   } catch (error) {
-    showToast("error", "Không tải được lịch sử", error.message);
+    if (!silent) showToast("error", "Không tải được lịch sử", error.message);
   } finally {
     if (isCurrentRequest("transactions", requestId)) {
       appState.loading.transactions = false;
@@ -2158,7 +2168,7 @@ async function loadTransactions({ render = false, limit = 50, useFilters = appSt
   }
 }
 
-async function loadAccountData({ render = false } = {}) {
+async function loadAccountData({ render = false, silent = false } = {}) {
   if (!hasPermission(PERMISSIONS.manageAccounts)) return;
   const requestId = nextRequestId("accounts");
   appState.loading.accounts = true;
@@ -2172,7 +2182,7 @@ async function loadAccountData({ render = false } = {}) {
     appState.cache.loaded.accountAudit = true;
     syncCurrentUserFromAccounts();
   } catch (error) {
-    showToast("error", "Không tải được dữ liệu tài khoản", error.message);
+    if (!silent) showToast("error", "Không tải được dữ liệu tài khoản", error.message);
   } finally {
     if (isCurrentRequest("accounts", requestId)) {
       appState.loading.accounts = false;
@@ -2185,6 +2195,156 @@ async function refreshInventoryAndHistory({ render = true } = {}) {
   await loadBootstrap({ render: false });
   if (appState.auth.status === "signedIn") await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50 });
   if (render) renderApp();
+}
+
+function realtimeStatusMeta() {
+  if (dataService.mode !== "supabase") return { state: "local", label: "Trên thiết bị" };
+  if (!navigator.onLine || appState.realtime.status === "offline") return { state: "offline", label: "Ngoại tuyến" };
+  if (appState.realtime.status === "synced") return { state: "synced", label: "Đã đồng bộ" };
+  if (appState.realtime.status === "disabled") return { state: "local", label: "Đồng bộ thủ công" };
+  if (appState.realtime.status === "error") return { state: "error", label: "Đang kết nối lại" };
+  return { state: "connecting", label: "Đang kết nối" };
+}
+
+function renderRealtimeStatusLine() {
+  const meta = realtimeStatusMeta();
+  return `<div class="status-line" data-realtime-status="true" data-state="${meta.state}"><span class="status-dot"></span><span>${escapeHTML(meta.label)}</span></div>`;
+}
+
+function updateRealtimeStatusLine() {
+  const line = $("[data-realtime-status='true']");
+  if (!line) return;
+  const meta = realtimeStatusMeta();
+  line.dataset.state = meta.state;
+  const label = line.querySelector("span:last-child");
+  if (label) label.textContent = meta.label;
+}
+
+function setRealtimeStatus(status) {
+  appState.realtime.status = status;
+  updateRealtimeStatusLine();
+}
+
+function realtimeScopeFromMessage(message) {
+  const direct = message?.scope;
+  const nested = message?.payload?.scope;
+  const deeper = message?.payload?.payload?.scope;
+  const scope = String(direct || nested || deeper || "all").toLowerCase();
+  return ["inventory", "history", "schema", "access", "all"].includes(scope) ? scope : "all";
+}
+
+function scheduleRealtimeRefresh(scope = "all", wait = 360) {
+  if (appState.auth.status !== "signedIn") return;
+  appState.realtime.pendingScopes.add(scope);
+  clearTimeout(appState.realtime.refreshTimer);
+  appState.realtime.refreshTimer = window.setTimeout(() => {
+    appState.realtime.refreshTimer = null;
+    void performRealtimeRefresh();
+  }, wait);
+}
+
+async function performRealtimeRefresh() {
+  if (appState.auth.status !== "signedIn" || dataService.mode !== "supabase") return;
+  if (!navigator.onLine) {
+    setRealtimeStatus("offline");
+    return;
+  }
+  if (appState.realtime.refreshInFlight) {
+    scheduleRealtimeRefresh("all", 240);
+    return;
+  }
+
+  const scopes = new Set(appState.realtime.pendingScopes);
+  appState.realtime.pendingScopes.clear();
+  if (!scopes.size) scopes.add("all");
+  appState.realtime.refreshInFlight = true;
+
+  try {
+    const needsBootstrap = scopes.has("all") || scopes.has("inventory") || scopes.has("schema") || scopes.has("access");
+    const needsHistory = scopes.has("all") || scopes.has("history") || scopes.has("inventory");
+    const needsAccounts = (scopes.has("all") || scopes.has("access"))
+      && appState.screen === SCREENS.manage
+      && appState.manageTab === MANAGE_TABS.accounts;
+
+    if (needsBootstrap) await loadBootstrap({ render: false, silent: true });
+    if (appState.auth.status !== "signedIn") {
+      closeModal(true);
+      renderApp();
+      return;
+    }
+    if (needsHistory && hasPermission(PERMISSIONS.viewHistory)) {
+      const historyScreen = appState.screen === SCREENS.history;
+      await loadTransactions({ render: false, limit: historyScreen ? 200 : 50, useFilters: historyScreen, silent: true });
+    }
+    if (needsAccounts && hasPermission(PERMISSIONS.manageAccounts)) await loadAccountData({ render: false, silent: true });
+
+    appState.realtime.lastSyncedAt = new Date().toISOString();
+    if (appState.realtime.status !== "error") setRealtimeStatus("synced");
+    renderApp();
+  } finally {
+    appState.realtime.refreshInFlight = false;
+    if (appState.realtime.pendingScopes.size) scheduleRealtimeRefresh("all", 180);
+  }
+}
+
+function handleRealtimeStatus(status) {
+  if (status === "SUBSCRIBED") {
+    const wasSubscribed = appState.realtime.hasSubscribed;
+    appState.realtime.hasSubscribed = true;
+    setRealtimeStatus("synced");
+    if (wasSubscribed) scheduleRealtimeRefresh("all", 120);
+    return;
+  }
+  if (status === "DISABLED") {
+    setRealtimeStatus("disabled");
+    return;
+  }
+  if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+    setRealtimeStatus(navigator.onLine ? "error" : "offline");
+    return;
+  }
+  if (status === "CLOSED") setRealtimeStatus(navigator.onLine ? "connecting" : "offline");
+}
+
+async function stopRealtimeSync() {
+  clearTimeout(appState.realtime.refreshTimer);
+  appState.realtime.refreshTimer = null;
+  appState.realtime.pendingScopes.clear();
+  appState.realtime.hasSubscribed = false;
+  const unsubscribe = appState.realtime.unsubscribe;
+  appState.realtime.unsubscribe = null;
+  if (unsubscribe) {
+    try { await unsubscribe(); } catch { /* Cleanup only. */ }
+  } else if (typeof dataService.unsubscribeRealtime === "function") {
+    try { await dataService.unsubscribeRealtime(); } catch { /* Cleanup only. */ }
+  }
+  setRealtimeStatus(navigator.onLine ? "idle" : "offline");
+}
+
+function startRealtimeSync() {
+  if (dataService.mode !== "supabase" || appState.auth.status !== "signedIn" || typeof dataService.subscribeRealtime !== "function") return;
+  if (appState.realtime.unsubscribe) return;
+  setRealtimeStatus(navigator.onLine ? "connecting" : "offline");
+  if (!navigator.onLine) return;
+  appState.realtime.unsubscribe = dataService.subscribeRealtime({
+    onEvent: (message) => scheduleRealtimeRefresh(realtimeScopeFromMessage(message)),
+    onStatus: handleRealtimeStatus,
+  });
+}
+
+function bindRealtimeLifecycle() {
+  window.addEventListener("offline", () => setRealtimeStatus("offline"));
+  window.addEventListener("online", () => {
+    if (appState.auth.status !== "signedIn") return;
+    setRealtimeStatus("connecting");
+    if (!appState.realtime.unsubscribe) startRealtimeSync();
+    scheduleRealtimeRefresh("all", 100);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || appState.auth.status !== "signedIn" || !navigator.onLine) return;
+    if (!appState.realtime.unsubscribe) startRealtimeSync();
+    scheduleRealtimeRefresh("all", 160);
+  });
 }
 
 async function restoreSession() {
@@ -2467,7 +2627,7 @@ function renderInventoryScreen() {
 
     <div class="section-head">
       <div class="section-copy"><h2 class="section-title">Danh sách vật liệu</h2><p id="inventory-result-count" class="section-subtitle">${products.length} kết quả</p></div>
-      <div class="status-line" data-state="local"><span class="status-dot"></span><span>Trên thiết bị</span></div>
+      ${renderRealtimeStatusLine()}
     </div>
 
     <div id="inventory-list" class="card list-card">
@@ -3381,6 +3541,7 @@ async function handleBootstrapSubmit(event, form) {
       appState.screen = SCREENS.dashboard;
       await loadBootstrap({ render: false });
       await loadTransactions({ render: false, limit: 50 });
+      startRealtimeSync();
       renderApp();
       showToast("success", "Đã tạo Super Admin", "Ứng dụng đã sẵn sàng sử dụng.");
     } catch (error) {
@@ -3404,6 +3565,7 @@ async function handleLoginSubmit(event, form) {
       await loadBootstrap({ render: false });
       if (appState.cache.schema && appState.auth.status === "signedIn") {
         await loadTransactions({ render: false, limit: 50 });
+        startRealtimeSync();
         showToast("success", "Đăng nhập thành công", `${account.displayName} · ${roleLabel(account.role)}`);
       }
       renderApp();
@@ -3599,6 +3761,7 @@ function bindEvents() {
   });
   on(document, "click", "[data-action='logout']", async (event, button) => {
     await withActionLock("logout", button, async () => {
+      await stopRealtimeSync();
       await dataService.logout();
       closeModal(true);
       setAuthenticatedAccount(null);
@@ -3920,9 +4083,11 @@ async function init() {
   applyTheme(appState.theme);
   bindZoomPrevention();
   bindEvents();
+  bindRealtimeLifecycle();
   renderApp();
   await checkInitializationStatus();
   await restoreSession();
+  if (appState.auth.status === "signedIn") startRealtimeSync();
   renderApp();
   registerServiceWorker();
   console.info(`Kho Khuôn Bế ${APP_VERSION} · ${CACHE_VERSION}`);

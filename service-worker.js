@@ -1,7 +1,7 @@
 "use strict";
 
 const APP_VERSION = "2.0.2";
-const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}`;
+const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-realtime-20260812`;
 const APP_SHELL = [
   "./",
   "./index.html",

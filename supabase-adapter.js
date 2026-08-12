@@ -118,6 +118,35 @@
       } catch { /* Storage unavailable: session lasts only until reload. */ }
     }
 
+    let realtimeChannel = null;
+    const realtimeTopic = "kb2:sync";
+
+    async function removeRealtimeChannel() {
+      const channel = realtimeChannel;
+      realtimeChannel = null;
+      if (!channel) return;
+      try { await client.removeChannel(channel); } catch { /* Realtime cleanup is best-effort. */ }
+    }
+
+    function subscribeRealtime({ onEvent, onStatus } = {}) {
+      if (config?.realtimeEnabled === false) {
+        onStatus?.("DISABLED");
+        return () => Promise.resolve();
+      }
+
+      void removeRealtimeChannel();
+      const channel = client
+        .channel(realtimeTopic, { config: { broadcast: { ack: false, self: false } } })
+        .on("broadcast", { event: "changed" }, (message) => onEvent?.(message))
+        .subscribe((status) => onStatus?.(status));
+      realtimeChannel = channel;
+
+      return async () => {
+        if (realtimeChannel === channel) realtimeChannel = null;
+        try { await client.removeChannel(channel); } catch { /* Realtime cleanup is best-effort. */ }
+      };
+    }
+
     async function rpc(name, args = {}) {
       const { data, error } = await client.rpc(name, args);
       if (error) throw parseDatabaseError(error);
@@ -137,8 +166,10 @@
     return Object.freeze({
       mode: "supabase",
       label: "Supabase Cloud",
-      capabilities: Object.freeze({ localBackup: false, cloud: true, bootstrap: true }),
+      capabilities: Object.freeze({ localBackup: false, cloud: true, bootstrap: true, realtime: config?.realtimeEnabled !== false }),
       client,
+      subscribeRealtime,
+      unsubscribeRealtime: removeRealtimeChannel,
 
       async getInitializationStatus() {
         return rpc("kb2_get_initialization_status_v1");
