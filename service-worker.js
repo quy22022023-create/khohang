@@ -1,7 +1,7 @@
 "use strict";
 
 const APP_VERSION = "2.0.2";
-const BUILD_ID = "20260812-test-product-delete";
+const BUILD_ID = "20260814-giao-dich-gon-hoan-tac-nhanh";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-${BUILD_ID}`;
 const APP_SHELL = [
   "./",

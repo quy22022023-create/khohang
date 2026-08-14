@@ -7,7 +7,7 @@
  */
 
 const APP_VERSION = "2.0.2";
-const BUILD_ID = "20260812-test-product-delete";
+const BUILD_ID = "20260814-giao-dich-gon-hoan-tac-nhanh";
 const CACHE_VERSION = `kho-khuon-be-cache-${APP_VERSION}-${BUILD_ID}`;
 const DATA_FORMAT_VERSION = 5;
 
@@ -18,6 +18,7 @@ const STORAGE_KEYS = Object.freeze({
   demoAccount: "kho_v2_demo_account",
   authSession: "kho_v2_auth_session",
   rollback: "kho_v2_demo_rollback",
+  pdfPreferences: "kho_v2_pdf_preferences",
 });
 
 const SCREENS = Object.freeze({
@@ -28,6 +29,7 @@ const SCREENS = Object.freeze({
 });
 
 const MANAGE_TABS = Object.freeze({
+  home: "home",
   accounts: "accounts",
   categories: "categories",
   access: "access",
@@ -47,7 +49,7 @@ const TRANSACTION_LABELS = Object.freeze({
   import: "Nhập kho",
   export: "Xuất kho",
   adjust: "Điều chỉnh tồn",
-  reverse: "Đảo giao dịch",
+  reverse: "Hoàn tác",
 });
 
 const ACCOUNT_STATUSES = Object.freeze({
@@ -158,11 +160,11 @@ const PERMISSION_META = Object.freeze({
   [PERMISSIONS.viewInventory]: ["Xem kho", "Truy cập danh sách vật liệu."],
   [PERMISSIONS.viewQuantity]: ["Xem số lượng", "Xem tồn hiện tại và mức cảnh báo."],
   [PERMISSIONS.viewDetail]: ["Xem chi tiết", "Mở thông tin đầy đủ của vật liệu."],
-  [PERMISSIONS.viewHistory]: ["Xem lịch sử", "Xem giao dịch nhập, xuất, điều chỉnh tồn và giao dịch đảo."],
+  [PERMISSIONS.viewHistory]: ["Xem lịch sử", "Xem giao dịch nhập, xuất, điều chỉnh tồn và hoàn tác."],
   [PERMISSIONS.importInventory]: ["Nhập kho", "Tăng tồn bằng một giao dịch nhập kho."],
   [PERMISSIONS.exportInventory]: ["Xuất kho", "Giảm tồn nhưng không được làm tồn âm."],
   [PERMISSIONS.countInventory]: ["Điều chỉnh tồn", "Đặt tồn kho về số thực tế."],
-  [PERMISSIONS.reverseTransaction]: ["Đảo giao dịch", "Đảo giao dịch mới nhất của vật liệu thay vì sửa hoặc xóa lịch sử."],
+  [PERMISSIONS.reverseTransaction]: ["Hoàn tác giao dịch", "Hoàn tác giao dịch mới nhất của vật liệu thay vì sửa hoặc xóa lịch sử."],
   [PERMISSIONS.addProduct]: ["Thêm vật liệu", "Tạo quy cách vật liệu mới."],
   [PERMISSIONS.editProduct]: ["Sửa vật liệu", "Sửa thông tin, không sửa trực tiếp số tồn."],
   [PERMISSIONS.archiveProduct]: ["Lưu trữ vật liệu", "Ẩn vật liệu nhưng giữ lịch sử."],
@@ -392,8 +394,8 @@ const safeStorage = Object.freeze({
 const appState = {
   auth: { status: "checking" },
   currentUser: null,
-  screen: SCREENS.dashboard,
-  manageTab: MANAGE_TABS.accounts,
+  screen: SCREENS.inventory,
+  manageTab: MANAGE_TABS.home,
   theme: safeStorage.getItem(STORAGE_KEYS.theme) === "dark" ? "dark" : "light",
   loading: {},
   actionLocks: new Set(),
@@ -402,13 +404,16 @@ const appState = {
     schema: null,
     products: [],
     transactions: [],
+    historyTransactions: [],
+    historyMeta: { total: 0, nextOffset: null, allLoaded: false, queryKey: "" },
+    monthlyAnalysis: { key: "", data: null, error: "" },
     accounts: [],
     accountAudit: [],
-    loaded: { bootstrap: false, transactions: false, accounts: false, accountAudit: false },
+    loaded: { bootstrap: false, transactions: false, historyTransactions: false, accounts: false, accountAudit: false },
   },
   filters: {
     inventory: { search: "", category: "all", status: "all", quantityBelow: "" },
-    history: { search: "", type: "all", from: "", to: "" },
+    history: { search: "", type: "all", category: "all", month: currentMonthKey(), from: "", to: "", filtersOpen: false, view: "transactions", analysisCategory: "all" },
   },
   ui: {
     modalName: null,
@@ -653,6 +658,41 @@ function formatISODate(value) {
   return `${year}-${month}-${day}`;
 }
 
+const HISTORY_PAGE_SIZE = 100;
+
+function currentMonthKey(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return "";
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function parseMonthKey(monthKey) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || ""));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  if (!Number.isInteger(year) || monthIndex < 0 || monthIndex > 11) return null;
+  return new Date(year, monthIndex, 1);
+}
+
+function shiftMonthKey(monthKey, delta) {
+  const date = parseMonthKey(monthKey) || new Date();
+  return currentMonthKey(new Date(date.getFullYear(), date.getMonth() + Number(delta || 0), 1));
+}
+
+function monthDateRange(monthKey) {
+  const date = parseMonthKey(monthKey) || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const first = new Date(date.getFullYear(), date.getMonth(), 1);
+  const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  return { from: formatISODate(first), to: formatISODate(last) };
+}
+
+function formatMonthLabel(monthKey) {
+  const date = parseMonthKey(monthKey);
+  if (!date) return "Tháng hiện tại";
+  return `Tháng ${date.getMonth() + 1}/${date.getFullYear()}`;
+}
+
 function debounce(fn, wait = 180) {
   let timeoutId;
   return (...args) => {
@@ -694,11 +734,15 @@ function icon(name) {
     sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 1h2v3h-2V1Zm0 19h2v3h-2v-3ZM1 11h3v2H1v-2Zm19 0h3v2h-3v-2ZM4.22 2.8l2.12 2.12-1.42 1.42L2.8 4.22 4.22 2.8Zm12.44 12.86 2.12 2.12-1.42 1.42-2.12-2.12 1.42-1.42Zm.7-12.86 1.42 1.42-2.12 2.12-1.42-1.42 2.12-2.12ZM4.92 15.66l1.42 1.42-2.12 2.12-1.42-1.42 2.12-2.12ZM12 6a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z" fill="currentColor"/></svg>',
     search: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 1 0 3.96 11.65L19.8 21 21 19.8l-5.35-5.34A6.5 6.5 0 0 0 10.5 4Zm-4.8 6.5a4.8 4.8 0 1 1 9.6 0 4.8 4.8 0 0 1-9.6 0Z" fill="currentColor"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z" fill="currentColor"/></svg>',
+    more: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z" fill="currentColor"/></svg>',
     edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15.7 4.3 4 4L9 19H5v-4L15.7 4.3Zm0 2.8L7 15.8V17h1.2L17 8.3l-1.3-1.2Z" fill="currentColor"/></svg>',
     archive: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16l1 4H3l1-4Zm1 6h14v10H5V10Zm5 2v2h4v-2h-4Z" fill="currentColor"/></svg>',
     warning: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 1 21h22L12 2Zm-1 7h2v6h-2V9Zm0 8h2v2h-2v-2Z" fill="currentColor"/></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.2 16.2-4.4-4.4 1.4-1.4 3 3 8.6-8.6 1.4 1.4-10 10Z" fill="currentColor"/></svg>',
     info: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 10h2v8h-2v-8Zm0-4h2v2h-2V6Zm1-4a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z" fill="currentColor"/></svg>',
+    help: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm-.1-5.2h2v2h-2v-2Zm.1-8.6c2.3 0 4 1.3 4 3.3 0 1.6-.9 2.4-2 3.1-.8.6-1.1.9-1.1 1.7h-2c0-1.7.7-2.4 1.8-3.2.8-.6 1.3-.9 1.3-1.6 0-.8-.7-1.4-2-1.4-1.1 0-1.9.5-2.6 1.4L7.8 8.3c1-1.4 2.4-2.1 4.2-2.1Z" fill="currentColor"/></svg>',
+    filter: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3V5Zm3 6h12v2H6v-2Zm4 6h4v2h-4v-2Z" fill="currentColor"/></svg>',
+    pdf: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h9l5 5v15H6V2Zm8 2v5h4l-4-5ZM8 13h2.4c1.8 0 2.9.9 2.9 2.4 0 1.6-1.1 2.5-3 2.5H10V20H8v-7Zm2 1.7v1.6h.4c.6 0 .9-.3.9-.8s-.3-.8-.9-.8H10Zm4-1.7h2.4c2.2 0 3.6 1.3 3.6 3.5S18.6 20 16.4 20H14v-7Zm2 1.7v3.6h.3c1.1 0 1.7-.6 1.7-1.8s-.6-1.8-1.7-1.8H16Z" fill="currentColor"/></svg>',
     account: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8ZM4 21a8 8 0 0 1 16 0H4Z" fill="currentColor"/></svg>',
     category: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z" fill="currentColor"/></svg>',
     shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm-1 14-3-3 1.4-1.4 1.6 1.6 4.6-4.6L17 10l-6 6Z" fill="currentColor"/></svg>',
@@ -789,7 +833,7 @@ function validateCategoryPermissionDependencies(categoryPermissions, schema) {
       throw new Error(`Nhóm “${category.name}”: quyền giao dịch phải kèm quyền Xem số lượng.`);
     }
     if (permissions.includes(PERMISSIONS.reverseTransaction) && !permissions.includes(PERMISSIONS.viewHistory)) {
-      throw new Error(`Nhóm “${category.name}”: quyền Đảo giao dịch phải kèm quyền Xem lịch sử.`);
+      throw new Error(`Nhóm “${category.name}”: quyền Hoàn tác giao dịch phải kèm quyền Xem lịch sử.`);
     }
     if (detailPermissions.some((permission) => permissions.includes(permission)) && !permissions.includes(PERMISSIONS.viewDetail)) {
       throw new Error(`Nhóm “${category.name}”: quyền sửa hoặc lưu trữ vật liệu phải kèm quyền Xem chi tiết.`);
@@ -902,6 +946,18 @@ function canDeleteTestProduct() {
   return ["admin", "superadmin"].includes(role) && hasPermission(PERMISSIONS.manageData);
 }
 
+function canSeeAdvancedSettings() {
+  return ["admin", "superadmin"].includes(normalizeRoleCode(appState.currentUser?.role));
+}
+
+function canOpenManageTab(tab) {
+  if (tab === MANAGE_TABS.home) return true;
+  if (tab === MANAGE_TABS.accounts) return hasPermission(PERMISSIONS.manageAccounts);
+  if (tab === MANAGE_TABS.categories) return hasPermission(PERMISSIONS.manageSchema);
+  if ([MANAGE_TABS.access, MANAGE_TABS.data].includes(tab)) return canSeeAdvancedSettings();
+  return false;
+}
+
 function categoryById(categoryId) {
   return appState.cache.schema?.categories?.find((category) => category.id === categoryId) || null;
 }
@@ -919,11 +975,17 @@ function visibleTransactions(permission = PERMISSIONS.viewHistory) {
 }
 
 function transactionById(transactionId) {
-  return appState.cache.transactions.find((transaction) => transaction.id === transactionId) || null;
+  return appState.cache.transactions.find((transaction) => transaction.id === transactionId)
+    || appState.cache.historyTransactions.find((transaction) => transaction.id === transactionId)
+    || null;
 }
 
 function latestTransactionForProduct(productId) {
   return appState.cache.transactions.find((transaction) => transaction.productId === productId) || null;
+}
+
+function visibleHistoryTransactions(permission = PERMISSIONS.viewHistory) {
+  return appState.cache.historyTransactions.filter((transaction) => hasPermission(permission, transaction.categoryId));
 }
 
 function productStatus(product) {
@@ -1372,8 +1434,8 @@ function validateBackupData(data) {
     const after = normalizeQuantity(transaction.afterQuantity);
     const amount = normalizeQuantity(transaction.amount);
     if (![before, after, amount].every(Number.isFinite) || before < 0 || after < 0 || amount < 0) throw new Error(`Giao dịch ${transaction.id} có số lượng không hợp lệ.`);
-    if (transaction.reversalOf && !transactionIds.has(transaction.reversalOf)) throw new Error(`Giao dịch đảo ${transaction.id} không tìm thấy giao dịch gốc.`);
-    if (transaction.reversalTransactionId && !transactionIds.has(transaction.reversalTransactionId)) throw new Error(`Giao dịch ${transaction.id} tham chiếu giao dịch đảo không tồn tại.`);
+    if (transaction.reversalOf && !transactionIds.has(transaction.reversalOf)) throw new Error(`Giao dịch hoàn tác ${transaction.id} không tìm thấy giao dịch gốc.`);
+    if (transaction.reversalTransactionId && !transactionIds.has(transaction.reversalTransactionId)) throw new Error(`Giao dịch ${transaction.id} tham chiếu giao dịch hoàn tác không tồn tại.`);
   }
 
   ensureUnique(data.accounts.map((account) => account.id), "ID tài khoản");
@@ -1475,13 +1537,25 @@ const localDataService = {
     return clone({ schema: store.schema, products: store.products.filter((product) => !product.archived), profile: actor });
   },
 
-  async listTransactions({ limit = 50, offset = 0 } = {}) {
+  async listTransactions({ limit = 50, offset = 0, categoryId = null, productId = null, type = null, from = null, to = null } = {}) {
     await delay(100);
     const store = this.readStore();
     const actor = storeActor(store);
     if (!actor) throw new Error("Phiên đăng nhập không hợp lệ.");
-    const visible = store.transactions.filter((transaction) => !transaction.hiddenAt && accountHasPermission(actor, PERMISSIONS.viewHistory, transaction.categoryId, store.schema));
-    return clone(visible.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(1, limit)));
+    const fromTime = from ? new Date(`${from}T00:00:00`).getTime() : null;
+    const toTime = to ? new Date(`${to}T23:59:59.999`).getTime() : null;
+    const visible = store.transactions
+      .filter((transaction) => !transaction.hiddenAt && accountHasPermission(actor, PERMISSIONS.viewHistory, transaction.categoryId, store.schema))
+      .filter((transaction) => !categoryId || transaction.categoryId === categoryId)
+      .filter((transaction) => !productId || transaction.productId === productId)
+      .filter((transaction) => !type || transaction.type === type)
+      .filter((transaction) => fromTime === null || new Date(transaction.createdAt).getTime() >= fromTime)
+      .filter((transaction) => toTime === null || new Date(transaction.createdAt).getTime() <= toTime);
+    const start = Math.max(0, Number(offset) || 0);
+    const pageSize = Math.max(1, Math.min(Number(limit) || 50, 200));
+    const items = visible.slice(start, start + pageSize);
+    const nextOffset = start + pageSize < visible.length ? start + pageSize : null;
+    return clone({ items, total: visible.length, nextOffset });
   },
 
   async listAccounts() {
@@ -1664,40 +1738,40 @@ const localDataService = {
     return withDemoWriteLock(async () => {
       const store = this.readStore();
     const requestKey = String(payload.requestKey || "").trim();
-    if (!requestKey) throw new Error("Thiếu khóa thao tác đảo giao dịch.");
+    if (!requestKey) throw new Error("Thiếu khóa thao tác hoàn tác giao dịch.");
     const existingReversal = store.transactions.find((transaction) => transaction.requestKey === requestKey);
     if (existingReversal) {
       const samePayload = existingReversal.reversalOf === payload.transactionId
         && String(existingReversal.note || "") === String(payload.reason || "").trim();
-      if (!samePayload) throw new Error("Khóa thao tác đảo đã được dùng cho một yêu cầu khác.");
+      if (!samePayload) throw new Error("Khóa thao tác hoàn tác đã được dùng cho một yêu cầu khác.");
       const existingProduct = store.products.find((product) => product.id === existingReversal.productId);
-      if (!existingProduct) throw new Error("Giao dịch đảo đã tồn tại nhưng vật liệu không còn trong dữ liệu.");
+      if (!existingProduct) throw new Error("Giao dịch hoàn tác đã tồn tại nhưng vật liệu không còn trong dữ liệu.");
       return clone({ product: existingProduct, transaction: existingReversal, duplicate: true });
     }
 
     const originalIndex = store.transactions.findIndex((transaction) => transaction.id === payload.transactionId);
-    if (originalIndex < 0) throw new Error("Không tìm thấy giao dịch cần đảo.");
+    if (originalIndex < 0) throw new Error("Không tìm thấy giao dịch cần hoàn tác.");
     const original = store.transactions[originalIndex];
     const actor = assertStorePermission(store, PERMISSIONS.reverseTransaction, original.categoryId);
     if (original.type === TRANSACTION_TYPES.reverse || original.type === TRANSACTION_TYPES.initial) {
-      throw new Error("Không hỗ trợ đảo giao dịch khởi tạo hoặc một giao dịch đảo.");
+      throw new Error("Không hỗ trợ hoàn tác giao dịch khởi tạo hoặc một giao dịch hoàn tác.");
     }
-    if (original.reversalTransactionId || original.reversedAt) throw new Error("Giao dịch này đã được đảo trước đó.");
+    if (original.reversalTransactionId || original.reversedAt) throw new Error("Giao dịch này đã được hoàn tác trước đó.");
 
     const latest = store.transactions.find((transaction) => transaction.productId === original.productId);
     if (!latest || latest.id !== original.id) {
-      throw new Error("Chỉ được đảo giao dịch mới nhất của vật liệu để không làm sai chuỗi tồn kho.");
+      throw new Error("Chỉ được hoàn tác giao dịch mới nhất của vật liệu để không làm sai chuỗi tồn kho.");
     }
 
     const productIndex = store.products.findIndex((product) => product.id === original.productId && !product.archived);
-    if (productIndex < 0) throw new Error("Vật liệu không còn khả dụng để đảo giao dịch.");
+    if (productIndex < 0) throw new Error("Vật liệu không còn khả dụng để hoàn tác giao dịch.");
     const product = store.products[productIndex];
     if (!quantitiesEqual(product.quantity, original.afterQuantity)) {
       throw new Error("Tồn hiện tại không khớp giao dịch gốc. Hãy tải lại dữ liệu và kiểm tra lịch sử.");
     }
 
     const reason = String(payload.reason || "").trim();
-    if (!reason) throw new Error("Vui lòng nhập lý do đảo giao dịch.");
+    if (!reason) throw new Error("Vui lòng nhập lý do hoàn tác.");
     const now = new Date().toISOString();
     const afterQuantity = normalizeQuantity(original.beforeQuantity);
     const reversal = {
@@ -2204,6 +2278,7 @@ async function loadBootstrap({ render = true, silent = false } = {}) {
     appState.cache.schema = result.schema;
     appState.cache.products = result.products;
     appState.cache.loaded.bootstrap = true;
+    invalidateMonthlyAnalysis();
     setAuthenticatedAccount(result.profile);
     return true;
   } catch (error) {
@@ -2228,29 +2303,95 @@ async function loadBootstrap({ render = true, silent = false } = {}) {
   }
 }
 
-async function loadTransactions({ render = false, limit = 50, useFilters = appState.screen === SCREENS.history, silent = false } = {}) {
+async function loadTransactions({ render = false, limit = 50, silent = false } = {}) {
   if (appState.auth.status !== "signedIn") return false;
   const requestId = nextRequestId("transactions");
   appState.loading.transactions = true;
   if (render) renderApp();
   try {
-    const historyFilters = useFilters ? appState.filters.history : { type: "all", from: "", to: "" };
-    const transactions = await dataService.listTransactions({
-      limit,
-      type: historyFilters.type !== "all" ? historyFilters.type : null,
-      from: historyFilters.from || null,
-      to: historyFilters.to || null,
-    });
-    if (!isCurrentRequest("transactions", requestId)) return;
-    appState.cache.transactions = transactions;
+    const result = await dataService.listTransactions({ limit });
+    if (!isCurrentRequest("transactions", requestId)) return false;
+    appState.cache.transactions = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : [];
     appState.cache.loaded.transactions = true;
+    return true;
+  } catch (error) {
+    if (!silent) showToast("error", "Không tải được lịch sử gần đây", error.message);
+    return false;
+  } finally {
+    if (isCurrentRequest("transactions", requestId)) {
+      appState.loading.transactions = false;
+      if (render) renderApp();
+    }
+  }
+}
+
+function historyEffectiveRange() {
+  const filters = appState.filters.history;
+  if (filters.from || filters.to) return { from: filters.from || null, to: filters.to || null, custom: true };
+  const range = monthDateRange(filters.month || currentMonthKey());
+  return { ...range, custom: false };
+}
+
+function historyQueryKey() {
+  const filters = appState.filters.history;
+  const range = historyEffectiveRange();
+  return JSON.stringify({
+    type: filters.type || "all",
+    category: filters.category || "all",
+    from: range.from || "",
+    to: range.to || "",
+  });
+}
+
+async function loadHistoryTransactions({ reset = true, loadAll = false, render = false, silent = false } = {}) {
+  if (appState.auth.status !== "signedIn" || !hasPermission(PERMISSIONS.viewHistory)) return false;
+  const requestId = nextRequestId("history-transactions");
+  appState.loading.historyTransactions = true;
+  if (render) renderApp();
+  const queryKey = historyQueryKey();
+  const range = historyEffectiveRange();
+  let items = reset || appState.cache.historyMeta.queryKey !== queryKey ? [] : [...appState.cache.historyTransactions];
+  let offset = reset || appState.cache.historyMeta.queryKey !== queryKey ? 0 : appState.cache.historyMeta.nextOffset;
+  if (!reset && offset === null) {
+    appState.loading.historyTransactions = false;
+    return true;
+  }
+
+  try {
+    let total = reset ? 0 : appState.cache.historyMeta.total;
+    let nextOffset = offset;
+    do {
+      const result = await dataService.listTransactions({
+        limit: HISTORY_PAGE_SIZE,
+        offset: nextOffset || 0,
+        categoryId: appState.filters.history.category !== "all" ? appState.filters.history.category : null,
+        type: appState.filters.history.type !== "all" ? appState.filters.history.type : null,
+        from: range.from || null,
+        to: range.to || null,
+      });
+      if (!isCurrentRequest("history-transactions", requestId)) return false;
+      const pageItems = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : [];
+      const byId = new Map(items.map((transaction) => [transaction.id, transaction]));
+      pageItems.forEach((transaction) => byId.set(transaction.id, transaction));
+      items = [...byId.values()].sort((left, right) => {
+        const timeDiff = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+        return timeDiff || String(right.id).localeCompare(String(left.id));
+      });
+      total = Array.isArray(result) ? Math.max(total, items.length) : Math.max(0, Number(result?.total ?? items.length));
+      nextOffset = Array.isArray(result) ? (pageItems.length >= HISTORY_PAGE_SIZE ? items.length : null) : (result?.nextOffset ?? null);
+      if (!loadAll) break;
+    } while (nextOffset !== null);
+
+    appState.cache.historyTransactions = items;
+    appState.cache.historyMeta = { total, nextOffset, allLoaded: nextOffset === null, queryKey };
+    appState.cache.loaded.historyTransactions = true;
     return true;
   } catch (error) {
     if (!silent) showToast("error", "Không tải được lịch sử", error.message);
     return false;
   } finally {
-    if (isCurrentRequest("transactions", requestId)) {
-      appState.loading.transactions = false;
+    if (isCurrentRequest("history-transactions", requestId)) {
+      appState.loading.historyTransactions = false;
       if (render) renderApp();
     }
   }
@@ -2283,7 +2424,13 @@ async function loadAccountData({ render = false, silent = false } = {}) {
 
 async function refreshInventoryAndHistory({ render = true } = {}) {
   await loadBootstrap({ render: false });
-  if (appState.auth.status === "signedIn") await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50 });
+  if (appState.auth.status === "signedIn") {
+    await loadTransactions({ render: false, limit: 50 });
+    if (appState.screen === SCREENS.history && hasPermission(PERMISSIONS.viewHistory)) {
+      if (appState.filters.history.view === "analysis") await loadMonthlyAnalysis({ render: false, silent: true, force: true });
+      else await loadHistoryTransactions({ reset: true, loadAll: Boolean(appState.filters.history.search), render: false, silent: true });
+    }
+  }
   if (render) renderApp();
 }
 
@@ -2352,8 +2499,11 @@ async function performRealtimeRefresh() {
       return;
     }
     if (hasPermission(PERMISSIONS.viewHistory)) {
-      const historyScreen = appState.screen === SCREENS.history;
-      ok = Boolean(await loadTransactions({ render: false, limit: historyScreen ? 200 : 50, useFilters: historyScreen, silent: true })) && ok;
+      ok = Boolean(await loadTransactions({ render: false, limit: 50, silent: true })) && ok;
+      if (appState.screen === SCREENS.history) {
+        if (appState.filters.history.view === "analysis") ok = Boolean(await loadMonthlyAnalysis({ render: false, silent: true, force: true })) && ok;
+        else ok = Boolean(await loadHistoryTransactions({ reset: true, loadAll: Boolean(appState.filters.history.search), render: false, silent: true })) && ok;
+      }
     }
     if (appState.screen === SCREENS.manage && appState.manageTab === MANAGE_TABS.accounts && hasPermission(PERMISSIONS.manageAccounts)) {
       ok = Boolean(await loadAccountData({ render: false, silent: true })) && ok;
@@ -2448,7 +2598,7 @@ function startRealtimeSync() {
 }
 
 function invalidatePendingDataRequests() {
-  ["bootstrap", "transactions", "accounts", "accountAudit"].forEach((key) => nextRequestId(key));
+  ["bootstrap", "transactions", "history-transactions", "monthly-analysis", "accounts", "accountAudit"].forEach((key) => nextRequestId(key));
 }
 
 function bindRealtimeLifecycle() {
@@ -2503,12 +2653,11 @@ async function restoreSession() {
 
 function screenMeta() {
   const map = {
-    [SCREENS.dashboard]: ["Tổng quan", "Kho Khuôn Bế"],
-    [SCREENS.inventory]: ["Kho vật liệu", "Quản lý tồn"],
+    [SCREENS.inventory]: ["Kho", "Kho Khuôn Bế"],
     [SCREENS.history]: ["Lịch sử", "Giao dịch kho"],
-    [SCREENS.manage]: ["Quản lý", roleLabel(appState.currentUser.role)],
+    [SCREENS.manage]: ["Cài đặt", roleLabel(appState.currentUser.role)],
   };
-  return map[appState.screen] || map[SCREENS.dashboard];
+  return map[appState.screen] || map[SCREENS.inventory];
 }
 
 function renderApp() {
@@ -2535,6 +2684,9 @@ function renderApp() {
             <h1 class="page-title">${escapeHTML(title)}</h1>
           </div>
           <div class="topbar-actions">
+            <button class="icon-btn" type="button" data-action="open-faq" aria-label="Hướng dẫn sử dụng">
+              ${icon("help")}
+            </button>
             <button class="icon-btn" type="button" data-action="toggle-theme" aria-label="Chuyển sang giao diện ${appState.theme === "dark" ? "sáng" : "tối"}">
               ${icon(appState.theme === "dark" ? "sun" : "moon")}
             </button>
@@ -2592,10 +2744,9 @@ function renderCurrentScreen() {
   if (appState.ui.bootstrapError && !appState.cache.schema) {
     return `<section class="screen"><div class="card">${renderEmptyState("warning", "Không tải được dữ liệu", appState.ui.bootstrapError)}<button class="btn btn-primary btn-block" type="button" data-action="retry-bootstrap">Thử tải lại</button></div></section>`;
   }
-  if (appState.screen === SCREENS.inventory) return renderInventoryScreen();
   if (appState.screen === SCREENS.history) return renderHistoryScreen();
   if (appState.screen === SCREENS.manage) return renderManageScreen();
-  return renderDashboardScreen();
+  return renderInventoryScreen();
 }
 
 function renderLoadingScreen() {
@@ -2608,17 +2759,14 @@ function renderLoadingScreen() {
 
 function renderBottomNavigation() {
   const items = [
-    [SCREENS.dashboard, "dashboard", "Tổng quan"],
     [SCREENS.inventory, "inventory", "Kho"],
-    ["quick", "plus", "Nhập / Xuất"],
     [SCREENS.history, "history", "Lịch sử"],
-    [SCREENS.manage, "manage", "Quản lý"],
+    [SCREENS.manage, "manage", "Cài đặt"],
   ];
   return `<nav class="bottom-nav" aria-label="Điều hướng chính">
     ${items.map(([key, iconName, label]) => {
-      const quick = key === "quick";
-      const active = !quick && appState.screen === key;
-      return `<button class="nav-item${quick ? " nav-primary" : ""}" type="button" data-nav="${key}" ${active ? 'aria-current="page"' : ""} aria-label="${escapeHTML(label)}">
+      const active = appState.screen === key;
+      return `<button class="nav-item" type="button" data-nav="${key}" ${active ? 'aria-current="page"' : ""} aria-label="${escapeHTML(label)}">
         ${icon(iconName)}<span>${escapeHTML(label)}</span>
       </button>`;
     }).join("")}
@@ -2690,6 +2838,536 @@ function renderMetric(value, label) {
   return `<article class="metric"><div class="metric-value">${formatQuantity(value)}</div><div class="metric-label">${escapeHTML(label)}</div></article>`;
 }
 
+
+const PDF_INVENTORY_FIELDS = Object.freeze([
+  ["name", "Tên vật liệu"],
+  ["quantity", "Tồn hiện tại"],
+  ["unit", "Đơn vị"],
+  ["status", "Tình trạng"],
+  ["note", "Ghi chú"],
+  ["updatedAt", "Ngày cập nhật"],
+]);
+
+const PDF_HISTORY_FIELDS = Object.freeze([
+  ["createdAt", "Ngày giờ"],
+  ["product", "Vật liệu"],
+  ["type", "Thao tác"],
+  ["amount", "Số lượng"],
+  ["balance", "Tồn trước → sau"],
+  ["actor", "Người thực hiện"],
+  ["note", "Ghi chú"],
+]);
+
+const DEFAULT_PDF_PREFERENCES = Object.freeze({
+  inventory: {
+    scope: "filtered",
+    orientation: "landscape",
+    fields: ["name", "quantity", "unit", "status"],
+    compactDetails: false,
+    attributesByCategory: {},
+  },
+  history: {
+    orientation: "landscape",
+    fields: ["createdAt", "product", "type", "amount", "balance"],
+    compactDetails: false,
+    attributesByCategory: {},
+  },
+});
+
+function clonePdfPreferencesDefaults() {
+  return JSON.parse(JSON.stringify(DEFAULT_PDF_PREFERENCES));
+}
+
+function readPdfPreferences() {
+  const fallback = clonePdfPreferencesDefaults();
+  try {
+    const parsed = JSON.parse(safeStorage.getItem(STORAGE_KEYS.pdfPreferences) || "null");
+    if (!parsed || typeof parsed !== "object") return fallback;
+    for (const kind of ["inventory", "history"]) {
+      const source = parsed[kind];
+      if (!source || typeof source !== "object") continue;
+      fallback[kind] = {
+        ...fallback[kind],
+        ...source,
+        fields: Array.isArray(source.fields) ? source.fields.filter((field) => typeof field === "string") : fallback[kind].fields,
+        attributesByCategory: source.attributesByCategory && typeof source.attributesByCategory === "object" ? source.attributesByCategory : {},
+      };
+    }
+  } catch {
+    // Tùy chọn PDF chỉ là cài đặt trên thiết bị; lỗi đọc không được ảnh hưởng dữ liệu kho.
+  }
+  return fallback;
+}
+
+function writePdfPreferences(kind, value) {
+  const preferences = readPdfPreferences();
+  preferences[kind] = { ...preferences[kind], ...value };
+  safeStorage.setItem(STORAGE_KEYS.pdfPreferences, JSON.stringify(preferences));
+}
+
+function pdfCheckbox({ name, value, label, checked = false, disabled = false }) {
+  return `<label class="pdf-option"><input type="checkbox" name="${escapeHTML(name)}" value="${escapeHTML(value)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}><span>${escapeHTML(label)}</span></label>`;
+}
+
+function pdfRadio({ name, value, label, checked = false }) {
+  return `<label class="pdf-option"><input type="radio" name="${escapeHTML(name)}" value="${escapeHTML(value)}" ${checked ? "checked" : ""}><span>${escapeHTML(label)}</span></label>`;
+}
+
+function pdfFieldSelection(fields, selected, { disabledFields = new Set() } = {}) {
+  const selectedSet = new Set(selected || []);
+  return fields.map(([value, label]) => pdfCheckbox({
+    name: "fields",
+    value,
+    label,
+    checked: selectedSet.has(value),
+    disabled: disabledFields.has(value),
+  })).join("");
+}
+
+function inventoryPdfProducts(scope = "filtered") {
+  const products = scope === "all" ? visibleProducts() : filteredProducts();
+  return [...products].sort((left, right) => productDisplayName(left).localeCompare(productDisplayName(right), "vi"));
+}
+
+function pdfSingleCategoryForProducts(products) {
+  const categoryIds = [...new Set((products || []).map((product) => product.categoryId).filter(Boolean))];
+  return categoryIds.length === 1 ? categoryById(categoryIds[0]) : null;
+}
+
+function pdfAttributeSelectionHTML(kind, category, preferences) {
+  if (category && !hasPermission(PERMISSIONS.viewDetail, category.id)) return "";
+  if (!category) {
+    if (!hasPermission(PERMISSIONS.viewDetail)) return "";
+    const checked = Boolean(preferences?.compactDetails);
+    return `<div class="pdf-attribute-options"><div class="pdf-section-label">Thông số</div>${pdfCheckbox({ name: "compactDetails", value: "1", label: "Thông số chi tiết (gộp 1 cột)", checked })}</div>`;
+  }
+  const attributes = orderedCategoryAttributes(category, { activeOnly: kind !== "history" });
+  if (!attributes.length && kind !== "history") return "";
+  const selected = new Set(preferences?.attributesByCategory?.[category.id] || []);
+  const compactOption = kind === "history"
+    ? pdfCheckbox({ name: "compactDetails", value: "1", label: "Thông số chi tiết (gộp 1 cột)", checked: Boolean(preferences?.compactDetails) })
+    : "";
+  return `<div class="pdf-attribute-options"><div class="pdf-section-label">Thông số ${escapeHTML(category.name)}</div>${compactOption}${attributes.length ? `<div class="pdf-options-grid" style="margin-top:${kind === "history" ? "7px" : "0"}">${attributes.map((attribute) => pdfCheckbox({
+    name: "attributes",
+    value: attribute.id,
+    label: attribute.name,
+    checked: selected.has(attribute.id),
+  })).join("")}</div>` : ""}</div>`;
+}
+
+function inventoryPdfProductMeta(product) {
+  const category = categoryById(product.categoryId);
+  const parts = [category?.name || "Chưa phân nhóm"];
+  if (hasPermission(PERMISSIONS.viewQuantity, product.categoryId)) {
+    parts.push(`${formatQuantity(product.quantity)} ${product.unit || ""}`.trim());
+  }
+  return parts.filter(Boolean).join(" · ");
+}
+
+function inventoryPdfProductSelectionHTML(products, selectedIds = null) {
+  const source = Array.isArray(products) ? products : [];
+  const selected = selectedIds === null
+    ? new Set(source.map((product) => String(product.id)))
+    : new Set((selectedIds || []).map(String));
+  const selectedCount = source.filter((product) => selected.has(String(product.id))).length;
+  return `<div class="pdf-product-selection">
+    <div class="pdf-product-selection-head">
+      <div><div class="pdf-section-label" style="margin-bottom:2px">Vật liệu cần xuất</div><div id="pdf-product-selection-count" class="pdf-selection-count">${selectedCount} / ${source.length} đã chọn</div></div>
+      <div class="pdf-selection-actions">
+        <button class="pdf-selection-action" type="button" data-action="pdf-select-all-products">Chọn tất cả</button>
+        <button class="pdf-selection-action" type="button" data-action="pdf-clear-products">Bỏ chọn</button>
+      </div>
+    </div>
+    <div id="pdf-inventory-products" class="pdf-product-list">
+      ${source.length ? source.map((product) => `<label class="pdf-product-option">
+        <input type="checkbox" name="productIds" value="${escapeHTML(product.id)}" ${selected.has(String(product.id)) ? "checked" : ""}>
+        <span class="pdf-product-copy"><span class="pdf-product-name">${escapeHTML(productDisplayName(product))}</span><span class="pdf-product-meta">${escapeHTML(inventoryPdfProductMeta(product))}</span></span>
+      </label>`).join("") : `<div class="pdf-product-empty">Không có vật liệu phù hợp với bộ lọc hiện tại.</div>`}
+    </div>
+  </div>`;
+}
+
+function updateInventoryPdfProductSelectionCount() {
+  const form = $("#pdf-inventory-form");
+  const count = $("#pdf-product-selection-count", form || document);
+  if (!form || !count) return;
+  const total = $$('input[name="productIds"]', form).length;
+  const selected = $$('input[name="productIds"]:checked', form).length;
+  count.textContent = `${selected} / ${total} đã chọn`;
+}
+
+function updateInventoryPdfProductOptions() {
+  const form = $("#pdf-inventory-form");
+  const container = $("#pdf-inventory-product-selection", form || document);
+  if (!form || !container) return;
+  const scope = String(new FormData(form).get("scope") || "filtered");
+  container.innerHTML = inventoryPdfProductSelectionHTML(inventoryPdfProducts(scope));
+}
+
+function updateInventoryPdfAttributeOptions() {
+  const form = $("#pdf-inventory-form");
+  const container = $("#pdf-inventory-attributes", form || document);
+  if (!form || !container) return;
+  const scope = String(new FormData(form).get("scope") || "filtered");
+  const category = pdfSingleCategoryForProducts(inventoryPdfProducts(scope));
+  const preferences = readPdfPreferences().inventory;
+  container.innerHTML = pdfAttributeSelectionHTML("inventory", category, preferences);
+}
+
+function openInventoryPdfModal() {
+  const preferences = readPdfPreferences().inventory;
+  const visible = visibleProducts();
+  if (!visible.length) return showToast("info", "Không có vật liệu để xuất");
+  const canViewAnyQuantity = visible.some((product) => hasPermission(PERMISSIONS.viewQuantity, product.categoryId));
+  const disabledFields = canViewAnyQuantity ? new Set() : new Set(["quantity", "status"]);
+  const initialProducts = inventoryPdfProducts("filtered");
+  const initialCategory = pdfSingleCategoryForProducts(initialProducts);
+  openModal({
+    name: "pdf-inventory",
+    title: "Xuất PDF tồn kho",
+    subtitle: "Chọn vật liệu và thông tin cần xuất.",
+    body: `<form id="pdf-inventory-form" class="field-grid pdf-form" novalidate>
+      <div><div class="pdf-section-label">Phạm vi</div><div class="pdf-options-grid pdf-options-grid-two">
+        ${pdfRadio({ name: "scope", value: "filtered", label: `Kết quả đang lọc (${filteredProducts().length})`, checked: true })}
+        ${pdfRadio({ name: "scope", value: "all", label: `Toàn bộ kho (${visible.length})`, checked: false })}
+      </div></div>
+      <div id="pdf-inventory-product-selection">${inventoryPdfProductSelectionHTML(initialProducts)}</div>
+      <div><div class="pdf-section-label">Thông tin</div><div class="pdf-options-grid">${pdfFieldSelection(PDF_INVENTORY_FIELDS, preferences.fields, { disabledFields })}</div></div>
+      <div id="pdf-inventory-attributes">${pdfAttributeSelectionHTML("inventory", initialCategory, preferences)}</div>
+      <div><div class="pdf-section-label">Khổ giấy</div><div class="pdf-options-grid pdf-options-grid-two">
+        ${pdfRadio({ name: "orientation", value: "portrait", label: "A4 dọc", checked: preferences.orientation === "portrait" })}
+        ${pdfRadio({ name: "orientation", value: "landscape", label: "A4 ngang", checked: preferences.orientation !== "portrait" })}
+      </div></div>
+    </form>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="pdf-inventory-form">Xuất PDF</button>`,
+  });
+}
+
+function historyPdfCategory() {
+  const categoryId = appState.filters.history.category;
+  if (!categoryId || categoryId === "all") return null;
+  const category = categoryById(categoryId);
+  return category && hasPermission(PERMISSIONS.viewHistory, category.id) ? category : null;
+}
+
+function openHistoryPdfModal() {
+  const preferences = readPdfPreferences().history;
+  const category = historyPdfCategory();
+  openModal({
+    name: "pdf-history",
+    title: "Xuất PDF lịch sử",
+    subtitle: `${formatMonthLabel(appState.filters.history.month)} · theo bộ lọc hiện tại`,
+    body: `<form id="pdf-history-form" class="field-grid pdf-form" novalidate>
+      <div><div class="pdf-section-label">Thông tin</div><div class="pdf-options-grid">${pdfFieldSelection(PDF_HISTORY_FIELDS, preferences.fields)}</div></div>
+      <div id="pdf-history-attributes">${pdfAttributeSelectionHTML("history", category, preferences)}</div>
+      <div><div class="pdf-section-label">Khổ giấy</div><div class="pdf-options-grid pdf-options-grid-two">
+        ${pdfRadio({ name: "orientation", value: "portrait", label: "A4 dọc", checked: preferences.orientation === "portrait" })}
+        ${pdfRadio({ name: "orientation", value: "landscape", label: "A4 ngang", checked: preferences.orientation !== "portrait" })}
+      </div></div>
+    </form>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="pdf-history-form">Xuất PDF</button>`,
+  });
+}
+
+function readPdfFormSelection(form, kind) {
+  const data = new FormData(form);
+  const fields = [...new Set(data.getAll("fields").map(String).filter(Boolean))];
+  const attributes = [...new Set(data.getAll("attributes").map(String).filter(Boolean))];
+  if (!fields.length && !attributes.length && data.get("compactDetails") !== "1") {
+    throw new Error("Hãy chọn ít nhất một thông tin để xuất.");
+  }
+  const orientation = data.get("orientation") === "portrait" ? "portrait" : "landscape";
+  const result = { fields, orientation, compactDetails: data.get("compactDetails") === "1", attributes };
+  if (kind === "inventory") {
+    result.scope = data.get("scope") === "all" ? "all" : "filtered";
+    result.productIds = [...new Set(data.getAll("productIds").map(String).filter(Boolean))];
+    if (!result.productIds.length) throw new Error("Hãy chọn ít nhất một vật liệu cần xuất.");
+  }
+  return result;
+}
+
+function savePdfFormPreferences(kind, selection, category = null) {
+  const current = readPdfPreferences()[kind];
+  const attributesByCategory = { ...(current.attributesByCategory || {}) };
+  if (category) attributesByCategory[category.id] = [...selection.attributes];
+  writePdfPreferences(kind, {
+    ...(kind === "inventory" ? { scope: selection.scope } : {}),
+    orientation: selection.orientation,
+    fields: [...selection.fields],
+    compactDetails: Boolean(selection.compactDetails),
+    attributesByCategory,
+  });
+}
+
+function formatPdfDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+}
+
+function inventoryPdfFilterSummary(scope) {
+  if (scope === "all") return "Toàn bộ kho trong phạm vi tài khoản được phép xem";
+  const filters = appState.filters.inventory;
+  const parts = [];
+  if (String(filters.search || "").trim()) parts.push(`Từ khóa: ${String(filters.search).trim()}`);
+  if (filters.category !== "all") parts.push(`Nhóm: ${categoryById(filters.category)?.name || filters.category}`);
+  if (filters.status !== "all") parts.push(`Tình trạng: ${({ ok: "Đủ hàng", low: "Sắp hết", out: "Hết hàng" })[filters.status] || filters.status}`);
+  if (String(filters.quantityBelow ?? "").trim() !== "") parts.push(`Số lượng dưới: ${filters.quantityBelow}`);
+  return parts.length ? parts.join(" · ") : "Tất cả vật liệu đang hiển thị";
+}
+
+function historyPdfFilterSummary() {
+  const filters = appState.filters.history;
+  const range = historyEffectiveRange();
+  const parts = [`${formatDateOnlyForPdf(range.from)} – ${formatDateOnlyForPdf(range.to)}`];
+  if (filters.type !== "all") parts.push(TRANSACTION_LABELS[filters.type] || filters.type);
+  if (filters.category !== "all") parts.push(categoryById(filters.category)?.name || filters.category);
+  if (String(filters.search || "").trim()) parts.push(`Từ khóa: ${String(filters.search).trim()}`);
+  return parts.join(" · ");
+}
+
+function formatDateOnlyForPdf(value) {
+  if (!value) return "—";
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : String(value);
+}
+
+function compactProductDetailsForPdf(product) {
+  if (!product || !hasPermission(PERMISSIONS.viewDetail, product.categoryId)) return "—";
+  const category = categoryById(product.categoryId);
+  if (!category) return "—";
+  const entries = orderedCategoryAttributes(category)
+    .map((attribute) => {
+      const value = product.attributes?.[attribute.id];
+      if (value === "" || value === null || value === undefined) return "";
+      return `${attribute.name}: ${attributeDisplayValue(attribute, value)}`;
+    })
+    .filter(Boolean);
+  return entries.length ? entries.join(" · ") : "—";
+}
+
+function compactTransactionDetailsForPdf(transaction) {
+  if (!transaction || !hasPermission(PERMISSIONS.viewDetail, transaction.categoryId)) return "—";
+  const attributes = Array.isArray(transaction.productSnapshot?.attributes) ? transaction.productSnapshot.attributes : [];
+  const entries = attributes
+    .filter((attribute) => attribute?.value !== "" && attribute?.value !== null && attribute?.value !== undefined)
+    .map((attribute) => `${attribute.name || "Thông số"}: ${attribute.value}${attribute.unit ? ` ${attribute.unit}` : ""}`);
+  return entries.length ? entries.join(" · ") : "—";
+}
+
+function transactionPdfAmount(transaction) {
+  const delta = normalizeQuantity(transaction.afterQuantity - transaction.beforeQuantity, 0);
+  return `${delta > 0 ? "+" : delta < 0 ? "−" : ""}${formatQuantity(Math.abs(delta))} ${transaction.unit || ""}`.trim();
+}
+
+function buildInventoryPdfReport(products, selection) {
+  const fields = new Set(selection.fields);
+  const category = pdfSingleCategoryForProducts(products);
+  const attributes = category && hasPermission(PERMISSIONS.viewDetail, category.id)
+    ? orderedCategoryAttributes(category).filter((attribute) => selection.attributes.includes(attribute.id))
+    : [];
+  const columns = [{ key: "index", label: "STT" }];
+  PDF_INVENTORY_FIELDS.forEach(([key, label]) => { if (fields.has(key)) columns.push({ key, label }); });
+  if (selection.compactDetails && !attributes.length) columns.push({ key: "details", label: "Thông số" });
+  attributes.forEach((attribute) => columns.push({ key: `attr:${attribute.id}`, label: attribute.name, attribute }));
+
+  const rows = products.map((product, index) => columns.map((column) => {
+    if (column.key === "index") return String(index + 1);
+    if (column.key === "name") return productDisplayName(product);
+    if (column.key === "quantity") return hasPermission(PERMISSIONS.viewQuantity, product.categoryId) ? formatQuantity(product.quantity) : "—";
+    if (column.key === "unit") return product.unit || "—";
+    if (column.key === "status") return hasPermission(PERMISSIONS.viewQuantity, product.categoryId) ? productStatus(product).label : "—";
+    if (column.key === "note") return hasPermission(PERMISSIONS.viewDetail, product.categoryId) ? (product.note || "—") : "—";
+    if (column.key === "updatedAt") return formatPdfDate(product.updatedAt || product.createdAt);
+    if (column.key === "details") return compactProductDetailsForPdf(product);
+    if (column.attribute) return hasPermission(PERMISSIONS.viewDetail, product.categoryId)
+      ? attributeDisplayValue(column.attribute, product.attributes?.[column.attribute.id])
+      : "—";
+    return "—";
+  }));
+
+  const totals = new Map();
+  if (fields.has("quantity")) {
+    products.forEach((product) => {
+      if (!hasPermission(PERMISSIONS.viewQuantity, product.categoryId)) return;
+      const unit = String(product.unit || "Đơn vị");
+      totals.set(unit, normalizeQuantity((totals.get(unit) || 0) + normalizeQuantity(product.quantity, 0), 0));
+    });
+  }
+  const summary = totals.size
+    ? `Tổng theo đơn vị: ${[...totals.entries()].map(([unit, value]) => `${formatQuantity(value)} ${unit}`).join(" · ")}`
+    : "";
+  return {
+    title: "KHO KHUÔN BẾ – DANH SÁCH TỒN KHO",
+    subtitle: inventoryPdfFilterSummary(selection.scope),
+    columns,
+    rows,
+    summary,
+  };
+}
+
+async function fetchAllHistoryForPdf() {
+  const range = historyEffectiveRange();
+  const filters = appState.filters.history;
+  let offset = 0;
+  let nextOffset = 0;
+  let items = [];
+  do {
+    const result = await dataService.listTransactions({
+      limit: 200,
+      offset,
+      categoryId: filters.category !== "all" ? filters.category : null,
+      type: filters.type !== "all" ? filters.type : null,
+      from: range.from || null,
+      to: range.to || null,
+    });
+    const pageItems = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : [];
+    const byId = new Map(items.map((transaction) => [transaction.id, transaction]));
+    pageItems.forEach((transaction) => byId.set(transaction.id, transaction));
+    items = [...byId.values()];
+    nextOffset = Array.isArray(result)
+      ? (pageItems.length >= 200 ? offset + pageItems.length : null)
+      : (result?.nextOffset ?? null);
+    offset = nextOffset === null ? 0 : Number(nextOffset) || 0;
+  } while (nextOffset !== null);
+
+  items.sort((left, right) => {
+    const timeDiff = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    return timeDiff || String(right.id).localeCompare(String(left.id));
+  });
+  const tokens = searchTokens(filters.search);
+  if (!tokens.length) return items;
+  return items.filter((transaction) => {
+    const haystack = transactionSearchText(transaction);
+    return tokens.every((token) => haystack.includes(token));
+  });
+}
+
+function buildHistoryPdfReport(transactions, selection) {
+  const fields = new Set(selection.fields);
+  const category = historyPdfCategory();
+  const attributes = category && hasPermission(PERMISSIONS.viewDetail, category.id)
+    ? orderedCategoryAttributes(category, { activeOnly: false }).filter((attribute) => selection.attributes.includes(attribute.id))
+    : [];
+  const columns = [{ key: "index", label: "STT" }];
+  PDF_HISTORY_FIELDS.forEach(([key, label]) => { if (fields.has(key)) columns.push({ key, label }); });
+  if (selection.compactDetails) columns.push({ key: "details", label: "Thông số" });
+  attributes.forEach((attribute) => columns.push({ key: `attr:${attribute.id}`, label: attribute.name, attribute }));
+
+  const rows = transactions.map((transaction, index) => columns.map((column) => {
+    if (column.key === "index") return String(index + 1);
+    if (column.key === "createdAt") return formatDateTime(transaction.createdAt);
+    if (column.key === "product") return transaction.productName || "—";
+    if (column.key === "type") return TRANSACTION_LABELS[transaction.type] || transaction.type || "—";
+    if (column.key === "amount") return transactionPdfAmount(transaction);
+    if (column.key === "balance") return `${formatQuantity(transaction.beforeQuantity)} → ${formatQuantity(transaction.afterQuantity)} ${transaction.unit || ""}`.trim();
+    if (column.key === "actor") return transaction.actor || "—";
+    if (column.key === "note") return transaction.note || "—";
+    if (column.key === "details") return compactTransactionDetailsForPdf(transaction);
+    if (column.attribute) {
+      if (!hasPermission(PERMISSIONS.viewDetail, transaction.categoryId)) return "—";
+      const snapshotAttribute = (transaction.productSnapshot?.attributes || []).find((attribute) => attribute?.id === column.attribute.id);
+      if (!snapshotAttribute || snapshotAttribute.value === "" || snapshotAttribute.value === null || snapshotAttribute.value === undefined) return "—";
+      return `${snapshotAttribute.value}${snapshotAttribute.unit ? ` ${snapshotAttribute.unit}` : ""}`;
+    }
+    return "—";
+  }));
+  return {
+    title: "KHO KHUÔN BẾ – LỊCH SỬ GIAO DỊCH",
+    subtitle: historyPdfFilterSummary(),
+    columns,
+    rows,
+    summary: `${transactions.length} giao dịch`,
+  };
+}
+
+function ensurePrintRoot() {
+  let root = $("#kb2-print-root");
+  if (!root) {
+    root = document.createElement("section");
+    root.id = "kb2-print-root";
+    root.className = "kb2-print-root";
+    root.setAttribute("aria-hidden", "true");
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function renderPdfReport(report) {
+  const root = ensurePrintRoot();
+  const generatedAt = formatDateTime(new Date());
+  const head = report.columns.map((column) => `<th>${escapeHTML(column.label)}</th>`).join("");
+  const body = report.rows.length
+    ? report.rows.map((row) => `<tr>${row.map((value) => `<td>${escapeHTML(value ?? "—")}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${report.columns.length}">Không có dữ liệu phù hợp.</td></tr>`;
+  root.innerHTML = `<div class="print-report">
+    <header class="print-report-head"><h1>${escapeHTML(report.title)}</h1><div class="print-meta">Thời điểm xuất: ${escapeHTML(generatedAt)}</div><div class="print-filter">${escapeHTML(report.subtitle || "")}</div></header>
+    <table class="print-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+    ${report.summary ? `<div class="print-summary">${escapeHTML(report.summary)}</div>` : ""}
+    <footer class="print-footer">Kho Khuôn Bế · v${escapeHTML(APP_VERSION)}</footer>
+  </div>`;
+  return root;
+}
+
+function printPdfReport(report, orientation = "landscape") {
+  if (!report?.columns?.length) throw new Error("Báo cáo chưa có cột dữ liệu.");
+  renderPdfReport(report);
+  let pageStyle = $("#kb2-print-page-style");
+  if (!pageStyle) {
+    pageStyle = document.createElement("style");
+    pageStyle.id = "kb2-print-page-style";
+    document.head.appendChild(pageStyle);
+  }
+  pageStyle.textContent = `@page { size: A4 ${orientation === "portrait" ? "portrait" : "landscape"}; margin: 10mm; }`;
+  document.body.classList.add("kb2-printing");
+  const finish = () => document.body.classList.remove("kb2-printing");
+  window.addEventListener("afterprint", finish, { once: true });
+  try {
+    window.print();
+  } finally {
+    window.setTimeout(finish, 250);
+  }
+}
+
+async function handleInventoryPdfSubmit(event, form) {
+  event.preventDefault();
+  const submitButton = document.querySelector(`button[type="submit"][form="${form.id}"]`);
+  await withActionLock("pdf-inventory", submitButton, async () => {
+    try {
+      const selection = readPdfFormSelection(form, "inventory");
+      const selectedIds = new Set(selection.productIds.map(String));
+      const products = inventoryPdfProducts(selection.scope).filter((product) => selectedIds.has(String(product.id)));
+      if (!products.length) throw new Error("Không có vật liệu đã chọn để xuất.");
+      const category = pdfSingleCategoryForProducts(products);
+      savePdfFormPreferences("inventory", selection, category);
+      const report = buildInventoryPdfReport(products, selection);
+      closeModal(true);
+      printPdfReport(report, selection.orientation);
+    } catch (error) {
+      showToast("error", "Không thể xuất PDF", error.message);
+    }
+  });
+}
+
+async function handleHistoryPdfSubmit(event, form) {
+  event.preventDefault();
+  const submitButton = document.querySelector(`button[type="submit"][form="${form.id}"]`);
+  await withActionLock("pdf-history", submitButton, async () => {
+    try {
+      const selection = readPdfFormSelection(form, "history");
+      const category = historyPdfCategory();
+      savePdfFormPreferences("history", selection, category);
+      const transactions = await fetchAllHistoryForPdf();
+      if (!transactions.length) throw new Error("Không có giao dịch phù hợp để xuất.");
+      const report = buildHistoryPdfReport(transactions, selection);
+      closeModal(true);
+      printPdfReport(report, selection.orientation);
+    } catch (error) {
+      showToast("error", "Không thể xuất PDF", error.message);
+    }
+  });
+}
+
 function filteredProducts() {
   const { search, category, status, quantityBelow } = appState.filters.inventory;
   const tokens = searchTokens(search);
@@ -2726,7 +3404,10 @@ function renderInventoryScreen() {
           <span class="search-icon">${icon("search")}</span>
           <input id="inventory-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Ví dụ: dao cắt 0.7 23.8" value="${escapeHTML(appState.filters.inventory.search)}">
         </label>
-        ${categoriesWithPermission(PERMISSIONS.addProduct).length ? `<button class="icon-btn" type="button" data-action="add-product" aria-label="Thêm vật liệu">${icon("plus")}</button>` : ""}
+        <div class="toolbar-actions">
+          <button class="icon-btn" type="button" data-action="open-inventory-pdf" aria-label="Xuất PDF tồn kho">${icon("pdf")}</button>
+          ${categoriesWithPermission(PERMISSIONS.addProduct).length ? `<button class="icon-btn" type="button" data-action="add-product" aria-label="Thêm vật liệu">${icon("plus")}</button>` : ""}
+        </div>
       </div>
       <div class="filter-grid">
         <label class="field" for="inventory-category">
@@ -2783,51 +3464,532 @@ function renderProductRow(product) {
   </button>`;
 }
 
-function filteredTransactions() {
-  const { search, type, from, to } = appState.filters.history;
-  const searchKey = normalizeText(search);
-  return visibleTransactions().filter((transaction) => {
-    const date = formatISODate(transaction.createdAt);
-    const matchesSearch = !searchKey || normalizeText(`${transaction.productName} ${transaction.note} ${transaction.actor}`).includes(searchKey);
-    const matchesType = type === "all" || transaction.type === type;
-    const matchesFrom = !from || date >= from;
-    const matchesTo = !to || date <= to;
-    return matchesSearch && matchesType && matchesFrom && matchesTo;
+function transactionSearchText(transaction) {
+  const snapshotValues = Array.isArray(transaction?.productSnapshot?.attributes)
+    ? transaction.productSnapshot.attributes.flatMap((attribute) => [attribute?.name, attribute?.value, attribute?.unit])
+    : [];
+  return normalizeSearchText([
+    transaction?.productName,
+    transaction?.note,
+    transaction?.actor,
+    TRANSACTION_LABELS[transaction?.type] || transaction?.type,
+    transaction?.productSnapshot?.categoryName,
+    ...snapshotValues,
+  ].filter(Boolean).join(" "));
+}
+
+function filteredHistoryTransactions() {
+  const tokens = searchTokens(appState.filters.history.search);
+  const transactions = visibleHistoryTransactions();
+  if (!tokens.length) return transactions;
+  return transactions.filter((transaction) => {
+    const haystack = transactionSearchText(transaction);
+    return tokens.every((token) => haystack.includes(token));
   });
+}
+
+function historyDayLabel(value) {
+  const key = formatISODate(value);
+  const today = formatISODate(new Date());
+  const yesterday = formatISODate(new Date(Date.now() - 86400000));
+  if (key === today) return "Hôm nay";
+  if (key === yesterday) return "Hôm qua";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Không rõ ngày" : new Intl.DateTimeFormat("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+}
+
+function renderGroupedHistory(transactions) {
+  if (!transactions.length) return renderEmptyState("history", "Không có giao dịch phù hợp", "Thử đổi tháng, từ khóa hoặc bộ lọc.");
+  const groups = [];
+  for (const transaction of transactions) {
+    const key = formatISODate(transaction.createdAt) || "unknown";
+    let group = groups[groups.length - 1];
+    if (!group || group.key !== key) {
+      group = { key, label: historyDayLabel(transaction.createdAt), items: [] };
+      groups.push(group);
+    }
+    group.items.push(transaction);
+  }
+  return groups.map((group) => `<section class="history-day-group" aria-label="${escapeHTML(group.label)}">
+    <div class="history-day-heading"><span>${escapeHTML(group.label)}</span><span>${group.items.length}</span></div>
+    <div class="card list-card history-day-list">${group.items.map(renderTransactionRow).join("")}</div>
+  </section>`).join("");
+}
+
+function historyResultCountText(transactions) {
+  const meta = appState.cache.historyMeta;
+  const hasSearch = Boolean(searchTokens(appState.filters.history.search).length);
+  if (hasSearch) return `${transactions.length} kết quả trong ${meta.total} giao dịch`;
+  if (meta.nextOffset !== null) return `${transactions.length} / ${meta.total} giao dịch`;
+  return `${meta.total || transactions.length} giao dịch`;
+}
+
+const ANALYSIS_LOOKBACK_MONTHS = 3;
+
+function invalidateMonthlyAnalysis() {
+  appState.cache.monthlyAnalysis = { key: "", data: null, error: "" };
+}
+
+function analysisCategoryId() {
+  return appState.filters.history.analysisCategory && appState.filters.history.analysisCategory !== "all"
+    ? appState.filters.history.analysisCategory
+    : null;
+}
+
+function monthlyAnalysisKey() {
+  return JSON.stringify({
+    month: appState.filters.history.month || currentMonthKey(),
+    category: analysisCategoryId() || "all",
+    user: appState.currentUser?.id || "",
+  });
+}
+
+function monthDays(monthKey) {
+  const date = parseMonthKey(monthKey);
+  return date ? new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate() : 30;
+}
+
+function analysisMonthElapsedDays(monthKey) {
+  const total = monthDays(monthKey);
+  if (monthKey !== currentMonthKey()) return total;
+  return Math.max(1, Math.min(total, new Date().getDate()));
+}
+
+function analysisTransactionIsReversed(transaction) {
+  return Boolean(transaction?.reversalTransactionId || transaction?.reversedAt);
+}
+
+function analysisEffectiveTransactions(transactions) {
+  return (transactions || []).filter((transaction) => transaction?.type !== TRANSACTION_TYPES.reverse && !analysisTransactionIsReversed(transaction));
+}
+
+function sumTransactionAmounts(transactions, type) {
+  return normalizeQuantity((transactions || [])
+    .filter((transaction) => transaction.type === type)
+    .reduce((sum, transaction) => sum + normalizeQuantity(transaction.amount, 0), 0), 0);
+}
+
+function sumPositiveInventoryInputs(transactions) {
+  return normalizeQuantity((transactions || []).reduce((sum, transaction) => {
+    if (transaction.type === TRANSACTION_TYPES.import) return sum + normalizeQuantity(transaction.amount, 0);
+    if ([TRANSACTION_TYPES.initial, TRANSACTION_TYPES.adjust].includes(transaction.type)) {
+      return sum + Math.max(0, normalizeQuantity(transaction.afterQuantity - transaction.beforeQuantity, 0));
+    }
+    return sum;
+  }, 0), 0);
+}
+
+function analysisGroupKey(productId, unit) {
+  return `${String(productId || "unknown")}::${String(unit || "")}`;
+}
+
+function categoryNameForAnalysis(categoryId, fallback = "") {
+  return categoryById(categoryId)?.name || fallback || "Nhóm khác";
+}
+
+function transactionCategoryName(transaction) {
+  return transaction?.productSnapshot?.categoryName || categoryNameForAnalysis(transaction?.categoryId);
+}
+
+function analysisProductCreatedMonth(product, transactions) {
+  const productMonth = product?.createdAt ? currentMonthKey(product.createdAt) : "";
+  if (productMonth) return productMonth;
+  const dates = (transactions || []).map((transaction) => new Date(transaction.createdAt)).filter((date) => !Number.isNaN(date.getTime()));
+  if (!dates.length) return "";
+  dates.sort((left, right) => left - right);
+  return currentMonthKey(dates[0]);
+}
+
+function formatAnalysisPercent(value) {
+  return new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 }).format(Math.abs(Number(value) || 0));
+}
+
+function analysisTrend(currentValue, priorAverage, { projected = false } = {}) {
+  const current = Math.max(0, normalizeQuantity(currentValue, 0));
+  const average = Math.max(0, normalizeQuantity(priorAverage, 0));
+  if (average <= 0) {
+    if (current > 0) return { key: "new", label: projected ? "Ước tính có sử dụng" : "Có sử dụng", percent: null };
+    return { key: "none", label: "Chưa có dữ liệu", percent: null };
+  }
+  const percent = ((current - average) / average) * 100;
+  if (percent >= 20) return { key: "up", label: `${projected ? "Ước tính tăng" : "Tăng"} ${formatAnalysisPercent(percent)}%`, percent };
+  if (percent <= -20) return { key: "down", label: `${projected ? "Ước tính giảm" : "Giảm"} ${formatAnalysisPercent(percent)}%`, percent };
+  return { key: "steady", label: "Ổn định", percent };
+}
+
+function purchaseRecommendation({ quantity, warningLevel, referenceUsage, daysInMonth, hasUsageHistory }) {
+  const stock = Math.max(0, normalizeQuantity(quantity, 0));
+  const warning = Math.max(0, normalizeQuantity(warningLevel, 0));
+  const usage = Math.max(0, normalizeQuantity(referenceUsage, 0));
+
+  // Không đưa ra số lượng mua cụ thể khi chưa có lịch sử sử dụng làm nền.
+  if (!hasUsageHistory) {
+    if (stock <= warning) return { key: "buy", label: "Nên bổ sung", amount: null, coverDays: null, note: usage > 0 ? "Mới phát sinh sử dụng; cần thêm dữ liệu" : "Tồn đang ở mức cảnh báo" };
+    if (usage > 0) return { key: "watch", label: "Theo dõi", amount: null, coverDays: null, note: "Mới phát sinh sử dụng; chưa đủ dữ liệu để tính lượng mua" };
+    return { key: "stable", label: "Ổn định", amount: 0, coverDays: null, note: "Chưa ghi nhận mức dùng đáng kể" };
+  }
+
+  if (usage <= 0) {
+    return stock <= warning
+      ? { key: "watch", label: "Theo dõi", amount: null, coverDays: null, note: "Tồn ở mức cảnh báo nhưng chưa có mức dùng tham chiếu" }
+      : { key: "stable", label: "Ổn định", amount: 0, coverDays: null, note: "Chưa ghi nhận mức dùng đáng kể" };
+  }
+
+  const coverDays = normalizeQuantity((stock / usage) * daysInMonth, 0);
+  const target = normalizeQuantity(usage + warning, 0);
+  const amount = normalizeQuantity(Math.max(0, target - stock), 0);
+  if (stock <= 0 || coverDays < 14) return { key: "critical", label: "Cần bổ sung sớm", amount, coverDays, note: "Tồn thấp so với mức sử dụng" };
+  if (stock <= warning || coverDays < 30) return { key: "buy", label: "Nên bổ sung", amount, coverDays, note: "Mức tồn chưa đủ khoảng 1 tháng" };
+  if (coverDays < 45) return { key: "watch", label: "Theo dõi", amount, coverDays, note: "Mức tồn đang giảm" };
+  return { key: "stable", label: "Ổn định", amount: 0, coverDays, note: "Mức tồn hiện tại phù hợp" };
+}
+
+async function fetchTransactionsForMonthlyAnalysis({ monthKey, categoryId = null, requestId }) {
+  const startMonth = shiftMonthKey(monthKey, -ANALYSIS_LOOKBACK_MONTHS);
+  const from = monthDateRange(startMonth).from;
+  const to = monthDateRange(monthKey).to;
+  let offset = 0;
+  let items = [];
+  while (offset !== null) {
+    const result = await dataService.listTransactions({ limit: 200, offset: offset || 0, categoryId, from, to });
+    if (!isCurrentRequest("monthly-analysis", requestId)) return null;
+    const pageItems = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : [];
+    const byId = new Map(items.map((transaction) => [transaction.id, transaction]));
+    pageItems.forEach((transaction) => byId.set(transaction.id, transaction));
+    items = [...byId.values()];
+    offset = Array.isArray(result) ? (pageItems.length >= 200 ? items.length : null) : (result?.nextOffset ?? null);
+  }
+  return items;
+}
+
+function buildMonthlyAnalysis(transactions, monthKey, categoryId = null) {
+  const currentSelected = monthKey === currentMonthKey();
+  const selectedMonthDays = monthDays(monthKey);
+  const elapsedDays = analysisMonthElapsedDays(monthKey);
+  const priorMonths = Array.from({ length: ANALYSIS_LOOKBACK_MONTHS }, (_, index) => shiftMonthKey(monthKey, -(ANALYSIS_LOOKBACK_MONTHS - index)));
+  const monthKeys = [...priorMonths, monthKey];
+  const allTransactions = (transactions || []).filter((transaction) => !categoryId || transaction.categoryId === categoryId);
+  const effective = analysisEffectiveTransactions(allTransactions);
+  const allByGroup = new Map();
+  const effectiveByGroupMonth = new Map();
+
+  for (const transaction of allTransactions) {
+    const key = analysisGroupKey(transaction.productId, transaction.unit);
+    if (!allByGroup.has(key)) allByGroup.set(key, []);
+    allByGroup.get(key).push(transaction);
+  }
+  for (const transaction of effective) {
+    const txMonth = currentMonthKey(transaction.createdAt);
+    if (!monthKeys.includes(txMonth)) continue;
+    const key = analysisGroupKey(transaction.productId, transaction.unit);
+    const monthMap = effectiveByGroupMonth.get(key) || new Map();
+    const list = monthMap.get(txMonth) || [];
+    list.push(transaction);
+    monthMap.set(txMonth, list);
+    effectiveByGroupMonth.set(key, monthMap);
+  }
+
+  const activeProducts = visibleProducts(PERMISSIONS.viewInventory).filter((product) => {
+    if (categoryId && product.categoryId !== categoryId) return false;
+    return hasPermission(PERMISSIONS.viewHistory, product.categoryId);
+  });
+  for (const product of activeProducts) {
+    const key = analysisGroupKey(product.id, product.unit);
+    if (!allByGroup.has(key)) allByGroup.set(key, []);
+  }
+
+  const rows = [];
+  for (const [key, groupTransactions] of allByGroup.entries()) {
+    const [productId, unit] = key.split("::");
+    const currentProduct = productById(productId);
+    const monthMap = effectiveByGroupMonth.get(key) || new Map();
+    const selectedEffective = monthMap.get(monthKey) || [];
+    const selectedAll = groupTransactions.filter((transaction) => currentMonthKey(transaction.createdAt) === monthKey)
+      .sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt) || String(left.id).localeCompare(String(right.id)));
+    const latestTransaction = [...groupTransactions].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))[0] || null;
+    const categoryIdForRow = currentProduct?.categoryId || latestTransaction?.categoryId || "";
+    if (categoryId && categoryIdForRow !== categoryId) continue;
+    if (!hasPermission(PERMISSIONS.viewHistory, categoryIdForRow)) continue;
+
+    const exports = sumTransactionAmounts(selectedEffective, TRANSACTION_TYPES.export);
+    const imports = sumTransactionAmounts(selectedEffective, TRANSACTION_TYPES.import);
+    const exportCount = selectedEffective.filter((transaction) => transaction.type === TRANSACTION_TYPES.export).length;
+    const opening = selectedAll.length
+      ? normalizeQuantity(selectedAll[0].beforeQuantity, 0)
+      : currentSelected && currentProduct && String(currentProduct.unit || "") === unit && hasPermission(PERMISSIONS.viewQuantity, categoryIdForRow)
+        ? normalizeQuantity(currentProduct.quantity, 0)
+        : null;
+    const closing = currentSelected && currentProduct && String(currentProduct.unit || "") === unit && hasPermission(PERMISSIONS.viewQuantity, categoryIdForRow)
+      ? normalizeQuantity(currentProduct.quantity, 0)
+      : selectedAll.length ? normalizeQuantity(selectedAll[selectedAll.length - 1].afterQuantity, 0) : null;
+    const available = opening === null ? null : normalizeQuantity(opening + sumPositiveInventoryInputs(selectedEffective), 0);
+    const usageRatio = available && available > 0 ? (exports / available) * 100 : null;
+
+    const createdMonth = analysisProductCreatedMonth(currentProduct, groupTransactions);
+    let priorTotal = 0;
+    let priorMonthCount = 0;
+    for (const priorMonth of priorMonths) {
+      if (createdMonth && priorMonth < createdMonth) continue;
+      priorTotal += sumTransactionAmounts(monthMap.get(priorMonth) || [], TRANSACTION_TYPES.export);
+      priorMonthCount += 1;
+    }
+    const priorAverage = priorMonthCount ? normalizeQuantity(priorTotal / priorMonthCount, 0) : 0;
+    const projectedUsage = currentSelected
+      ? normalizeQuantity((exports / Math.max(1, elapsedDays)) * selectedMonthDays, 0)
+      : exports;
+    const trendReference = currentSelected ? projectedUsage : exports;
+    const trend = analysisTrend(trendReference, priorAverage, { projected: currentSelected });
+    const referenceUsage = priorAverage > 0
+      ? Math.max(priorAverage, Math.min(projectedUsage, priorAverage * 1.5))
+      : projectedUsage;
+    const canViewQuantity = Boolean(currentProduct && hasPermission(PERMISSIONS.viewQuantity, categoryIdForRow) && String(currentProduct.unit || "") === unit);
+    const recommendation = currentSelected && canViewQuantity
+      ? purchaseRecommendation({
+        quantity: currentProduct.quantity,
+        warningLevel: currentProduct.warningLevel,
+        referenceUsage,
+        daysInMonth: selectedMonthDays,
+        hasUsageHistory: priorAverage > 0,
+      })
+      : null;
+
+    const displayName = currentProduct && String(currentProduct.unit || "") === unit
+      ? productDisplayName(currentProduct)
+      : latestTransaction?.productName || "Vật liệu";
+    const categoryName = categoryNameForAnalysis(categoryIdForRow, transactionCategoryName(latestTransaction));
+
+    const hasSelectedActivity = selectedAll.length > 0 || exports > 0 || imports > 0;
+    const shouldInclude = hasSelectedActivity || (currentSelected && canViewQuantity && (recommendation?.key !== "stable" || priorAverage > 0));
+    if (!shouldInclude) continue;
+
+    rows.push({
+      key,
+      productId,
+      categoryId: categoryIdForRow,
+      categoryName,
+      productName: displayName,
+      unit,
+      opening,
+      imports,
+      exports,
+      closing,
+      exportCount,
+      usageRatio,
+      priorAverage,
+      priorMonthCount,
+      projectedUsage,
+      trend,
+      recommendation,
+      currentQuantity: canViewQuantity ? normalizeQuantity(currentProduct.quantity, 0) : null,
+      warningLevel: canViewQuantity ? normalizeQuantity(currentProduct.warningLevel, 0) : null,
+    });
+  }
+
+  const statusPriority = { critical: 0, buy: 1, watch: 2, stable: 3 };
+  const recommendations = currentSelected
+    ? rows.filter((row) => row.recommendation && row.recommendation.key !== "stable")
+      .sort((left, right) => (statusPriority[left.recommendation.key] ?? 9) - (statusPriority[right.recommendation.key] ?? 9)
+        || (right.recommendation.amount || 0) - (left.recommendation.amount || 0))
+    : [];
+
+  const rankingGroups = new Map();
+  rows.filter((row) => row.exports > 0).forEach((row) => {
+    const groupKey = `${row.categoryId}::${row.unit}`;
+    const group = rankingGroups.get(groupKey) || { key: groupKey, categoryId: row.categoryId, categoryName: row.categoryName, unit: row.unit, rows: [] };
+    group.rows.push(row);
+    rankingGroups.set(groupKey, group);
+  });
+  const rankings = [...rankingGroups.values()]
+    .map((group) => ({ ...group, rows: group.rows.sort((left, right) => right.exports - left.exports || right.exportCount - left.exportCount) }))
+    .sort((left, right) => left.categoryName.localeCompare(right.categoryName, "vi") || left.unit.localeCompare(right.unit, "vi"));
+
+  return {
+    monthKey,
+    currentSelected,
+    elapsedDays,
+    monthDays: selectedMonthDays,
+    rows,
+    recommendations,
+    rankings,
+    summary: {
+      usedProducts: rows.filter((row) => row.exports > 0).length,
+      attentionProducts: recommendations.length,
+      increasedProducts: rows.filter((row) => row.trend?.key === "up").length,
+    },
+  };
+}
+
+async function loadMonthlyAnalysis({ render = true, silent = false, force = false } = {}) {
+  if (appState.auth.status !== "signedIn" || !hasPermission(PERMISSIONS.viewHistory)) return false;
+  const key = monthlyAnalysisKey();
+  if (!force && appState.cache.monthlyAnalysis.key === key && appState.cache.monthlyAnalysis.data) {
+    if (render) renderApp();
+    return true;
+  }
+  const requestId = nextRequestId("monthly-analysis");
+  appState.loading.monthlyAnalysis = true;
+  appState.cache.monthlyAnalysis.error = "";
+  if (render) renderApp();
+  try {
+    const transactions = await fetchTransactionsForMonthlyAnalysis({
+      monthKey: appState.filters.history.month,
+      categoryId: analysisCategoryId(),
+      requestId,
+    });
+    if (!transactions || !isCurrentRequest("monthly-analysis", requestId)) return false;
+    const data = buildMonthlyAnalysis(transactions, appState.filters.history.month, analysisCategoryId());
+    appState.cache.monthlyAnalysis = { key, data, error: "" };
+    return true;
+  } catch (error) {
+    if (!isCurrentRequest("monthly-analysis", requestId)) return false;
+    appState.cache.monthlyAnalysis = { key: "", data: null, error: error.message || "Không tải được phân tích." };
+    if (!silent) showToast("error", "Không tải được phân tích", error.message);
+    return false;
+  } finally {
+    if (isCurrentRequest("monthly-analysis", requestId)) {
+      appState.loading.monthlyAnalysis = false;
+      if (render) renderApp();
+    }
+  }
+}
+
+function analysisMetric(label, value, note = "") {
+  return `<div class="analysis-metric"><strong>${escapeHTML(value)}</strong><span>${escapeHTML(label)}</span>${note ? `<small>${escapeHTML(note)}</small>` : ""}</div>`;
+}
+
+function analysisStatusClass(key) {
+  if (key === "critical") return "analysis-status-critical";
+  if (key === "buy") return "analysis-status-buy";
+  if (key === "watch") return "analysis-status-watch";
+  return "analysis-status-stable";
+}
+
+function renderPurchaseRecommendations(data) {
+  if (!data.currentSelected) return `<div class="card analysis-note"><strong>Đề xuất mua</strong><span>Chỉ hiển thị ở tháng hiện tại để không trộn tồn hiện tại với dữ liệu quá khứ.</span></div>`;
+  if (!data.recommendations.length) return `<div class="card analysis-note analysis-note-success"><strong>Chưa có vật liệu cần bổ sung</strong><span>Đề xuất dựa trên tồn hiện tại, mức dùng tham chiếu và ngưỡng cảnh báo.</span></div>`;
+  return `<div class="analysis-recommendation-list">${data.recommendations.map((row) => {
+    const rec = row.recommendation;
+    const amountText = rec.amount !== null && rec.amount > 0 ? `Đề xuất +${formatQuantity(rec.amount)} ${row.unit}` : "Chưa đủ dữ liệu để tính lượng mua";
+    const coverText = rec.coverDays !== null ? `Ước tính đủ ~${Math.max(0, Math.round(rec.coverDays))} ngày` : rec.note;
+    return `<article class="card analysis-recommendation ${analysisStatusClass(rec.key)}">
+      <div class="analysis-recommendation-head"><div><strong>${escapeHTML(row.productName)}</strong><span>${escapeHTML(row.categoryName)} · ${escapeHTML(row.unit)}</span></div><span class="analysis-status-pill">${escapeHTML(rec.label)}</span></div>
+      <div class="analysis-recommendation-values"><span>Tồn <strong>${formatQuantity(row.currentQuantity)} ${escapeHTML(row.unit)}</strong></span><span>Đã xuất tháng này <strong>${formatQuantity(row.exports)} ${escapeHTML(row.unit)}</strong></span><span>TB ${row.priorMonthCount || ANALYSIS_LOOKBACK_MONTHS} tháng <strong>${formatQuantity(row.priorAverage)} ${escapeHTML(row.unit)}/tháng</strong></span></div>
+      <div class="analysis-recommendation-foot"><strong>${escapeHTML(amountText)}</strong><span>${escapeHTML(coverText)}</span></div>
+    </article>`;
+  }).join("")}</div>`;
+}
+
+function renderUsageRankings(data) {
+  if (!data.rankings.length) return renderEmptyState("history", "Chưa có lượt xuất trong tháng", "Khi có giao dịch xuất, xếp hạng sử dụng sẽ xuất hiện tại đây.");
+  return `<div class="analysis-ranking-list">${data.rankings.map((group) => `<section class="card analysis-ranking-group">
+    <div class="analysis-ranking-heading"><strong>${escapeHTML(group.categoryName)}</strong><span>${escapeHTML(group.unit)} · xếp trong cùng nhóm/đơn vị</span></div>
+    ${group.rows.slice(0, 5).map((row, index) => `<div class="analysis-ranking-row">
+      <span class="analysis-rank">${index + 1}</span>
+      <div class="analysis-ranking-main"><strong>${escapeHTML(row.productName)}</strong><span>${row.exportCount} lần xuất · ${row.trend?.label ? escapeHTML(row.trend.label) : ""}</span></div>
+      <div class="analysis-ranking-value"><strong>${formatQuantity(row.exports)}</strong><span>${escapeHTML(row.unit)}</span></div>
+    </div>`).join("")}
+  </section>`).join("")}</div>`;
+}
+
+function renderUsageDetailRows(data) {
+  if (!data.rows.length) return "";
+  const rows = [...data.rows].sort((left, right) => right.exports - left.exports || left.productName.localeCompare(right.productName, "vi"));
+  return `<details class="card analysis-detail"><summary>Chi tiết ${rows.length} vật liệu</summary><div class="analysis-detail-list">${rows.map((row) => {
+    const ratioText = row.usageRatio === null ? "—" : `${formatAnalysisPercent(row.usageRatio)}%`;
+    const averageLabel = row.priorMonthCount ? `TB ${row.priorMonthCount} tháng` : "TB 3 tháng";
+    const openingText = row.opening === null ? "—" : formatQuantity(row.opening);
+    const closingText = row.closing === null ? "—" : formatQuantity(row.closing);
+    return `<div class="analysis-detail-row">
+      <div class="analysis-detail-name"><strong>${escapeHTML(row.productName)}</strong><span>${escapeHTML(row.categoryName)} · ${escapeHTML(row.unit)}</span></div>
+      <div class="analysis-detail-values"><span>Đầu tháng <strong>${escapeHTML(openingText)}</strong></span><span>Nhập <strong>${formatQuantity(row.imports)}</strong></span><span>Xuất <strong>${formatQuantity(row.exports)}</strong></span><span>Cuối/hiện tại <strong>${escapeHTML(closingText)}</strong></span><span>${escapeHTML(averageLabel)} <strong>${formatQuantity(row.priorAverage)}</strong></span><span>Tỷ lệ dùng <strong>${escapeHTML(ratioText)}</strong></span></div>
+    </div>`;
+  }).join("")}</div></details>`;
+}
+
+function renderMonthlyAnalysisScreen() {
+  const loading = Boolean(appState.loading.monthlyAnalysis);
+  const cache = appState.cache.monthlyAnalysis;
+  const data = cache.key === monthlyAnalysisKey() ? cache.data : null;
+  const categories = appState.cache.schema?.categories?.filter((category) => hasPermission(PERMISSIONS.viewHistory, category.id)) || [];
+  if (loading && !data) return `<div class="card analysis-loading"><span class="spinner" aria-hidden="true"></span><strong>Đang phân tích ${escapeHTML(formatMonthLabel(appState.filters.history.month))}…</strong></div>`;
+  if (cache.error && !data) return `<div class="card analysis-note"><strong>Không tải được phân tích</strong><span>${escapeHTML(cache.error)}</span><button class="btn btn-secondary btn-compact" type="button" data-action="reload-monthly-analysis">Thử lại</button></div>`;
+  if (!data) return `<div class="card analysis-loading"><strong>Đang chuẩn bị dữ liệu…</strong></div>`;
+  const monthProgressNote = data.currentSelected ? `Thực tế đến ngày ${data.elapsedDays}/${data.monthDays}` : "Dữ liệu thực tế của tháng";
+  return `<div class="analysis-screen">
+    <div class="analysis-toolbar">
+      <label class="field analysis-category-field" for="analysis-category"><span class="field-label">Nhóm vật liệu</span><select id="analysis-category" class="select"><option value="all">Tất cả nhóm</option>${categories.map((category) => `<option value="${escapeHTML(category.id)}" ${category.id === appState.filters.history.analysisCategory ? "selected" : ""}>${escapeHTML(category.name)}</option>`).join("")}</select></label>
+    </div>
+    <div class="analysis-metric-grid">
+      ${analysisMetric("Vật liệu đã dùng", String(data.summary.usedProducts), monthProgressNote)}
+      ${analysisMetric("Cần chú ý", String(data.summary.attentionProducts), data.currentSelected ? "Theo tồn hiện tại" : "Không đánh giá mua")}
+      ${analysisMetric("Sử dụng tăng", String(data.summary.increasedProducts), data.currentSelected ? "Ước tính so với TB 3 tháng trước" : "So với TB 3 tháng trước")}
+    </div>
+    <div class="analysis-disclaimer">${data.currentSelected ? "Thực tế lấy từ giao dịch còn trong Lịch sử. Dự báo là ước tính theo tốc độ sử dụng đến hôm nay." : "Số liệu thực tế lấy từ giao dịch còn trong Lịch sử."}</div>
+    <div class="section-head analysis-section-head"><div class="section-copy"><h2 class="section-title">Đề xuất bổ sung</h2><p class="section-subtitle">Mức đề xuất tham khảo = khoảng 1 tháng sử dụng + ngưỡng cảnh báo.</p></div></div>
+    ${renderPurchaseRecommendations(data)}
+    <div class="section-head analysis-section-head"><div class="section-copy"><h2 class="section-title">Dùng nhiều trong tháng</h2><p class="section-subtitle">Không xếp chung các đơn vị khác nhau.</p></div></div>
+    ${renderUsageRankings(data)}
+    ${renderUsageDetailRows(data)}
+  </div>`;
 }
 
 function renderHistoryScreen() {
   if (!hasPermission(PERMISSIONS.viewHistory)) return renderAccessDenied("Vai trò hiện tại chưa có quyền xem lịch sử giao dịch.");
-  const transactions = filteredTransactions();
+  const filters = appState.filters.history;
+  const isAnalysis = filters.view === "analysis";
+  const transactions = isAnalysis ? [] : filteredHistoryTransactions();
+  const customRange = Boolean(filters.from || filters.to);
+  const canGoNext = filters.month < currentMonthKey();
+  const categories = appState.cache.schema?.categories?.filter((category) => hasPermission(PERMISSIONS.viewHistory, category.id)) || [];
+  const loading = Boolean(appState.loading.historyTransactions);
   return `<section class="screen" aria-label="Lịch sử giao dịch">
-    <div class="toolbar">
+    <div class="history-month-bar card">
+      <button class="icon-btn" type="button" data-action="history-shift-month" data-delta="-1" aria-label="Tháng trước">‹</button>
+      <button class="history-month-current" type="button" data-action="history-current-month" aria-label="Về tháng hiện tại">
+        <strong>${escapeHTML(formatMonthLabel(filters.month))}</strong>
+        ${isAnalysis ? '<span>Phân tích theo tháng</span>' : customRange ? '<span>Khoảng ngày tùy chỉnh</span>' : '<span>Theo tháng</span>'}
+      </button>
+      <button class="icon-btn" type="button" data-action="history-shift-month" data-delta="1" aria-label="Tháng sau" ${canGoNext ? "" : "disabled"}>›</button>
+    </div>
+
+    <div class="history-view-tabs" role="tablist" aria-label="Chế độ lịch sử">
+      <button class="history-view-tab" type="button" role="tab" data-action="set-history-view" data-view="transactions" aria-selected="${String(!isAnalysis)}">Giao dịch</button>
+      <button class="history-view-tab" type="button" role="tab" data-action="set-history-view" data-view="analysis" aria-selected="${String(isAnalysis)}">Phân tích</button>
+    </div>
+
+    ${isAnalysis ? renderMonthlyAnalysisScreen() : `
+    <div class="history-search-row">
       <label class="search-wrap" for="history-search">
         <span class="search-icon">${icon("search")}</span>
-        <input id="history-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Tìm vật liệu, ghi chú, người tạo" value="${escapeHTML(appState.filters.history.search)}">
+        <input id="history-search" class="input" type="search" inputmode="search" autocomplete="off" placeholder="Tìm vật liệu, thông số, ghi chú" value="${escapeHTML(filters.search)}">
       </label>
-      <div class="filter-grid history-filter-grid">
+      <button class="btn btn-secondary history-filter-toggle ${filters.filtersOpen ? "is-active" : ""}" type="button" data-action="toggle-history-filters">${icon("filter")}<span>Bộ lọc</span></button>
+      <button class="icon-btn history-pdf-button" type="button" data-action="open-history-pdf" aria-label="Xuất PDF lịch sử">${icon("pdf")}</button>
+    </div>
+
+    ${filters.filtersOpen ? `<div class="card history-filter-panel">
+      <div class="field-grid two">
         <label class="field" for="history-type"><span class="field-label">Loại giao dịch</span><select id="history-type" class="select">
           <option value="all">Tất cả</option>
-          ${Object.entries(TRANSACTION_LABELS).map(([value, label]) => `<option value="${value}" ${value === appState.filters.history.type ? "selected" : ""}>${escapeHTML(label)}</option>`).join("")}
+          ${Object.entries(TRANSACTION_LABELS).map(([value, label]) => `<option value="${value}" ${value === filters.type ? "selected" : ""}>${escapeHTML(label)}</option>`).join("")}
         </select></label>
-        <div class="field-grid two history-date-grid">
-          <label class="field" for="history-from"><span class="field-label">Từ ngày</span><input id="history-from" class="input" type="date" value="${escapeHTML(appState.filters.history.from)}"></label>
-          <label class="field" for="history-to"><span class="field-label">Đến ngày</span><input id="history-to" class="input" type="date" value="${escapeHTML(appState.filters.history.to)}"></label>
-        </div>
+        <label class="field" for="history-category"><span class="field-label">Nhóm vật liệu</span><select id="history-category" class="select"><option value="all">Tất cả nhóm</option>${categories.map((category) => `<option value="${escapeHTML(category.id)}" ${category.id === filters.category ? "selected" : ""}>${escapeHTML(category.name)}</option>`).join("")}</select></label>
       </div>
-    </div>
+      <div class="field-grid two history-date-grid">
+        <label class="field" for="history-from"><span class="field-label">Từ ngày</span><input id="history-from" class="input" type="date" value="${escapeHTML(filters.from)}"></label>
+        <label class="field" for="history-to"><span class="field-label">Đến ngày</span><input id="history-to" class="input" type="date" value="${escapeHTML(filters.to)}"></label>
+      </div>
+      <div class="history-filter-actions"><button class="btn btn-compact btn-secondary" type="button" data-action="clear-history-filters">Xóa bộ lọc phụ</button></div>
+    </div>` : ""}
 
     <div class="section-head history-section-head">
-      <div class="section-copy"><h2 class="section-title">Các thay đổi trong kho</h2><p id="history-result-count" class="section-subtitle">${transactions.length} giao dịch</p></div>
-      <div class="inline-actions">
-        <button class="btn btn-compact btn-secondary" type="button" data-action="clear-history-filters">Xóa lọc</button>
-        ${normalizeRoleCode(appState.currentUser.role) === "superadmin" && hasPermission(PERMISSIONS.manageData) ? `<button class="btn btn-compact btn-danger-soft" type="button" data-action="open-history-cleanup">${icon("trash")} Xóa lịch sử</button>` : ""}
-      </div>
+      <div class="section-copy"><h2 class="section-title">Giao dịch</h2><p id="history-result-count" class="section-subtitle">${escapeHTML(historyResultCountText(transactions))}</p></div>
+      ${loading ? '<span class="history-loading">Đang tải…</span>' : ""}
     </div>
 
-    <div id="history-list" class="card list-card">
-      ${transactions.length ? transactions.map(renderTransactionRow).join("") : renderEmptyState("history", "Không có giao dịch phù hợp", "Thử xóa bộ lọc hoặc chọn khoảng ngày khác.")}
-    </div>
+    <div id="history-list" class="history-group-list">${renderGroupedHistory(transactions)}</div>
+    ${appState.cache.historyMeta.nextOffset !== null && !filters.search ? `<button class="btn btn-secondary btn-block history-load-more" type="button" data-action="load-more-history" ${loading ? "disabled" : ""}>${loading ? "Đang tải…" : "Tải thêm"}</button>` : ""}
+    `}
   </section>`;
 }
 
@@ -2843,12 +4005,12 @@ function renderTransactionRow(transaction) {
   const quantityText = [TRANSACTION_TYPES.adjust, TRANSACTION_TYPES.initial, TRANSACTION_TYPES.reverse].includes(transaction.type)
     ? `${formatQuantity(transaction.beforeQuantity)} → ${formatQuantity(transaction.afterQuantity)}`
     : `${presentation.sign}${formatQuantity(transaction.amount)}`;
-  const reversedBadge = transaction.reversalTransactionId ? '<span class="badge badge-warning">Đã đảo</span>' : "";
-  const reversalLink = transaction.reversalOf ? '<span class="badge badge-purple">Bản ghi đảo</span>' : "";
+  const reversedBadge = transaction.reversalTransactionId ? '<span class="badge badge-warning">Đã hoàn tác</span>' : "";
+  const reversalLink = transaction.reversalOf ? '<span class="badge badge-purple">Hoàn tác</span>' : "";
   return `<button class="list-row list-row-button transaction-row ${transaction.reversalTransactionId ? "transaction-row-reversed" : ""}" type="button" data-action="open-transaction-detail" data-transaction-id="${escapeHTML(transaction.id)}">
     <div class="row-main">
       <div class="row-title">${escapeHTML(transaction.productName)}</div>
-      <div class="row-sub">${escapeHTML(transaction.actor)} · ${formatDateTime(transaction.createdAt)}${transaction.note ? ` · ${escapeHTML(transaction.note)}` : ""}</div>
+      <div class="row-sub">${formatTime(transaction.createdAt)}${transaction.note ? ` · ${escapeHTML(transaction.note)}` : ""}</div>
     </div>
     <div class="row-copy">
       <div class="row-value transaction-value ${presentation.className}">${quantityText} ${escapeHTML(transaction.unit)}</div>
@@ -2858,25 +4020,61 @@ function renderTransactionRow(transaction) {
 }
 
 function renderManageScreen() {
-  const tabs = [
-    [MANAGE_TABS.accounts, "account", "Tài khoản"],
-    [MANAGE_TABS.categories, "category", "Danh mục"],
-    [MANAGE_TABS.access, "shield", "Phân quyền"],
-    [MANAGE_TABS.data, "database", "Dữ liệu"],
-  ];
-  return `<section class="screen" aria-label="Quản lý ứng dụng">
-    <div class="manage-tabs" role="tablist" aria-label="Nhóm cài đặt">
-      ${tabs.map(([key, iconName, label]) => `<button class="manage-tab" type="button" role="tab" data-manage-tab="${key}" aria-selected="${appState.manageTab === key}">${icon(iconName)}<span>${escapeHTML(label)}</span></button>`).join("")}
+  if (!canOpenManageTab(appState.manageTab)) appState.manageTab = MANAGE_TABS.home;
+  return `<section class="screen" aria-label="Cài đặt ứng dụng">${appState.manageTab === MANAGE_TABS.home ? renderSettingsHome() : renderManageSubscreen()}</section>`;
+}
+
+function renderSettingsHome() {
+  const canManageAccounts = hasPermission(PERMISSIONS.manageAccounts);
+  const canManageCategories = hasPermission(PERMISSIONS.manageSchema);
+  const advanced = canSeeAdvancedSettings();
+  return `<div class="screen">
+    <div class="card list-card">
+      <button class="list-row list-row-button" type="button" data-action="toggle-theme">
+        <div class="row-main"><div class="row-title">Giao diện</div><div class="row-sub">Đang dùng chế độ ${appState.theme === "dark" ? "tối" : "sáng"}. Chạm để chuyển.</div></div><div class="row-actions">${icon(appState.theme === "dark" ? "sun" : "moon")}</div>
+      </button>
+      <button class="list-row list-row-button" type="button" data-action="open-faq">
+        <div class="row-main"><div class="row-title">Hướng dẫn sử dụng</div><div class="row-sub">Cách nhập, xuất, điều chỉnh, PDF và xử lý lỗi thường gặp.</div></div><div class="row-actions">${icon("help")}</div>
+      </button>
+      <button class="list-row list-row-button" type="button" data-action="open-profile">
+        <div class="row-main"><div class="row-title">Tài khoản của tôi</div><div class="row-sub">${escapeHTML(appState.currentUser.displayName)} · ${escapeHTML(roleLabel(appState.currentUser.role))}</div></div><div class="row-actions">${icon("account")}</div>
+      </button>
     </div>
+
+    ${(canManageAccounts || canManageCategories) ? `<div class="section-head"><div class="section-copy"><h2 class="section-title">Quản lý</h2><p class="section-subtitle">Các mục chỉ hiện khi tài khoản có quyền tương ứng.</p></div></div>
+    <div class="card list-card">
+      ${canManageAccounts ? `<button class="list-row list-row-button" type="button" data-manage-tab="${MANAGE_TABS.accounts}"><div class="row-main"><div class="row-title">Tài khoản</div><div class="row-sub">Tạo và quản lý tài khoản sử dụng ứng dụng.</div></div><div class="row-actions">${icon("account")}</div></button>` : ""}
+      ${canManageCategories ? `<button class="list-row list-row-button" type="button" data-manage-tab="${MANAGE_TABS.categories}"><div class="row-main"><div class="row-title">Nhóm vật liệu</div><div class="row-sub">Quản lý nhóm, đơn vị và thuộc tính vật liệu.</div></div><div class="row-actions">${icon("category")}</div></button>` : ""}
+    </div>` : ""}
+
+    ${advanced ? `<div class="section-head"><div class="section-copy"><h2 class="section-title">Nâng cao</h2><p class="section-subtitle">Chỉ Admin và Super Admin nhìn thấy khu vực này.</p></div></div>
+    <div class="card list-card">
+      <button class="list-row list-row-button" type="button" data-manage-tab="${MANAGE_TABS.access}"><div class="row-main"><div class="row-title">Phân quyền</div><div class="row-sub">Xem quyền theo vai trò và phạm vi nhóm vật liệu.</div></div><div class="row-actions">${icon("shield")}</div></button>
+      ${hasPermission(PERMISSIONS.manageData) ? `<button class="list-row list-row-button" type="button" data-manage-tab="${MANAGE_TABS.data}"><div class="row-main"><div class="row-title">Dữ liệu</div><div class="row-sub">Thông tin tầng dữ liệu và các công cụ quản trị ít dùng.</div></div><div class="row-actions">${icon("database")}</div></button>` : ""}
+    </div>` : ""}
+  </div>`;
+}
+
+function renderManageSubscreen() {
+  const labels = {
+    [MANAGE_TABS.accounts]: "Tài khoản",
+    [MANAGE_TABS.categories]: "Nhóm vật liệu",
+    [MANAGE_TABS.access]: "Phân quyền",
+    [MANAGE_TABS.data]: "Dữ liệu",
+  };
+  return `<div class="screen">
+    <div class="section-head"><button class="btn btn-compact btn-secondary" type="button" data-manage-tab="${MANAGE_TABS.home}">‹ Cài đặt</button><div class="section-copy"><h2 class="section-title">${escapeHTML(labels[appState.manageTab] || "Cài đặt")}</h2></div></div>
     <div role="tabpanel">${renderManagePanel()}</div>
-  </section>`;
+  </div>`;
 }
 
 function renderManagePanel() {
+  if (!canOpenManageTab(appState.manageTab)) return renderSettingsHome();
   if (appState.manageTab === MANAGE_TABS.categories) return renderCategoriesPanel();
   if (appState.manageTab === MANAGE_TABS.access) return renderAccessPanel();
   if (appState.manageTab === MANAGE_TABS.data) return renderDataPanel();
-  return renderAccountsPanel();
+  if (appState.manageTab === MANAGE_TABS.accounts) return renderAccountsPanel();
+  return renderSettingsHome();
 }
 
 function renderAccountsPanel() {
@@ -3019,14 +4217,14 @@ function renderEmptyState(iconName, title, text) {
   return `<div class="empty-state"><div class="empty-icon">${icon(iconName)}</div><div class="empty-title">${escapeHTML(title)}</div><div class="empty-text">${escapeHTML(text)}</div></div>`;
 }
 
-function openModal({ name, title, subtitle = "", body, footer = "", size = "sheet" }) {
+function openModal({ name, title, subtitle = "", body, footer = "", size = "sheet", headerActions = "" }) {
   const root = $("#modal-root");
   if (!root) return;
   appState.ui.modalName = name;
   appState.ui.modalLastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const content = size === "dialog"
     ? `<div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="dialog-body"><h2 id="modal-title" class="sheet-title">${escapeHTML(title)}</h2>${subtitle ? `<p class="sheet-subtitle">${escapeHTML(subtitle)}</p>` : ""}<div style="margin-top:14px">${body}</div></div>${footer ? `<div class="dialog-actions">${footer}</div>` : ""}</div>`
-    : `<section class="sheet" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div><div class="sheet-handle" aria-hidden="true"></div><header class="sheet-head"><div><h2 id="modal-title" class="sheet-title">${escapeHTML(title)}</h2>${subtitle ? `<p class="sheet-subtitle">${escapeHTML(subtitle)}</p>` : ""}</div><button class="icon-btn" type="button" data-action="close-modal" aria-label="Đóng">${icon("close")}</button></header></div><div class="sheet-body">${body}</div>${footer ? `<footer class="sheet-footer">${footer}</footer>` : ""}</section>`;
+    : `<section class="sheet" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div><div class="sheet-handle" aria-hidden="true"></div><header class="sheet-head"><div><h2 id="modal-title" class="sheet-title">${escapeHTML(title)}</h2>${subtitle ? `<p class="sheet-subtitle">${escapeHTML(subtitle)}</p>` : ""}</div><div class="sheet-head-actions">${headerActions}<button class="icon-btn" type="button" data-action="close-modal" aria-label="Đóng">${icon("close")}</button></div></header></div><div class="sheet-body">${body}</div>${footer ? `<footer class="sheet-footer">${footer}</footer>` : ""}</section>`;
   root.innerHTML = `<div class="modal-layer" data-modal-backdrop="true">${content}</div>`;
   document.body.style.overflow = "hidden";
   window.setTimeout(() => {
@@ -3080,7 +4278,7 @@ function openHistoryCleanupModal() {
     title: "Xóa lịch sử kho",
     subtitle: "Lịch sử sẽ biến mất khỏi ứng dụng; tồn kho hiện tại và nhật ký quản trị vẫn được giữ.",
     body: `<form id="history-cleanup-form" class="field-grid" novalidate>
-      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không dùng để sửa tồn kho</div><div class="notice-text">Giao dịch sai nên dùng Đảo giao dịch. Xóa lịch sử chỉ dùng để dọn dữ liệu hiển thị.</div></div></div>
+      <div class="notice notice-warning"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không dùng để sửa tồn kho</div><div class="notice-text">Giao dịch sai nên dùng Hoàn tác giao dịch. Xóa lịch sử chỉ dùng để dọn dữ liệu hiển thị.</div></div></div>
       <label class="field" for="history-cleanup-scope"><span class="field-label">Phạm vi xóa</span><select id="history-cleanup-scope" name="scope" class="select"><option value="before">Đến hết một ngày</option><option value="all">Toàn bộ lịch sử</option></select></label>
       <label class="field" id="history-cleanup-date-field" for="history-cleanup-before"><span class="field-label">Xóa đến hết ngày</span><input id="history-cleanup-before" name="before" class="input" type="date" value="${escapeHTML(today)}"></label>
       <label class="field" for="history-cleanup-reason"><span class="field-label">Lý do</span><textarea id="history-cleanup-reason" name="reason" class="textarea" rows="3" required placeholder="Ví dụ: Dọn dữ liệu thử nghiệm trước khi sử dụng chính thức"></textarea></label>
@@ -3121,38 +4319,102 @@ function openProfileModal() {
   });
 }
 
+function formatRecentTransactionTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  if (formatISODate(date) === formatISODate(new Date())) return `Hôm nay ${formatTime(date)}`;
+  return new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function renderProductRecentTransaction(transaction) {
+  const presentation = transactionPresentation(transaction);
+  const quantityText = [TRANSACTION_TYPES.adjust, TRANSACTION_TYPES.initial, TRANSACTION_TYPES.reverse].includes(transaction.type)
+    ? `${formatQuantity(transaction.beforeQuantity)} → ${formatQuantity(transaction.afterQuantity)}`
+    : `${presentation.sign}${formatQuantity(transaction.amount)}`;
+  return `<button class="product-recent-row" type="button" data-action="open-transaction-detail" data-transaction-id="${escapeHTML(transaction.id)}">
+    <div class="product-recent-main">
+      <div class="product-recent-title">${escapeHTML(TRANSACTION_LABELS[transaction.type] || transaction.type)}</div>
+      <div class="product-recent-meta">${escapeHTML(formatRecentTransactionTime(transaction.createdAt))}${transaction.note ? ` · ${escapeHTML(transaction.note)}` : ""}</div>
+    </div>
+    <div class="product-recent-value ${presentation.className}">${quantityText} ${escapeHTML(transaction.unit)}</div>
+  </button>`;
+}
+
+function openProductActions(productId) {
+  const product = productById(productId);
+  if (!product) return showToast("error", "Không tìm thấy vật liệu");
+  const actions = [
+    hasPermission(PERMISSIONS.editProduct, product.categoryId)
+      ? `<button class="list-row list-row-button" type="button" data-action="edit-product" data-product-id="${escapeHTML(product.id)}"><div class="row-main"><div class="row-title">Sửa vật liệu</div><div class="row-sub">Tên, thông số, đơn vị, cảnh báo và ghi chú.</div></div><div class="row-actions">${icon("edit")}</div></button>`
+      : "",
+    hasPermission(PERMISSIONS.archiveProduct, product.categoryId)
+      ? `<button class="list-row list-row-button" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}"><div class="row-main"><div class="row-title">Lưu trữ vật liệu</div><div class="row-sub">Ẩn khỏi kho, vẫn giữ lịch sử.</div></div><div class="row-actions">${icon("archive")}</div></button>`
+      : "",
+    canDeleteTestProduct()
+      ? `<button class="list-row list-row-button danger-row" type="button" data-action="delete-test-product" data-product-id="${escapeHTML(product.id)}"><div class="row-main"><div class="row-title">Xóa vật liệu test</div><div class="row-sub">Xóa vĩnh viễn vật liệu thử nghiệm và giao dịch liên quan.</div></div><div class="row-actions">${icon("trash")}</div></button>`
+      : "",
+  ].filter(Boolean);
+  if (!actions.length) return showToast("info", "Không có tùy chọn quản lý");
+  openModal({
+    name: "product-actions",
+    title: "Tùy chọn vật liệu",
+    subtitle: productDisplayName(product),
+    body: `<div class="card list-card product-actions-list">${actions.join("")}</div>`,
+    footer: `<button class="btn btn-secondary btn-block" type="button" data-action="back-product-detail" data-product-id="${escapeHTML(product.id)}">Quay lại</button>`,
+  });
+}
+
 function openProductDetail(productId) {
   const product = productById(productId);
   if (!product) return showToast("error", "Không tìm thấy vật liệu");
   if (!hasPermission(PERMISSIONS.viewDetail, product.categoryId)) {
+    if (canCreateAnyInventoryTransaction(product.categoryId) && hasPermission(PERMISSIONS.viewQuantity, product.categoryId)) {
+      openTransactionModal(product.id);
+      return;
+    }
     showToast("error", "Không có quyền", "Tài khoản hiện tại không được xem chi tiết vật liệu trong nhóm này.");
     return;
   }
   const category = categoryById(product.categoryId);
-  const status = hasPermission(PERMISSIONS.viewQuantity, product.categoryId) ? productStatus(product) : null;
+  const canViewQuantity = hasPermission(PERMISSIONS.viewQuantity, product.categoryId);
+  const status = canViewQuantity ? productStatus(product) : null;
   const attributeRows = orderedCategoryAttributes(category).map((attribute) => `<div class="detail-row"><div class="detail-key">${escapeHTML(attribute.name)}</div><div class="detail-value">${escapeHTML(attributeDisplayValue(attribute, product.attributes[attribute.id]))}</div></div>`).join("");
-  const quantityRows = hasPermission(PERMISSIONS.viewQuantity, product.categoryId)
-    ? `<div class="detail-row"><div class="detail-key">Tồn hiện tại</div><div class="detail-value"><strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong></div></div><div class="detail-row"><div class="detail-key">Cảnh báo</div><div class="detail-value">${formatQuantity(product.warningLevel)} ${escapeHTML(product.unit)}</div></div>`
-    : `<div class="detail-row"><div class="detail-key">Tồn kho</div><div class="detail-value">Đã ẩn theo quyền</div></div>`;
   const stockActions = [
-    hasPermission(PERMISSIONS.importInventory, product.categoryId) ? `<button class="btn btn-primary" type="button" data-action="quick-transaction" data-type="${TRANSACTION_TYPES.import}" data-product-id="${escapeHTML(product.id)}">Nhập kho</button>` : "",
-    hasPermission(PERMISSIONS.exportInventory, product.categoryId) ? `<button class="btn btn-secondary" type="button" data-action="quick-transaction" data-type="${TRANSACTION_TYPES.export}" data-product-id="${escapeHTML(product.id)}">Xuất kho</button>` : "",
+    hasPermission(PERMISSIONS.importInventory, product.categoryId) ? `<button class="btn btn-primary" type="button" data-action="quick-transaction" data-type="${TRANSACTION_TYPES.import}" data-product-id="${escapeHTML(product.id)}">Nhập</button>` : "",
+    hasPermission(PERMISSIONS.exportInventory, product.categoryId) ? `<button class="btn btn-secondary" type="button" data-action="quick-transaction" data-type="${TRANSACTION_TYPES.export}" data-product-id="${escapeHTML(product.id)}">Xuất</button>` : "",
     hasPermission(PERMISSIONS.countInventory, product.categoryId) ? `<button class="btn btn-secondary" type="button" data-action="quick-transaction" data-type="${TRANSACTION_TYPES.adjust}" data-product-id="${escapeHTML(product.id)}">Điều chỉnh</button>` : "",
   ].filter(Boolean).join("");
-  const editButton = hasPermission(PERMISSIONS.editProduct, product.categoryId)
-    ? `<button class="btn btn-secondary" type="button" data-action="edit-product" data-product-id="${escapeHTML(product.id)}">Sửa thông tin</button>`
-    : "";
+  const canViewRecentHistory = hasPermission(PERMISSIONS.viewHistory, product.categoryId);
+  const recentTransactions = canViewRecentHistory ? visibleTransactions().filter((transaction) => transaction.productId === product.id).slice(0, 5) : [];
+  const canManageProduct = hasPermission(PERMISSIONS.editProduct, product.categoryId)
+    || hasPermission(PERMISSIONS.archiveProduct, product.categoryId)
+    || canDeleteTestProduct();
 
   openModal({
     name: "product-detail",
     title: productDisplayName(product),
-    subtitle: `${category?.name || "Chưa phân nhóm"}${status ? ` · ${status.label}` : ""}`,
-    body: `<div class="detail-grid">${quantityRows}</div>
-      ${stockActions ? `<div class="stock-action-grid" aria-label="Thao tác tồn kho">${stockActions}</div>` : ""}
-      <div class="detail-grid" style="margin-top:14px"><div class="detail-row"><div class="detail-key">Đơn vị</div><div class="detail-value">${escapeHTML(product.unit)}</div></div>${attributeRows}<div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(product.note || "—")}</div></div><div class="detail-row"><div class="detail-key">Cập nhật</div><div class="detail-value">${formatDateTime(product.updatedAt)}</div></div></div>
-      ${hasPermission(PERMISSIONS.archiveProduct, product.categoryId) ? `<button class="btn btn-danger-soft btn-block" style="margin-top:14px" type="button" data-action="archive-product" data-product-id="${escapeHTML(product.id)}">${icon("archive")} Lưu trữ vật liệu</button>` : ""}
-      ${canDeleteTestProduct() ? `<button class="btn btn-danger-soft btn-block" style="margin-top:10px" type="button" data-action="delete-test-product" data-product-id="${escapeHTML(product.id)}">${icon("trash")} Xóa vật liệu test</button>` : ""}`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>${editButton}`,
+    subtitle: category?.name || "Chưa phân nhóm",
+    headerActions: canManageProduct ? `<button class="icon-btn" type="button" data-action="open-product-actions" data-product-id="${escapeHTML(product.id)}" aria-label="Tùy chọn vật liệu">${icon("more")}</button>` : "",
+    body: `<div class="product-stock-card">
+        <div class="product-stock-label">Tồn hiện tại</div>
+        <div class="product-stock-value">${canViewQuantity ? `${formatQuantity(product.quantity)} <span>${escapeHTML(product.unit)}</span>` : "Đã ẩn"}</div>
+        ${status ? `<span class="badge ${status.className}">${escapeHTML(status.label)}</span>` : ""}
+      </div>
+      ${stockActions ? `<div class="stock-action-grid product-detail-actions" aria-label="Thao tác tồn kho">${stockActions}</div>` : ""}
+      ${canViewRecentHistory ? `<section class="product-detail-section" aria-labelledby="product-recent-title">
+        <div class="product-detail-section-head"><h3 id="product-recent-title">Gần đây</h3><span>${recentTransactions.length ? `${recentTransactions.length} giao dịch` : ""}</span></div>
+        <div class="product-recent-list">${recentTransactions.length ? recentTransactions.map(renderProductRecentTransaction).join("") : `<div class="product-recent-empty">Chưa có giao dịch gần đây.</div>`}</div>
+      </section>` : ""}
+      <details class="product-more-info">
+        <summary>Thông tin thêm</summary>
+        <div class="detail-grid product-more-info-grid">
+          <div class="detail-row"><div class="detail-key">Đơn vị</div><div class="detail-value">${escapeHTML(product.unit)}</div></div>
+          ${canViewQuantity ? `<div class="detail-row"><div class="detail-key">Mức cảnh báo</div><div class="detail-value">${formatQuantity(product.warningLevel)} ${escapeHTML(product.unit)}</div></div>` : ""}
+          ${attributeRows}
+          <div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(product.note || "—")}</div></div>
+          <div class="detail-row"><div class="detail-key">Cập nhật</div><div class="detail-value">${formatDateTime(product.updatedAt)}</div></div>
+        </div>
+      </details>`,
   });
 }
 
@@ -3161,38 +4423,44 @@ function productFormBody(product = null, categoryId = null) {
   const selectedCategory = categoryById(categoryId || product?.categoryId || categories[0]?.id);
   if (!selectedCategory) return renderEmptyState("warning", "Chưa có nhóm vật liệu", "Hãy tạo nhóm trước khi thêm vật liệu.");
   const attributes = product?.attributes || {};
-  const generatedName = product ? productDisplayName(product) : buildProductDisplayName(selectedCategory, attributes);
+  const automaticName = buildProductDisplayName(selectedCategory, attributes);
+  const previewName = String(product?.customName || "").trim() ? productDisplayName(product) : automaticName;
+  const categoryField = product
+    ? `<div class="product-edit-category"><span>Nhóm vật liệu</span><strong>${escapeHTML(selectedCategory.icon)} ${escapeHTML(selectedCategory.name)}</strong><input type="hidden" name="categoryId" value="${escapeHTML(selectedCategory.id)}"></div>`
+    : `<label class="field" for="product-category"><span class="field-label">Nhóm vật liệu</span><select id="product-category" name="categoryId" class="select">${categories.map((category) => `<option value="${escapeHTML(category.id)}" ${category.id === selectedCategory.id ? "selected" : ""}>${escapeHTML(category.icon)} ${escapeHTML(category.name)}</option>`).join("")}</select></label>`;
+
   return `<form id="product-form" class="field-grid" novalidate>
     <input type="hidden" name="id" value="${escapeHTML(product?.id || "")}">
     <input type="hidden" name="expectedRevision" value="${escapeHTML(product?.revision ?? "")}">
-    <label class="field" for="product-category"><span class="field-label">Nhóm vật liệu</span><select id="product-category" name="categoryId" class="select" ${product ? "disabled" : ""}>
-      ${categories.map((category) => `<option value="${escapeHTML(category.id)}" ${category.id === selectedCategory.id ? "selected" : ""}>${escapeHTML(category.icon)} ${escapeHTML(category.name)}</option>`).join("")}
-    </select>${product ? `<input type="hidden" name="categoryId" value="${escapeHTML(selectedCategory.id)}">` : ""}</label>
+    ${product ? `<div class="product-name-preview"><span>Tên sau khi lưu</span><strong id="generated-product-name">${escapeHTML(previewName)}</strong></div>` : ""}
+    ${categoryField}
 
     <div id="product-attribute-fields" class="field-grid">
       ${orderedCategoryAttributes(selectedCategory).map((attribute) => renderProductAttributeField(attribute, attributes[attribute.id])).join("")}
     </div>
 
-    <label class="field" for="product-custom-name"><span class="field-label">Tên hiển thị tùy chỉnh</span><input id="product-custom-name" name="customName" class="input" type="text" autocomplete="off" value="${escapeHTML(product?.customName || "")}" placeholder="Để trống để tạo tên tự động"><span class="field-help">Tên tự động dự kiến theo thứ tự thuộc tính: <strong id="generated-product-name">${escapeHTML(generatedName)}</strong></span></label>
+    <label class="field" for="product-custom-name"><span class="field-label">Tên riêng <span class="optional-label">(không bắt buộc)</span></span><input id="product-custom-name" name="customName" class="input" type="text" autocomplete="off" value="${escapeHTML(product?.customName || "")}" placeholder="Để trống để dùng tên tự động">${product ? "" : `<span class="field-help">Tên tự động: <strong id="generated-product-name">${escapeHTML(automaticName)}</strong></span>`}</label>
 
     <div class="field-grid two">
       <label class="field" for="product-unit"><span class="field-label">Đơn vị</span><select id="product-unit" name="unit" class="select">${selectedCategory.units.map((unit) => `<option value="${escapeHTML(unit)}" ${unit === (product?.unit || selectedCategory.defaultUnit) ? "selected" : ""}>${escapeHTML(unit)}</option>`).join("")}</select></label>
-      <label class="field" for="product-warning"><span class="field-label">Mức cảnh báo</span><input id="product-warning" name="warningLevel" class="input" type="number" inputmode="decimal" min="0" step="any" value="${escapeHTML(product?.warningLevel ?? selectedCategory.warningDefault)}"></label>
+      <label class="field" for="product-warning"><span class="field-label">Cảnh báo khi còn</span><input id="product-warning" name="warningLevel" class="input" type="number" inputmode="decimal" min="0" step="any" value="${escapeHTML(product?.warningLevel ?? selectedCategory.warningDefault)}"></label>
     </div>
 
-    ${product ? "" : `<label class="field" for="product-initial-stock"><span class="field-label">Tồn khởi tạo</span><input id="product-initial-stock" name="initialStock" class="input" type="number" inputmode="decimal" min="0" step="any" value="0"><span class="field-help">Tạo cùng giao dịch khởi tạo. Production sẽ thực hiện trong một transaction database.</span></label>`}
+    ${product ? "" : `<label class="field" for="product-initial-stock"><span class="field-label">Tồn khởi tạo</span><input id="product-initial-stock" name="initialStock" class="input" type="number" inputmode="decimal" min="0" step="any" value="0"></label>`}
 
-    <label class="field" for="product-note"><span class="field-label">Ghi chú</span><textarea id="product-note" name="note" class="textarea" rows="3" placeholder="Thông tin cần lưu ý">${escapeHTML(product?.note || "")}</textarea></label>
+    <label class="field" for="product-note"><span class="field-label">Ghi chú <span class="optional-label">(không bắt buộc)</span></span><textarea id="product-note" name="note" class="textarea" rows="2" placeholder="">${escapeHTML(product?.note || "")}</textarea></label>
+    ${product ? '<div class="helper-block">Tồn kho không thay đổi khi sửa thông tin. Lịch sử cũ vẫn giữ thông tin tại thời điểm giao dịch.</div>' : ""}
   </form>`;
 }
 
 function renderProductAttributeField(attribute, value = "") {
   const required = attribute.required ? "required" : "";
-  const label = `${escapeHTML(attribute.name)}${attribute.required ? " *" : ""}`;
+  const unitLabel = attribute.unit ? ` <span class="optional-label">(${escapeHTML(attribute.unit)})</span>` : "";
+  const label = `${escapeHTML(attribute.name)}${unitLabel}${attribute.required ? " *" : ""}`;
   if (attribute.type === "select") {
     return `<label class="field" for="attr-${escapeHTML(attribute.id)}"><span class="field-label">${label}</span><select id="attr-${escapeHTML(attribute.id)}" name="attr:${escapeHTML(attribute.id)}" class="select" ${required}><option value="">Chọn ${escapeHTML(attribute.name.toLowerCase())}</option>${attribute.options.map((option) => `<option value="${escapeHTML(option)}" ${String(value) === String(option) ? "selected" : ""}>${escapeHTML(option)}</option>`).join("")}</select></label>`;
   }
-  return `<label class="field" for="attr-${escapeHTML(attribute.id)}"><span class="field-label">${label}</span><input id="attr-${escapeHTML(attribute.id)}" name="attr:${escapeHTML(attribute.id)}" class="input" type="${attribute.type === "number" ? "number" : "text"}" ${attribute.type === "number" ? 'inputmode="decimal" min="0" step="any"' : 'autocomplete="off"'} value="${escapeHTML(value)}" ${required}><span class="field-help">${attribute.unit ? `Đơn vị thuộc tính: ${escapeHTML(attribute.unit)}.` : attribute.identity ? "Thuộc tính tham gia chống trùng." : ""}</span></label>`;
+  return `<label class="field" for="attr-${escapeHTML(attribute.id)}"><span class="field-label">${label}</span><input id="attr-${escapeHTML(attribute.id)}" name="attr:${escapeHTML(attribute.id)}" class="input" type="${attribute.type === "number" ? "number" : "text"}" ${attribute.type === "number" ? 'inputmode="decimal" min="0" step="any"' : 'autocomplete="off"'} value="${escapeHTML(value)}" ${required}></label>`;
 }
 
 function openProductForm(productId = null) {
@@ -3203,7 +4471,7 @@ function openProductForm(productId = null) {
   openModal({
     name: "product-form",
     title: product ? "Sửa vật liệu" : "Thêm vật liệu",
-    subtitle: product ? "Số tồn chỉ thay đổi bằng giao dịch kho." : "Khóa chống trùng được tạo từ thuộc tính nhận diện.",
+    subtitle: product ? "Sửa thông số, đơn vị, cảnh báo hoặc ghi chú." : "Thêm quy cách vật liệu mới.",
     body: productFormBody(product),
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-primary" type="submit" form="product-form">${product ? "Lưu thay đổi" : "Tạo vật liệu"}</button>`,
   });
@@ -3232,7 +4500,8 @@ function updateGeneratedProductName() {
   for (const attribute of orderedCategoryAttributes(category)) {
     attributes[attribute.id] = formData.get(`attr:${attribute.id}`) ?? "";
   }
-  setText("#generated-product-name", buildProductDisplayName(category, attributes), form);
+  const customName = String(formData.get("customName") || "").trim();
+  setText("#generated-product-name", customName || buildProductDisplayName(category, attributes), form);
 }
 
 function transactionTypeOptionsForCategory(categoryId) {
@@ -3249,10 +4518,15 @@ function renderTransactionTypeButtons(categoryId, selectedType = "") {
   return options.map(([type, label]) => `<button class="segmented-item" type="button" data-action="select-transaction-type" data-type="${type}" aria-pressed="${type === effectiveType}">${label}</button>`).join("");
 }
 
-function transactionSubmitLabel(type) {
-  if (type === TRANSACTION_TYPES.import) return "Nhập kho";
-  if (type === TRANSACTION_TYPES.export) return "Xuất kho";
-  if (type === TRANSACTION_TYPES.adjust) return "Lưu tồn";
+function transactionSubmitLabel(type, amount = null, unit = "") {
+  const hasAmount = amount !== null && amount !== undefined && String(amount).trim() !== "";
+  const normalizedAmount = hasAmount ? normalizeQuantity(amount, Number.NaN) : Number.NaN;
+  const suffix = Number.isFinite(normalizedAmount)
+    ? ` ${formatQuantity(normalizedAmount)}${unit ? ` ${unit}` : ""}`
+    : "";
+  if (type === TRANSACTION_TYPES.import) return `Nhập${suffix}`;
+  if (type === TRANSACTION_TYPES.export) return `Xuất${suffix}`;
+  if (type === TRANSACTION_TYPES.adjust) return Number.isFinite(normalizedAmount) ? `Lưu tồn ${formatQuantity(normalizedAmount)}${unit ? ` ${unit}` : ""}` : "Lưu tồn";
   return "Lưu";
 }
 
@@ -3278,7 +4552,7 @@ function transactionFormBody(productId = null, preferredType = null) {
     <label class="field" for="transaction-amount"><span id="transaction-amount-label" class="field-label">${firstType === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng"}</span>
       <div class="quantity-stepper">
         <button class="quantity-stepper-btn" type="button" data-action="transaction-step" data-delta="-1" aria-label="Giảm 1">−</button>
-        <input id="transaction-amount" name="amount" class="input quantity-stepper-input" type="number" inputmode="decimal" min="0" max="${MAX_QUANTITY}" step="any" required value="${firstType === TRANSACTION_TYPES.adjust ? escapeHTML(String(normalizeQuantity(selected.quantity, 0))) : ""}">
+        <input id="transaction-amount" name="amount" class="input quantity-stepper-input" type="number" inputmode="decimal" min="0" max="${MAX_QUANTITY}" step="any" required value="${firstType === TRANSACTION_TYPES.adjust ? escapeHTML(String(normalizeQuantity(selected.quantity, 0))) : "1"}">
         <button class="quantity-stepper-btn" type="button" data-action="transaction-step" data-delta="1" aria-label="Tăng 1">+</button>
       </div>
       <span id="transaction-unit-help" class="field-help">${escapeHTML(selected.unit)}</span>
@@ -3322,29 +4596,51 @@ function updateTransactionPreview() {
   }
   const typeButtons = $("#transaction-type-buttons", form);
   if (typeButtons) typeButtons.innerHTML = renderTransactionTypeButtons(product.categoryId, type);
-  const rawAmount = String(formData.get("amount") ?? "").trim();
+
+  const amountInput = $("#transaction-amount", form);
+  const stepperMinimum = type === TRANSACTION_TYPES.adjust ? 0 : 1;
+  if (amountInput) amountInput.min = "0";
+
+  const rawAmount = String(new FormData(form).get("amount") ?? "").trim();
   const hasAmount = rawAmount !== "";
   const amount = hasAmount ? normalizeQuantity(rawAmount, Number.NaN) : Number.NaN;
-  let after = normalizeQuantity(product.quantity, 0);
+  const currentQuantity = normalizeQuantity(product.quantity, 0);
+  let after = currentQuantity;
   if (hasAmount && Number.isFinite(amount)) {
-    if (type === TRANSACTION_TYPES.import) after = normalizeQuantity(after + amount, 0);
-    if (type === TRANSACTION_TYPES.export) after = normalizeQuantity(after - amount, 0);
+    if (type === TRANSACTION_TYPES.import) after = normalizeQuantity(currentQuantity + amount, 0);
+    if (type === TRANSACTION_TYPES.export) after = normalizeQuantity(currentQuantity - amount, 0);
     if (type === TRANSACTION_TYPES.adjust) after = amount;
   }
+
+  const positiveTransaction = [TRANSACTION_TYPES.import, TRANSACTION_TYPES.export].includes(type);
+  const invalidNumber = !hasAmount || !Number.isFinite(amount);
+  const invalidMinimum = positiveTransaction ? amount <= 0 : amount < 0;
+  const insufficientStock = type === TRANSACTION_TYPES.export && Number.isFinite(amount) && amount > currentQuantity;
+  const exceedsMaximum = Number.isFinite(amount) && (amount > MAX_QUANTITY || after > MAX_QUANTITY);
+  const invalid = invalidNumber || invalidMinimum || insufficientStock || exceedsMaximum || after < 0;
+
   setText("#transaction-amount-label", type === TRANSACTION_TYPES.adjust ? "Tồn thực tế" : "Số lượng", form);
   setText("#transaction-unit-help", product.unit, form);
-  setText("#transaction-submit", transactionSubmitLabel(type));
+  setText("#transaction-submit", transactionSubmitLabel(type, Number.isFinite(amount) ? amount : null, product.unit));
+
+  const minusButton = $("[data-action='transaction-step'][data-delta='-1']", form);
+  if (minusButton) minusButton.disabled = Number.isFinite(amount) && amount <= stepperMinimum;
+  const submitButton = $("#transaction-submit");
+  if (submitButton) submitButton.disabled = invalid;
+
   const preview = $("#transaction-preview", form);
-  if (preview) {
-    const invalid = hasAmount && (!Number.isFinite(amount) || after < 0 || after > MAX_QUANTITY || ([TRANSACTION_TYPES.import, TRANSACTION_TYPES.export].includes(type) && amount <= 0));
-    preview.classList.toggle("helper-danger", invalid);
-    if (!hasAmount) {
-      preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong>`;
-    } else if (invalid) {
-      preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong> · <strong>Số lượng không hợp lệ</strong>`;
-    } else {
-      preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(product.quantity)} ${escapeHTML(product.unit)}</strong> → <strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`;
-    }
+  if (!preview) return;
+  preview.classList.toggle("helper-danger", invalid);
+  if (invalidNumber) {
+    preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(currentQuantity)} ${escapeHTML(product.unit)}</strong> · <strong>Nhập số lượng</strong>`;
+  } else if (insufficientStock) {
+    preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(currentQuantity)} ${escapeHTML(product.unit)}</strong> · <strong>Chỉ còn ${formatQuantity(currentQuantity)} ${escapeHTML(product.unit)}</strong>`;
+  } else if (invalidMinimum) {
+    preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(currentQuantity)} ${escapeHTML(product.unit)}</strong> · <strong>${positiveTransaction ? "Số lượng phải lớn hơn 0" : "Tồn không được âm"}</strong>`;
+  } else if (exceedsMaximum || after < 0) {
+    preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(currentQuantity)} ${escapeHTML(product.unit)}</strong> · <strong>Số lượng không hợp lệ</strong>`;
+  } else {
+    preview.innerHTML = `Tồn hiện tại: <strong>${formatQuantity(currentQuantity)} ${escapeHTML(product.unit)}</strong> → <strong>${formatQuantity(after)} ${escapeHTML(product.unit)}</strong>`;
   }
 }
 
@@ -3357,58 +4653,139 @@ function canReverseTransactionRecord(transaction) {
   return Boolean(latest?.id === transaction.id && product && quantitiesEqual(product.quantity, transaction.afterQuantity));
 }
 
+async function ensureLatestTransactionForProduct(productId) {
+  const existing = latestTransactionForProduct(productId);
+  if (existing) return existing;
+  try {
+    const result = await dataService.listTransactions({ limit: 1, offset: 0, productId });
+    const latest = Array.isArray(result) ? result[0] : result?.items?.[0];
+    if (!latest) return null;
+    const byId = new Map(appState.cache.transactions.map((transaction) => [transaction.id, transaction]));
+    byId.set(latest.id, latest);
+    appState.cache.transactions = [...byId.values()].sort((left, right) => {
+      const timeDiff = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+      return timeDiff || String(right.id).localeCompare(String(left.id));
+    }).slice(0, 60);
+    return latest;
+  } catch (error) {
+    console.warn("Không kiểm tra được giao dịch mới nhất của vật liệu.", error);
+    return null;
+  }
+}
+
 function transactionSnapshotRows(transaction) {
   const snapshot = transaction.productSnapshot;
   if (!snapshot?.attributes?.length) return "";
   return snapshot.attributes.map((attribute) => `<div class="detail-row"><div class="detail-key">${escapeHTML(attribute.name)}</div><div class="detail-value">${escapeHTML(`${attribute.value ?? ""}${attribute.unit ? ` ${attribute.unit}` : ""}` || "—")}</div></div>`).join("");
 }
 
-function openTransactionDetail(transactionId) {
+async function openTransactionDetail(transactionId) {
   const transaction = transactionById(transactionId);
-  if (!transaction || !hasPermission(PERMISSIONS.viewHistory, transaction.categoryId)) return showToast("error", "Không có quyền xem lịch sử nhóm này");
   if (!transaction) return showToast("error", "Không tìm thấy giao dịch");
+  if (!hasPermission(PERMISSIONS.viewHistory, transaction.categoryId)) return showToast("error", "Không có quyền xem lịch sử nhóm này");
+  if (hasPermission(PERMISSIONS.reverseTransaction, transaction.categoryId) && ![TRANSACTION_TYPES.initial, TRANSACTION_TYPES.reverse].includes(transaction.type) && !transaction.reversalTransactionId && !transaction.reversedAt) {
+    await ensureLatestTransactionForProduct(transaction.productId);
+  }
   const delta = normalizeQuantity(transaction.afterQuantity - transaction.beforeQuantity, 0);
   const statusNotice = transaction.reversalTransactionId
-    ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Giao dịch đã được đảo</div><div class="notice-text">${escapeHTML(transaction.reversedBy || "Người có quyền")} đã tạo bản ghi đảo lúc ${formatDateTime(transaction.reversedAt)}.</div></div></div>`
+    ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Đã hoàn tác</div><div class="notice-text">Giao dịch này đã được hoàn tác lúc ${formatDateTime(transaction.reversedAt)}.</div></div></div>`
     : transaction.reversalOf
-      ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("history")}</div><div><div class="notice-title">Đây là giao dịch đảo</div><div class="notice-text">Bản ghi này khôi phục tồn trước giao dịch ${escapeHTML(transaction.reversalOf)}.</div></div></div>`
+      ? `<div class="notice notice-warning" style="margin-top:14px"><div class="notice-icon">${icon("history")}</div><div><div class="notice-title">Giao dịch hoàn tác</div><div class="notice-text">Bản ghi này đưa tồn về trạng thái trước giao dịch gốc.</div></div></div>`
       : "";
   const reverseButton = canReverseTransactionRecord(transaction)
-    ? `<button class="btn btn-danger" type="button" data-action="open-reverse-transaction" data-transaction-id="${escapeHTML(transaction.id)}">Đảo giao dịch</button>`
+    ? `<button class="btn btn-danger" type="button" data-action="open-reverse-transaction" data-transaction-id="${escapeHTML(transaction.id)}">Hoàn tác</button>`
     : "";
   openModal({
     name: "transaction-detail",
     title: TRANSACTION_LABELS[transaction.type] || "Chi tiết giao dịch",
-    subtitle: `${transaction.productName} · ${formatDateTime(transaction.createdAt)}`,
-    body: `<div class="detail-grid">
-      <div class="detail-row"><div class="detail-key">Người thực hiện</div><div class="detail-value">${escapeHTML(transaction.actor)}</div></div>
-      <div class="detail-row"><div class="detail-key">Tồn trước</div><div class="detail-value">${formatQuantity(transaction.beforeQuantity)} ${escapeHTML(transaction.unit)}</div></div>
-      <div class="detail-row"><div class="detail-key">Tồn sau</div><div class="detail-value">${formatQuantity(transaction.afterQuantity)} ${escapeHTML(transaction.unit)}</div></div>
-      <div class="detail-row"><div class="detail-key">Chênh lệch</div><div class="detail-value">${delta > 0 ? "+" : ""}${formatQuantity(delta)} ${escapeHTML(transaction.unit)}</div></div>
-      <div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(transaction.note || "—")}</div></div>
-      <div class="detail-row"><div class="detail-key">Nhóm lúc giao dịch</div><div class="detail-value">${escapeHTML(transaction.productSnapshot?.categoryName || transaction.categoryId || "—")}</div></div>
-      ${transactionSnapshotRows(transaction)}
-      <div class="detail-row"><div class="detail-key">Mã giao dịch</div><div class="detail-value code-like">${escapeHTML(transaction.id)}</div></div>
+    subtitle: transaction.productName,
+    body: `<div class="transaction-detail-summary">
+      <div class="transaction-detail-amount">${delta > 0 ? "+" : ""}${formatQuantity(delta)} <span>${escapeHTML(transaction.unit)}</span></div>
+      <div>${formatDateTime(transaction.createdAt)}</div>
+    </div>
+    <div class="detail-grid">
+      <div class="detail-row"><div class="detail-key">Tồn trước → sau</div><div class="detail-value">${formatQuantity(transaction.beforeQuantity)} → ${formatQuantity(transaction.afterQuantity)} ${escapeHTML(transaction.unit)}</div></div>
+      ${transaction.note ? `<div class="detail-row"><div class="detail-key">Ghi chú</div><div class="detail-value">${escapeHTML(transaction.note)}</div></div>` : ""}
+      <div class="detail-row"><div class="detail-key">Người thực hiện</div><div class="detail-value">${escapeHTML(transaction.actor || "—")}</div></div>
     </div>${statusNotice}`,
     footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Đóng</button>${reverseButton}`,
   });
 }
 
+function reverseReasonOptions(transaction) {
+  const contextual = transaction?.type === TRANSACTION_TYPES.import
+    ? "Nhập nhầm"
+    : transaction?.type === TRANSACTION_TYPES.export
+      ? "Xuất nhầm"
+      : "Điều chỉnh nhầm";
+  return [contextual, "Sai số lượng", "Nhầm vật liệu", "Khác"];
+}
+
+function updateReverseReasonState() {
+  const form = $("#reverse-transaction-form");
+  if (!form) return;
+  const selected = $("[data-action='select-reverse-reason'][aria-pressed='true']", form);
+  const preset = String(selected?.dataset.reason || "");
+  const customWrap = $("#reverse-custom-reason-wrap", form);
+  const customInput = $("#reverse-custom-reason", form);
+  const reasonInput = $("#reverse-reason", form);
+  const submitButton = $("[type='submit'][form='reverse-transaction-form']");
+  const useCustom = preset === "Khác";
+  if (customWrap) customWrap.hidden = !useCustom;
+  const reason = useCustom ? String(customInput?.value || "").trim() : preset;
+  if (reasonInput) reasonInput.value = reason;
+  if (submitButton) submitButton.disabled = !reason;
+}
+
 function openReverseTransactionModal(transactionId) {
   const transaction = transactionById(transactionId);
-  if (!canReverseTransactionRecord(transaction)) return showToast("error", "Không thể đảo giao dịch", "Chỉ giao dịch mới nhất, chưa bị đảo và còn khớp tồn hiện tại mới được phép đảo.");
+  if (!canReverseTransactionRecord(transaction)) return showToast("error", "Không thể hoàn tác", "Chỉ giao dịch mới nhất, chưa được hoàn tác và còn khớp tồn hiện tại mới được phép hoàn tác.");
+  const reasons = reverseReasonOptions(transaction);
   closeModal(true);
   openModal({
     name: "reverse-transaction-form",
-    title: "Đảo giao dịch",
+    title: "Hoàn tác giao dịch",
     subtitle: `${transaction.productName} · ${TRANSACTION_LABELS[transaction.type]}`,
     body: `<form id="reverse-transaction-form" class="field-grid" novalidate>
       <input type="hidden" name="transactionId" value="${escapeHTML(transaction.id)}">
       <input type="hidden" name="requestKey" value="${escapeHTML(makeId("reverse-request"))}">
-      <div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Không xóa lịch sử</div><div class="notice-text">Hệ thống sẽ tạo một giao dịch mới để đưa tồn từ ${formatQuantity(transaction.afterQuantity)} về ${formatQuantity(transaction.beforeQuantity)} ${escapeHTML(transaction.unit)}.</div></div></div>
-      <label class="field" for="reverse-reason"><span class="field-label">Lý do đảo giao dịch *</span><textarea id="reverse-reason" name="reason" class="textarea" rows="4" required autofocus placeholder="Ví dụ: Nhập nhầm số lượng hoặc chọn nhầm vật liệu"></textarea></label>
+      <input id="reverse-reason" type="hidden" name="reason" value="">
+      <div class="notice notice-danger"><div class="notice-icon">${icon("warning")}</div><div><div class="notice-title">Hoàn tác sẽ đổi lại tồn</div><div class="notice-text">Tồn sẽ từ ${formatQuantity(transaction.afterQuantity)} về ${formatQuantity(transaction.beforeQuantity)} ${escapeHTML(transaction.unit)}. Lịch sử cũ vẫn được giữ.</div></div></div>
+      <fieldset class="field"><legend class="field-label">Lý do hoàn tác *</legend>
+        <div class="quick-reason-grid" role="group" aria-label="Chọn lý do hoàn tác">${reasons.map((reason) => `<button class="quick-reason-btn" type="button" data-action="select-reverse-reason" data-reason="${escapeHTML(reason)}" aria-pressed="false">${escapeHTML(reason)}</button>`).join("")}</div>
+      </fieldset>
+      <label id="reverse-custom-reason-wrap" class="field" for="reverse-custom-reason" hidden><span class="field-label">Lý do khác</span><textarea id="reverse-custom-reason" class="textarea" rows="3" maxlength="300" placeholder="Nhập lý do ngắn gọn"></textarea></label>
     </form>`,
-    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="reverse-transaction-form">Xác nhận đảo</button>`,
+    footer: `<button class="btn btn-secondary" type="button" data-action="close-modal">Hủy</button><button class="btn btn-danger" type="submit" form="reverse-transaction-form" disabled>Hoàn tác</button>`,
+  });
+}
+
+function openFaqModal() {
+  openModal({
+    name: "faq",
+    title: "Hướng dẫn sử dụng",
+    subtitle: "Cách dùng và xử lý các lỗi thường gặp.",
+    body: `<div class="faq-list">
+      <details open><summary>Bắt đầu sử dụng như thế nào?</summary><div><strong>1.</strong> Vào <strong>Kho</strong> để tìm vật liệu. <strong>2.</strong> Chạm vật liệu để xem tồn. <strong>3.</strong> Chọn <strong>Nhập / Xuất / Điều chỉnh</strong>. <strong>4.</strong> Xem lại giao dịch trong <strong>Lịch sử</strong>. Dấu <strong>?</strong> ở góc trên luôn mở lại hướng dẫn này.</div></details>
+      <details><summary>Tìm và lọc vật liệu như thế nào?</summary><div>Gõ các phần bạn nhớ, không cần đúng thứ tự, không cần dấu tiếng Việt hoặc dấu phân cách. Ví dụ <strong>dao cat 0.7 23.8</strong>. Có thể lọc thêm theo nhóm, tình trạng và số lượng dưới một mức. Nếu tìm không ra, hãy xóa bớt từ khóa hoặc bỏ bộ lọc đang bật.</div></details>
+      <details><summary>Nhập kho dùng như thế nào?</summary><div>Mở vật liệu → <strong>Nhập</strong>. Số lượng mặc định là <strong>1</strong>; bấm <strong>+</strong> hoặc <strong>−</strong> để tăng/giảm từng 1, hoặc chạm vào số để nhập trực tiếp. Nút − không giảm dưới 1; nếu cần số lẻ có thể chạm vào số và nhập trực tiếp. Ghi chú là tùy chọn.</div></details>
+      <details><summary>Xuất kho dùng như thế nào? Khi nào bị lỗi?</summary><div>Mở vật liệu → <strong>Xuất</strong>. Số lượng mặc định là <strong>1</strong>; nút +/− thay đổi từng 1 và vẫn có thể nhập trực tiếp, kể cả số lẻ khi cần. App không cho xuất quá tồn. Nếu hiện <strong>Chỉ còn…</strong>, hãy giảm số xuất hoặc kiểm tra thực tế rồi dùng <strong>Điều chỉnh</strong> nếu tồn trên app đang sai.</div></details>
+      <details><summary>Điều chỉnh tồn dùng khi nào?</summary><div>Dùng sau khi đếm thực tế và thấy tồn trên app không đúng. Khi mở, số mặc định chính là <strong>tồn hiện tại</strong>; dùng +/− từng 1 hoặc nhập trực tiếp <strong>số tồn thực tế cuối cùng</strong>. Ví dụ app có 12 nhưng thực tế còn 10 thì nhập 10, không nhập −2.</div></details>
+      <details><summary>Ghi chú có bắt buộc không?</summary><div>Với <strong>Nhập / Xuất / Điều chỉnh</strong>, ghi chú là tùy chọn. <strong>Hoàn tác</strong> vẫn cần lý do, nhưng chỉ cần chạm một lý do nhanh như <strong>Xuất nhầm / Sai số lượng / Nhầm vật liệu</strong>. Chỉ khi chọn <strong>Khác</strong> mới phải nhập chữ.</div></details>
+      <details><summary>Sửa vật liệu như thế nào?</summary><div>Mở vật liệu → nút <strong>⋯</strong> → <strong>Sửa vật liệu</strong>. Có thể sửa thông số, đơn vị, mức cảnh báo, ghi chú hoặc tên hiển thị. Tên sau khi lưu được xem trước ngay trong form. Tồn kho không thay đổi khi sửa thông tin.</div></details>
+      <details><summary>Vì sao sửa vật liệu báo trùng quy cách?</summary><div>Hệ thống chống tạo hai vật liệu có cùng bộ thông số nhận diện. Nếu báo trùng, hãy tìm lại vật liệu đang có trước khi tạo hoặc sửa. Không nên đổi thông số chỉ để vượt kiểm tra trùng vì sẽ làm dữ liệu khó đối soát.</div></details>
+      <details><summary>Lịch sử xem và tìm như thế nào?</summary><div>Vào <strong>Lịch sử</strong>, dùng ‹ › để chuyển tháng. Có thể tìm theo tên/thông số hoặc mở <strong>Bộ lọc</strong> để chọn loại giao dịch, nhóm và khoảng ngày. Nếu có nhiều giao dịch, bấm <strong>Tải thêm</strong>; khi tìm kiếm, app sẽ quét toàn bộ phạm vi đang chọn.</div></details>
+      <details><summary>Hoàn tác giao dịch dùng khi nào? Vì sao không bấm được?</summary><div>Hoàn tác dùng khi giao dịch vừa ghi bị sai và cần đưa tồn về trạng thái trước đó. Chọn một <strong>lý do nhanh</strong>; chọn <strong>Khác</strong> mới cần gõ. Chỉ giao dịch mới nhất phù hợp, chưa từng hoàn tác và còn khớp tồn hiện tại mới được phép. Nếu không bấm được, thường là đã có giao dịch mới hơn, giao dịch đã hoàn tác hoặc tồn hiện tại đã thay đổi.</div></details>
+      <details><summary>Xuất PDF tồn kho như thế nào?</summary><div>Ở <strong>Kho</strong>, bấm PDF → chọn phạm vi → tick đúng những vật liệu muốn xuất → chọn các cột/thông số cần có → chọn A4 dọc/ngang → xuất. Nếu không tick vật liệu hoặc không chọn cột nào, app sẽ không tạo báo cáo. PDF chỉ chứa thông tin tài khoản hiện tại được quyền xem.</div></details>
+      <details><summary>Xuất PDF Lịch sử như thế nào?</summary><div>Chọn tháng hoặc bộ lọc Lịch sử trước, sau đó bấm PDF và chọn các thông tin muốn xuất. App lấy toàn bộ dữ liệu trong phạm vi đã chọn, không chỉ những dòng đầu đang hiện trên màn hình.</div></details>
+      <details><summary>Phân tích tháng đọc như thế nào?</summary><div>Vào <strong>Lịch sử → Phân tích</strong>. Các số Nhập, Xuất và tồn là dữ liệu thực tế từ lịch sử; xu hướng và lượng đề xuất mua là <strong>ước tính</strong> dựa trên mức dùng trước đó. Không so trực tiếp vật liệu khác đơn vị. Nếu lịch sử cũ đã bị ẩn/xóa hoặc dữ liệu chưa đủ, kết quả phân tích có thể thiếu và app sẽ hạn chế đưa ra đề xuất.</div></details>
+      <details><summary>Vì sao báo “Dữ liệu đã được người khác cập nhật”?</summary><div>Một thiết bị khác vừa sửa cùng vật liệu hoặc dữ liệu bạn đang mở đã cũ. Đóng form, chờ app đồng bộ hoặc mở lại vật liệu rồi thao tác lại. Đây là cơ chế bảo vệ để tránh ghi đè dữ liệu mới.</div></details>
+      <details><summary>Vì sao báo “Không có quyền”?</summary><div>Tài khoản hiện tại không được cấp thao tác đó hoặc không được thao tác trên nhóm vật liệu đó. Hãy dùng chức năng khác được cấp hoặc liên hệ Admin/Super Admin. Các mục <strong>Nâng cao</strong> chỉ Admin/Super Admin nhìn thấy.</div></details>
+      <details><summary>Vì sao báo mất kết nối hoặc không tải được dữ liệu?</summary><div>Kiểm tra Wi‑Fi/4G rồi mở lại app hoặc chờ kết nối trở lại. Khi có mạng, Realtime sẽ đồng bộ lại. Nếu vẫn lỗi trong khi mạng bình thường, thử đăng xuất/đăng nhập lại. Không nhập lặp nhiều lần khi chưa biết giao dịch trước đã thành công hay chưa; hãy kiểm tra <strong>Lịch sử</strong> trước.</div></details>
+      <details><summary>Phiên đăng nhập không còn hợp lệ nghĩa là gì?</summary><div>Phiên có thể đã hết hạn, tài khoản bị khóa/ngừng sử dụng hoặc mật khẩu vừa được quản trị đặt lại. Đăng nhập lại. Nếu vẫn không vào được, liên hệ Super Admin kiểm tra trạng thái tài khoản.</div></details>
+      <details><summary>Xóa vật liệu test và Lưu trữ khác nhau thế nào?</summary><div><strong>Lưu trữ</strong> chỉ ẩn vật liệu và vẫn giữ lịch sử; thường nên dùng cho vật liệu không còn sử dụng. <strong>Xóa vật liệu test</strong> xóa vĩnh viễn vật liệu cùng giao dịch liên quan và chỉ dành cho Admin/Super Admin. Không dùng xóa test cho dữ liệu thật.</div></details>
+    </div>`,
+    footer: `<button class="btn btn-primary" type="button" data-action="close-modal">Đóng hướng dẫn</button>`,
   });
 }
 
@@ -3433,7 +4810,7 @@ function accountFormBody(account = null) {
       <label class="field" for="account-role"><span class="field-label">Vai trò</span><select id="account-role" name="role" class="select">${roles.map((role) => `<option value="${role}" ${role === model.role ? "selected" : ""}>${escapeHTML(roleLabel(role))}</option>`).join("")}</select></label>
       <label class="field" for="account-status"><span class="field-label">Trạng thái</span>${canChangeStatus ? "" : `<input type="hidden" name="status" value="${escapeHTML(accountStatus(model))}">`}<select id="account-status" ${canChangeStatus ? 'name="status"' : ""} class="select" ${canChangeStatus ? "" : "disabled"}>${Object.entries(ACCOUNT_STATUS_LABELS).map(([value, label]) => `<option value="${value}" ${value === accountStatus(model) ? "selected" : ""}>${escapeHTML(label)}</option>`).join("")}</select>${!canChangeStatus ? '<span class="field-help">Không thể tự khóa tài khoản đang đăng nhập.</span>' : ""}</label>
     </div>
-    <label class="field" for="account-scope-mode"><span class="field-label">Phạm vi nhóm vật liệu</span><select id="account-scope-mode" name="scopeMode" class="select"><option value="all" ${model.scopeMode !== "custom" ? "selected" : ""}>Tất cả nhóm theo vai trò</option><option value="custom" ${model.scopeMode === "custom" ? "selected" : ""}>Tùy chỉnh theo từng nhóm</option></select><span class="field-help">Quyền quản trị hệ thống vẫn theo vai trò. Quyền thao tác cần kèm Xem kho; quyền giao dịch cần kèm Xem số lượng; Đảo giao dịch cần kèm Xem lịch sử.</span></label>
+    <label class="field" for="account-scope-mode"><span class="field-label">Phạm vi nhóm vật liệu</span><select id="account-scope-mode" name="scopeMode" class="select"><option value="all" ${model.scopeMode !== "custom" ? "selected" : ""}>Tất cả nhóm theo vai trò</option><option value="custom" ${model.scopeMode === "custom" ? "selected" : ""}>Tùy chỉnh theo từng nhóm</option></select><span class="field-help">Quyền quản trị hệ thống vẫn theo vai trò. Quyền thao tác cần kèm Xem kho; quyền giao dịch cần kèm Xem số lượng; Hoàn tác giao dịch cần kèm Xem lịch sử.</span></label>
     <div id="account-category-permissions" class="account-scope-editor">
       ${appState.cache.schema.categories.filter((category) => category.active !== false).map((category) => `<fieldset class="scope-permission-card" data-account-category="${escapeHTML(category.id)}"><legend>${escapeHTML(category.icon)} ${escapeHTML(category.name)}</legend><div class="scope-permission-grid">${CATEGORY_SCOPED_PERMISSIONS.map((permission) => {
         const checked = model.scopeMode === "custom" ? normalizedPermissions[category.id]?.includes(permission) : allowedScoped.has(permission);
@@ -3669,20 +5046,46 @@ function updateInventoryListOnly() {
 function updateHistoryListOnly() {
   const list = $("#history-list");
   if (!list) return;
-  const transactions = filteredTransactions();
-  list.innerHTML = transactions.length ? transactions.map(renderTransactionRow).join("") : renderEmptyState("history", "Không có giao dịch phù hợp", "Thử xóa bộ lọc hoặc chọn khoảng ngày khác.");
-  setText("#history-result-count", `${transactions.length} giao dịch`);
+  const transactions = filteredHistoryTransactions();
+  list.innerHTML = renderGroupedHistory(transactions);
+  setText("#history-result-count", historyResultCountText(transactions));
+}
+
+async function refreshHistoryForFilters({ loadAllForSearch = false } = {}) {
+  const { from, to } = appState.filters.history;
+  if (from && to && from > to) {
+    showToast("error", "Khoảng ngày không hợp lệ", "Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.");
+    return false;
+  }
+  const ok = await loadHistoryTransactions({ reset: true, loadAll: loadAllForSearch || Boolean(searchTokens(appState.filters.history.search).length), render: false });
+  renderApp();
+  return ok;
 }
 
 const debouncedInventoryFilter = debounce(updateInventoryListOnly, 160);
-const debouncedHistoryFilter = debounce(updateHistoryListOnly, 160);
+const debouncedHistoryFilter = debounce(async () => {
+  if (appState.screen !== SCREENS.history) return;
+  if (searchTokens(appState.filters.history.search).length && !appState.cache.historyMeta.allLoaded) {
+    await loadHistoryTransactions({ reset: true, loadAll: true, render: false });
+    renderApp();
+    return;
+  }
+  updateHistoryListOnly();
+}, 220);
 
 async function switchScreen(screen, manageTarget = null) {
   if (!Object.values(SCREENS).includes(screen)) return;
   appState.screen = screen;
-  if (manageTarget && Object.values(MANAGE_TABS).includes(manageTarget)) appState.manageTab = manageTarget;
+  if (screen === SCREENS.manage) {
+    if (manageTarget && Object.values(MANAGE_TABS).includes(manageTarget) && canOpenManageTab(manageTarget)) appState.manageTab = manageTarget;
+    else appState.manageTab = MANAGE_TABS.home;
+    if (!canOpenManageTab(appState.manageTab)) appState.manageTab = MANAGE_TABS.home;
+  }
   closeModal(true);
-  if (screen === SCREENS.history) await loadTransactions({ render: false, limit: 200 });
+  if (screen === SCREENS.history) {
+    if (appState.filters.history.view === "analysis") await loadMonthlyAnalysis({ render: false });
+    else await loadHistoryTransactions({ reset: true, loadAll: Boolean(searchTokens(appState.filters.history.search).length), render: false });
+  }
   if (screen === SCREENS.manage && appState.manageTab === MANAGE_TABS.accounts && hasPermission(PERMISSIONS.manageAccounts)) await loadAccountData({ render: false });
   renderApp();
   window.scrollTo({ top: 0, behavior: "auto" });
@@ -3705,7 +5108,7 @@ async function handleBootstrapSubmit(event, form) {
       appState.ui.initialized = true;
       const account = await dataService.login(payload.username, payload.password);
       setAuthenticatedAccount(account);
-      appState.screen = SCREENS.dashboard;
+      appState.screen = SCREENS.inventory;
       await loadBootstrap({ render: false });
       await loadTransactions({ render: false, limit: 50 });
       startRealtimeSync();
@@ -3727,8 +5130,18 @@ async function handleLoginSubmit(event, form) {
     try {
       const account = await dataService.login(data.get("username"), data.get("password"));
       setAuthenticatedAccount(account);
-      appState.screen = SCREENS.dashboard;
-      appState.cache = { schema: null, products: [], transactions: [], accounts: [], accountAudit: [], loaded: { bootstrap: false, transactions: false, accounts: false, accountAudit: false } };
+      appState.screen = SCREENS.inventory;
+      appState.cache = {
+        schema: null,
+        products: [],
+        transactions: [],
+        historyTransactions: [],
+        historyMeta: { total: 0, nextOffset: null, allLoaded: false, queryKey: "" },
+        monthlyAnalysis: { key: "", data: null, error: "" },
+        accounts: [],
+        accountAudit: [],
+        loaded: { bootstrap: false, transactions: false, historyTransactions: false, accounts: false, accountAudit: false },
+      };
       await loadBootstrap({ render: false });
       if (appState.cache.schema && appState.auth.status === "signedIn") {
         await loadTransactions({ render: false, limit: 50 });
@@ -3808,21 +5221,26 @@ async function handleReverseTransactionSubmit(event, form) {
   event.preventDefault();
   const data = new FormData(form);
   const transactionId = String(data.get("transactionId") || "");
+  const reason = String(data.get("reason") || "").trim();
   const submitButton = $(`[type="submit"][form="${form.getAttribute("id")}"]`);
+  if (!reason) {
+    showToast("error", "Chọn lý do hoàn tác", "Chọn một lý do nhanh hoặc nhập lý do khác.");
+    return;
+  }
   await withActionLock(`reverse:${transactionId}`, submitButton, async () => {
     try {
       const result = await dataService.reverseTransaction({
         transactionId,
-        reason: data.get("reason"),
+        reason,
         requestKey: data.get("requestKey"),
       });
       await refreshInventoryAndHistory({ render: false });
       closeModal(true);
       renderApp();
-      showToast("success", result.duplicate ? "Giao dịch đảo đã tồn tại" : "Đã đảo giao dịch", `${productDisplayName(result.product)}: ${formatQuantity(result.product.quantity)} ${result.product.unit}`);
-      announce("Đã tạo giao dịch đảo và cập nhật tồn kho.");
+      showToast("success", result.duplicate ? "Hoàn tác đã tồn tại" : "Đã hoàn tác giao dịch", `${productDisplayName(result.product)}: ${formatQuantity(result.product.quantity)} ${result.product.unit}`);
+      announce("Đã hoàn tác giao dịch và cập nhật tồn kho.");
     } catch (error) {
-      showToast("error", "Không thể đảo giao dịch", error.message);
+      showToast("error", "Không thể hoàn tác giao dịch", error.message);
     }
   });
 }
@@ -3841,7 +5259,8 @@ async function handleHistoryCleanupSubmit(event, form) {
         reason: data.get("reason"),
         confirmation: data.get("confirmation"),
       });
-      await loadTransactions({ render: false, limit: appState.screen === SCREENS.history ? 200 : 50, useFilters: appState.screen === SCREENS.history });
+      await loadTransactions({ render: false, limit: 50 });
+      if (appState.screen === SCREENS.history) await loadHistoryTransactions({ reset: true, loadAll: Boolean(searchTokens(appState.filters.history.search).length), render: false });
       closeModal(true);
       renderApp();
       showToast("success", "Đã xóa lịch sử", `${toNumber(result?.deletedCount, 0)} giao dịch đã được xóa khỏi ứng dụng.`);
@@ -3912,7 +5331,12 @@ function bindEvents() {
   });
 
   on(document, "click", "[data-manage-tab]", async (event, button) => {
-    appState.manageTab = button.dataset.manageTab;
+    const nextTab = button.dataset.manageTab;
+    if (!Object.values(MANAGE_TABS).includes(nextTab) || !canOpenManageTab(nextTab)) {
+      showToast("error", "Không có quyền", "Mục này không dành cho tài khoản hiện tại.");
+      return;
+    }
+    appState.manageTab = nextTab;
     if (appState.manageTab === MANAGE_TABS.accounts && hasPermission(PERMISSIONS.manageAccounts)) await loadAccountData({ render: false });
     renderApp();
   });
@@ -3940,11 +5364,13 @@ function bindEvents() {
   });
   on(document, "click", "[data-action='close-modal']", () => closeModal());
   on(document, "click", "[data-action='open-product']", (event, button) => openProductDetail(button.dataset.productId));
+  on(document, "click", "[data-action='open-product-actions']", (event, button) => openProductActions(button.dataset.productId));
+  on(document, "click", "[data-action='back-product-detail']", (event, button) => openProductDetail(button.dataset.productId));
   on(document, "click", "[data-action='add-product']", () => openProductForm());
   on(document, "click", "[data-action='edit-product']", (event, button) => openProductForm(button.dataset.productId));
   on(document, "click", "[data-action='open-transaction']", (event, button) => openTransactionModal(button.dataset.productId));
   on(document, "click", "[data-action='quick-transaction']", (event, button) => openTransactionModal(button.dataset.productId, button.dataset.type));
-  on(document, "click", "[data-action='open-transaction-detail']", (event, button) => openTransactionDetail(button.dataset.transactionId));
+  on(document, "click", "[data-action='open-transaction-detail']", async (event, button) => { await openTransactionDetail(button.dataset.transactionId); });
   on(document, "click", "[data-action='open-reverse-transaction']", (event, button) => openReverseTransactionModal(button.dataset.transactionId));
   on(document, "click", "[data-action='add-account']", () => openAccountForm());
   on(document, "click", "[data-action='edit-account']", (event, button) => openAccountForm(button.dataset.accountId));
@@ -4022,9 +5448,10 @@ function bindEvents() {
     const delta = Number(button.dataset.delta || 0);
     const type = String(new FormData(form).get("type") || "");
     const product = productById(new FormData(form).get("productId"));
-    const blankBase = type === TRANSACTION_TYPES.adjust ? normalizeQuantity(product?.quantity, 0) : 0;
+    const minimum = type === TRANSACTION_TYPES.adjust ? 0 : 1;
+    const blankBase = type === TRANSACTION_TYPES.adjust ? normalizeQuantity(product?.quantity, 0) : 1;
     const current = String(input.value || "").trim() === "" ? blankBase : normalizeQuantity(input.value, blankBase);
-    input.value = String(Math.min(MAX_QUANTITY, Math.max(0, normalizeQuantity(current + delta, 0))));
+    input.value = String(Math.min(MAX_QUANTITY, Math.max(minimum, normalizeQuantity(current + delta, minimum))));
     updateTransactionPreview();
     input.focus();
   });
@@ -4040,15 +5467,81 @@ function bindEvents() {
     setValue("#transaction-type", nextType, form);
     if (amountInput && nextType !== previousType) {
       const product = productById(new FormData(form).get("productId"));
-      amountInput.value = nextType === TRANSACTION_TYPES.adjust ? String(normalizeQuantity(product?.quantity, 0)) : "";
+      amountInput.value = nextType === TRANSACTION_TYPES.adjust ? String(normalizeQuantity(product?.quantity, 0)) : "1";
     }
     updateTransactionPreview();
   });
 
-  on(document, "click", "[data-action='clear-history-filters']", async () => {
-    appState.filters.history = { search: "", type: "all", from: "", to: "" };
-    if (dataService.mode === "supabase") await loadTransactions({ render: false, limit: 200, useFilters: true });
+  on(document, "click", "[data-action='select-reverse-reason']", (event, button) => {
+    const form = $("#reverse-transaction-form");
+    if (!form) return;
+    $$("[data-action='select-reverse-reason']", form).forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+    updateReverseReasonState();
+    if (button.dataset.reason === "Khác") window.setTimeout(() => $("#reverse-custom-reason", form)?.focus(), 0);
+  });
+
+  on(document, "click", "[data-action='open-faq']", () => openFaqModal());
+  on(document, "click", "[data-action='open-inventory-pdf']", () => openInventoryPdfModal());
+  on(document, "click", "[data-action='open-history-pdf']", () => openHistoryPdfModal());
+  on(document, "click", "[data-action='pdf-select-all-products']", () => {
+    const form = $("#pdf-inventory-form");
+    if (!form) return;
+    $$('input[name="productIds"]', form).forEach((input) => { input.checked = true; });
+    updateInventoryPdfProductSelectionCount();
+  });
+  on(document, "click", "[data-action='pdf-clear-products']", () => {
+    const form = $("#pdf-inventory-form");
+    if (!form) return;
+    $$('input[name="productIds"]', form).forEach((input) => { input.checked = false; });
+    updateInventoryPdfProductSelectionCount();
+  });
+
+  on(document, "click", "[data-action='set-history-view']", async (event, button) => {
+    const view = button.dataset.view === "analysis" ? "analysis" : "transactions";
+    if (appState.filters.history.view === view) return;
+    appState.filters.history.view = view;
     renderApp();
+    if (view === "analysis") await loadMonthlyAnalysis({ render: true });
+    else if (!appState.cache.loaded.historyTransactions || appState.cache.historyMeta.queryKey !== historyQueryKey()) await loadHistoryTransactions({ reset: true, loadAll: Boolean(appState.filters.history.search), render: true });
+  });
+
+  on(document, "click", "[data-action='reload-monthly-analysis']", async () => { await loadMonthlyAnalysis({ render: true, force: true }); });
+
+  on(document, "click", "[data-action='toggle-history-filters']", () => {
+    appState.filters.history.filtersOpen = !appState.filters.history.filtersOpen;
+    renderApp();
+  });
+
+  on(document, "click", "[data-action='history-shift-month']", async (event, button) => {
+    const delta = Number(button.dataset.delta || 0);
+    const nextMonth = shiftMonthKey(appState.filters.history.month, delta);
+    if (nextMonth > currentMonthKey()) return;
+    appState.filters.history.month = nextMonth;
+    appState.filters.history.from = "";
+    appState.filters.history.to = "";
+    if (appState.filters.history.view === "analysis") await loadMonthlyAnalysis({ render: true, force: true });
+    else await refreshHistoryForFilters();
+  });
+
+  on(document, "click", "[data-action='history-current-month']", async () => {
+    appState.filters.history.month = currentMonthKey();
+    appState.filters.history.from = "";
+    appState.filters.history.to = "";
+    if (appState.filters.history.view === "analysis") await loadMonthlyAnalysis({ render: true, force: true });
+    else await refreshHistoryForFilters();
+  });
+
+  on(document, "click", "[data-action='load-more-history']", async () => {
+    await loadHistoryTransactions({ reset: false, loadAll: false, render: false });
+    renderApp();
+  });
+
+  on(document, "click", "[data-action='clear-history-filters']", async () => {
+    appState.filters.history.type = "all";
+    appState.filters.history.category = "all";
+    appState.filters.history.from = "";
+    appState.filters.history.to = "";
+    await refreshHistoryForFilters();
   });
 
   on(document, "click", "[data-action='add-attribute-row']", () => {
@@ -4150,7 +5643,7 @@ function bindEvents() {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     const formId = form.getAttribute("id") || "";
-    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "account-form", "password-reset-form", "category-form"]);
+    const handledForms = new Set(["bootstrap-form", "login-form", "product-form", "transaction-form", "reverse-transaction-form", "history-cleanup-form", "account-form", "password-reset-form", "category-form", "pdf-inventory-form", "pdf-history-form"]);
     if (!handledForms.has(formId)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -4163,6 +5656,8 @@ function bindEvents() {
     if (formId === "account-form") handleAccountSubmit(event, form);
     if (formId === "password-reset-form") handlePasswordResetSubmit(event, form);
     if (formId === "category-form") handleCategorySubmit(event, form);
+    if (formId === "pdf-inventory-form") handleInventoryPdfSubmit(event, form);
+    if (formId === "pdf-history-form") handleHistoryPdfSubmit(event, form);
   }, true);
 
   document.addEventListener("input", (event) => {
@@ -4182,11 +5677,21 @@ function bindEvents() {
     }
     if (target.closest("#product-form") && (target.name?.startsWith("attr:") || target.id === "product-custom-name")) updateGeneratedProductName();
     if (target.closest("#transaction-form") && ["transaction-amount", "transaction-product"].includes(target.id)) updateTransactionPreview();
+    if (target.id === "reverse-custom-reason" && target.closest("#reverse-transaction-form")) updateReverseReasonState();
   });
 
   document.addEventListener("change", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+    if (target.name === "scope" && target.closest("#pdf-inventory-form")) {
+      updateInventoryPdfProductOptions();
+      updateInventoryPdfAttributeOptions();
+      return;
+    }
+    if (target.name === "productIds" && target.closest("#pdf-inventory-form")) {
+      updateInventoryPdfProductSelectionCount();
+      return;
+    }
     if (target.id === "inventory-category") {
       appState.filters.inventory.category = target.value;
       updateInventoryListOnly();
@@ -4197,18 +5702,23 @@ function bindEvents() {
     }
     if (target.id === "history-type") {
       appState.filters.history.type = target.value;
-      if (dataService.mode === "supabase") await loadTransactions({ render: false, limit: 200, useFilters: true });
-      renderApp();
+      await refreshHistoryForFilters();
+    }
+    if (target.id === "history-category") {
+      appState.filters.history.category = target.value;
+      await refreshHistoryForFilters();
+    }
+    if (target.id === "analysis-category") {
+      appState.filters.history.analysisCategory = target.value;
+      await loadMonthlyAnalysis({ render: true, force: true });
     }
     if (target.id === "history-from") {
       appState.filters.history.from = target.value;
-      if (dataService.mode === "supabase") await loadTransactions({ render: false, limit: 200, useFilters: true });
-      renderApp();
+      await refreshHistoryForFilters();
     }
     if (target.id === "history-to") {
       appState.filters.history.to = target.value;
-      if (dataService.mode === "supabase") await loadTransactions({ render: false, limit: 200, useFilters: true });
-      renderApp();
+      await refreshHistoryForFilters();
     }
     if (target.id === "product-category") refreshProductFormForCategory(target.value);
     if (target.id === "transaction-product") {
@@ -4216,7 +5726,7 @@ function bindEvents() {
       const amountInput = $("#transaction-amount", form || document);
       const type = String($("#transaction-type", form || document)?.value || "");
       const product = productById(target.value);
-      if (amountInput) amountInput.value = type === TRANSACTION_TYPES.adjust ? String(normalizeQuantity(product?.quantity, 0)) : "";
+      if (amountInput) amountInput.value = type === TRANSACTION_TYPES.adjust ? String(normalizeQuantity(product?.quantity, 0)) : "1";
       updateTransactionPreview();
     }
     if (["account-role", "account-scope-mode"].includes(target.id)) updateAccountPermissionEditor();
@@ -4270,6 +5780,8 @@ async function refreshAfterDataReplacement() {
   setAuthenticatedAccount(profile);
   await loadBootstrap({ render: false });
   await loadTransactions({ render: false, limit: 50 });
+  appState.cache.historyTransactions = [];
+  appState.cache.historyMeta = { total: 0, nextOffset: null, allLoaded: false, queryKey: "" };
   if (hasPermission(PERMISSIONS.manageAccounts)) await loadAccountData({ render: false });
   renderApp();
 }

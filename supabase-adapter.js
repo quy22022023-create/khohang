@@ -237,7 +237,11 @@
           p_from: localDayBoundary(from, 0),
           p_to: localDayBoundary(to, 1),
         }));
-        return Array.isArray(result?.items) ? result.items : [];
+        return {
+          items: Array.isArray(result?.items) ? result.items : [],
+          total: Math.max(0, Number(result?.total || 0)),
+          nextOffset: result?.nextOffset === null || result?.nextOffset === undefined ? null : Math.max(0, Number(result.nextOffset)),
+        };
       },
 
       async listAccounts({ limit = 200, offset = 0 } = {}) {
