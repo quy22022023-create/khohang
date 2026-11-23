@@ -1119,11 +1119,44 @@ dialog .field {
   color: var(--muted);
 }
 .batch-delete {
-  margin-left: auto;
   color: var(--red);
   border-color: #ecd0c8;
   min-height: 38px;
   font-size: 11px;
+}
+.batch-download {
+  margin-left: auto;
+  min-height: 38px;
+  font-size: 11px;
+}
+.download-progress {
+  padding: 12px 25px;
+  border-bottom: 1px solid var(--line);
+  background: #f2f7ef;
+}
+.download-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+#download-progress-text {
+  flex: 1;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  color: #52664a;
+}
+#download-bar {
+  width: 100%;
+  height: 8px;
+  margin-top: 10px;
+  accent-color: var(--orange);
+}
+#download-save {
+  font-size: 11px;
+  min-height: 38px;
+  text-decoration: none;
 }
 .file-row.selected,
 .file-row.selected:hover {
