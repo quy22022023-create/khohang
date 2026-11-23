@@ -403,6 +403,13 @@
     min-height: 42px;
     padding: 8px 10px;
   }
+  .batch-download {
+    min-height: 42px;
+    padding: 8px 10px;
+  }
+  .download-progress {
+    padding: 12px 16px;
+  }
   .delete-progress {
     padding: 12px 16px;
   }
