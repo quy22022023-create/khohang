@@ -7,11 +7,12 @@ import { createUploadFeature } from "./features/uploads.js";
 import { initFolderFeature } from "./features/folders.js";
 import { createDeleteFeature } from "./features/delete-file.js";
 import { createBatchDeleteFeature } from "./features/delete-batch.js";
+import { createDownloadFeature } from "./features/downloads.js";
 
 hydrateIcons();
 const app = createAppContext();
 const confirm = createConfirmation();
-let connection, uploads, deletion, batchDeletion;
+let connection, uploads, deletion, batchDeletion, downloads;
 const browser = createRepositoryBrowser(app, {
   confirm,
   onConnect: () => connection.openConnect(),
@@ -20,11 +21,13 @@ const browser = createRepositoryBrowser(app, {
       ? batchDeletion.removeItems([file])
       : deletion.removeFile(file),
   onQueueReset: () => uploads.renderQueue(),
+  onLocationChange: () => downloads?.reset(),
 });
 uploads = createUploadFeature(app, { browser, confirm });
 connection = createConnectionFeature(app, browser);
 deletion = createDeleteFeature(app, { browser, confirm });
 batchDeletion = createBatchDeleteFeature(app, { browser, confirm });
+downloads = createDownloadFeature(app);
 initFolderFeature(app, browser);
 
 for (const button of document.querySelectorAll("[data-close]"))
