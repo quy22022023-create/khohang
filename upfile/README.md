@@ -1,8 +1,23 @@
-# GitPocket 1.2 · nhiều file và thư mục
+# GitPocket 1.3 · tải nhiều thư mục xuống ZIP
 
-Ứng dụng tĩnh quản lý file GitHub, phát triển từ **`index.html` GitPocket** bạn cung cấp. Bản 1.2 bổ sung xoá hàng loạt file/thư mục và hàng đợi tải lên kết hợp file lẻ với nhiều thư mục. Mã vẫn chia thành các thành phần, không cần backend hay bước build.
+Ứng dụng tĩnh quản lý file GitHub, phát triển từ **`index.html` GitPocket** bạn cung cấp. Bản 1.3 thêm tải xuống nhiều thư mục/file trong một ZIP, bên cạnh xoá hàng loạt và hàng đợi tải lên kết hợp file lẻ với nhiều thư mục. Mã vẫn chia thành các thành phần, không cần backend hay bước build.
 
 ## Dùng các chức năng mới
+
+### Tải nhiều thư mục xuống cùng lúc
+
+1. Chọn kho, nhánh và mở thư mục đang làm việc.
+2. Đánh dấu nhiều thư mục cần tải; có thể chọn thêm file lẻ. **Chọn tất cả** áp dụng cho các mục đang hiển thị. Các mục đã chọn nhưng đang ẩn bởi tìm kiếm vẫn được tính và ghi rõ trong tổng số.
+3. Bấm **Tải xuống ZIP**. App đọc toàn bộ thư mục con, lấy nội dung file theo cùng một phiên bản và đóng gói thành một file ZIP.
+4. Nếu trình duyệt chưa lưu tự động, bấm **Lưu ZIP** trong khung tiến độ. Có thể bấm lại liên kết này để lưu lại cùng ZIP.
+
+ZIP giữ tên các thư mục đã chọn, tên tiếng Việt, cấu trúc con và nguyên byte của file nhị phân/file rỗng. Đường dẫn trong ZIP tính từ thư mục đang mở: ví dụ đang ở `assets`, chọn `icons` và `photos` thì ZIP chứa `icons/...` và `photos/...`.
+
+Có tiến độ theo số file/dung lượng và nút **Huỷ tải xuống**. Nếu huỷ hoặc một file lỗi, app dừng cả lượt và không tạo ZIP thiếu nội dung. Có thể thử lại cùng lựa chọn. Liên kết ZIP trên giao diện được xoá khi làm mới, chuyển kho/nhánh/thư mục hoặc ngắt kết nối.
+
+Tải xuống chỉ dùng yêu cầu đọc GitHub, hoạt động cả ở kho archived hoặc tài khoản chỉ có quyền xem. Token chỉ cần Contents: Read-only nếu bạn chỉ tải xuống. App không tạo commit hay sửa file khi tải xuống.
+
+ZIP được đóng gói ngay trong trình duyệt bằng định dạng ZIP tiêu chuẩn, phương thức STORE; không nén lại dữ liệu nên dung lượng ZIP gần với tổng dung lượng file gốc.
 
 ### Xoá nhiều file hoặc thư mục
 
@@ -69,6 +84,10 @@ src/
     directory-drop.js           Đọc cấu trúc thư mục kéo thả
     delete-plan.js              Duyệt cây Git để lập danh sách xoá đầy đủ
     upload-queue.js             Gom nhóm, kiểm tra trùng/xung đột đường dẫn
+    git-tree.js                 Chọn đầy đủ mục trong một cây Git cố định
+    download-plan.js            Phạm vi và giới hạn tải xuống trước khi đọc file
+    download-archive.js         Tải blob theo SHA, tiến độ, huỷ và tạo ZIP
+    zip-store.js                Ghi ZIP32/UTF-8/CRC32 bằng byte gốc
   features/
     connection.js               Kết nối, ngắt, khôi phục kết nối
     repository-browser.js       Chọn kho/nhánh, duyệt và tìm file
@@ -76,6 +95,7 @@ src/
     folders.js                  Tạo thư mục bằng .gitkeep
     delete-file.js              Xác nhận và xoá file
     delete-batch.js             Xem trước, xác nhận, xoá nhiều file/thư mục
+    downloads.js                Tải xuống ZIP, huỷ và liên kết lưu lại
 scripts/serve.mjs                Server tĩnh phục vụ phát triển
 tests/                          Kiểm tra logic và luồng trình duyệt
 docs/                           Kiến trúc và nội dung bàn chức năng sau
@@ -127,7 +147,11 @@ Kiểm tra trình duyệt chạy ở kích thước desktop và điện thoại.
 
 ## Giới hạn
 
-- 25 MB/file, tải tuần tự, mỗi file là một commit riêng; nhiều file không tạo thành một giao dịch nguyên khối.
+- Mỗi lượt tải xuống tối đa 5.000 mục (file và thư mục), 50 MB/file, tổng **nội dung file** tối đa 100 MB. Các giới hạn được kiểm tra trước khi tải nội dung để giới hạn bộ nhớ trình duyệt; có thể điều chỉnh trong `src/core/config.js`.
+- Tải xuống đọc tối đa ba blob song song và dùng SHA cố định, nên một nhánh thay đổi giữa chừng không trộn các phiên bản vào ZIP. Cây Git không đầy đủ/bị `truncated` sẽ làm app dừng; không tải một phần thư mục rồi coi là hoàn tất.
+- Submodule cần tải kho tương ứng riêng. File Git LFS cần lấy nội dung gốc bằng Git LFS. App báo rõ và dừng cả lượt thay vì âm thầm bỏ qua hoặc xuất file con trỏ. Symlink được lưu dưới dạng file văn bản chứa đường dẫn đích, không được theo tới đích hay xuất thành liên kết có thể trỏ ra ngoài ZIP.
+
+- Tải lên: 25 MB/file, tải tuần tự, mỗi file là một commit riêng; nhiều file không tạo thành một giao dịch nguyên khối.
 - Hàng đợi tải lên tối đa 5.000 file chưa hoàn tất. Một lần xoá hàng loạt tối đa 5.000 file; tất cả file trong các thư mục đã chọn đều tính vào giới hạn này.
 - Contents API hiển thị tối đa 1.000 mục/thư mục. Danh sách kho và nhánh đọc tối đa 5 trang × 100 mục; có thể mở kho ngoài danh sách bằng link.
 - Xoá thư mục dùng cây Git đầy đủ, không phụ thuộc giới hạn hiển thị 1.000 mục của Contents API. Nếu GitHub báo cây Git bị cắt bớt ở kho quá lớn, app từ chối xoá và không áp dụng một phần danh sách. Khi đó dùng GitHub hoặc Git để thực hiện lần xoá đó.
