@@ -3,6 +3,7 @@ import {
   MAX_FILE_SIZE,
   READ_TIMEOUT_MS,
   WRITE_TIMEOUT_MS,
+  MAX_DOWNLOAD_FILE_BYTES,
 } from "../core/config.js";
 import {
   GitHubError,
@@ -12,6 +13,7 @@ import {
 } from "../core/errors.js";
 import { repoPath, filePath, branchName, segment } from "../core/paths.js";
 import { planDeletion } from "./delete-plan.js";
+import { planDownload } from "./download-plan.js";
 
 export async function toBase64(blob) {
   if (
@@ -60,9 +62,13 @@ export class GitHubClient {
     this.#writeTimeout = writeTimeout;
   }
 
-  async #request(path, { method = "GET", body } = {}) {
+  async #request(path, { method = "GET", body, signal } = {}) {
+    if (signal?.aborted)
+      throw new DOMException("Đã huỷ tải xuống.", "AbortError");
     const writing = method !== "GET";
     const controller = new AbortController();
+    const cancel = () => controller.abort();
+    signal?.addEventListener("abort", cancel, { once: true });
     let timedOut = false;
     const timer = setTimeout(
       () => {
@@ -92,6 +98,8 @@ export class GitHubClient {
           signal: controller.signal,
         });
       } catch {
+        if (signal?.aborted)
+          throw new DOMException("Đã huỷ tải xuống.", "AbortError");
         if (writing)
           throw uncertainWriteError(
             "Mất kết nối hoặc hết thời gian chờ. Kết quả thay đổi chưa xác định; hãy làm mới và kiểm tra GitHub trước khi thao tác tiếp.",
@@ -106,6 +114,8 @@ export class GitHubClient {
       try {
         data = await response.json();
       } catch {
+        if (signal?.aborted)
+          throw new DOMException("Đã huỷ tải xuống.", "AbortError");
         if (writing && (response.ok || response.status >= 500))
           throw uncertainWriteError(
             "Không đọc được xác nhận thay đổi từ GitHub. Hãy làm mới và kiểm tra kết quả trước khi thao tác tiếp.",
@@ -129,6 +139,7 @@ export class GitHubClient {
       return data;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
     }
   }
 
@@ -199,27 +210,109 @@ export class GitHubClient {
     return file;
   }
 
-  async getBranchHead(owner, repo, branch) {
+  async getBranchHead(owner, repo, branch, { signal } = {}) {
     const data = await this.#request(
       `${repoPath(owner, repo)}/git/ref/heads/${filePath(branchName(branch))}`,
+      { signal },
     );
     if (data?.object?.type !== "commit" || typeof data.object.sha !== "string")
       throw new GitHubError("Không đọc được phiên bản hiện tại của nhánh.");
     return data.object.sha;
   }
 
-  async prepareDeletion(owner, repo, branch, selected) {
-    const head = await this.getBranchHead(owner, repo, branch);
+  async readTreeSnapshot(owner, repo, branch, { signal } = {}) {
+    const head = await this.getBranchHead(owner, repo, branch, { signal });
     const commit = await this.#request(
       `${repoPath(owner, repo)}/git/commits/${segment(head, "Phiên bản nhánh")}`,
+      { signal },
     );
     if (!commit?.tree?.sha)
       throw new GitHubError("Không đọc được cây file của nhánh.");
-    const tree = await this.#request(
+    const snapshot = await this.#request(
       `${repoPath(owner, repo)}/git/trees/${segment(commit.tree.sha, "Cây file")}?recursive=1`,
+      { signal },
     );
-    const plan = planDeletion(tree, selected);
-    return { ...plan, owner, repo, branch, head, tree: commit.tree.sha };
+    return { head, tree: commit.tree.sha, snapshot };
+  }
+
+  async prepareDeletion(owner, repo, branch, selected) {
+    const { head, tree, snapshot } = await this.readTreeSnapshot(
+      owner,
+      repo,
+      branch,
+    );
+    return {
+      ...planDeletion(snapshot, selected),
+      owner,
+      repo,
+      branch,
+      head,
+      tree,
+    };
+  }
+
+  async prepareDownload(
+    owner,
+    repo,
+    branch,
+    selected,
+    { basePath = "", signal } = {},
+  ) {
+    const { head, snapshot } = await this.readTreeSnapshot(
+      owner,
+      repo,
+      branch,
+      { signal },
+    );
+    return {
+      ...planDownload(snapshot, selected, basePath),
+      head,
+      owner,
+      repo,
+      branch,
+    };
+  }
+
+  async getBlob(
+    owner,
+    repo,
+    sha,
+    { signal, expectedSize, maxBytes = MAX_DOWNLOAD_FILE_BYTES } = {},
+  ) {
+    const data = await this.#request(
+      `${repoPath(owner, repo)}/git/blobs/${segment(sha, "Phiên bản file")}`,
+      { signal },
+    );
+    if (
+      data?.sha !== sha ||
+      data.encoding !== "base64" ||
+      typeof data.content !== "string" ||
+      !Number.isSafeInteger(data.size) ||
+      data.size < 0 ||
+      (expectedSize !== undefined && data.size !== expectedSize)
+    )
+      throw new GitHubError(
+        "Nội dung file từ GitHub không khớp phiên bản hoặc kích thước đã chọn.",
+      );
+    if (data.size > maxBytes)
+      throw new GitHubError("File vượt giới hạn tải xuống.");
+    const encoded = data.content.replace(/\s/g, "");
+    if (encoded.length > Math.ceil(maxBytes / 3) * 4)
+      throw new GitHubError("Nội dung file tải xuống quá lớn.");
+    let binary;
+    try {
+      binary = atob(encoded);
+    } catch {
+      throw new GitHubError("Không giải mã được nội dung file từ GitHub.");
+    }
+    if (binary.length !== data.size)
+      throw new GitHubError(
+        "File tải xuống không đủ dữ liệu; ZIP chưa được tạo.",
+      );
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++)
+      bytes[index] = binary.charCodeAt(index);
+    return bytes;
   }
 
   async deleteBatch(plan, onProgress = () => {}) {
