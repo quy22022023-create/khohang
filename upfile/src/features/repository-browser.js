@@ -8,7 +8,7 @@ import {
 
 export function createRepositoryBrowser(
   app,
-  { confirm, onConnect, onDelete, onQueueReset },
+  { confirm, onConnect, onDelete, onQueueReset, onLocationChange = () => {} },
 ) {
   const { state, busy, updateControls, notice, clearNotice, cacheSelection } =
     app;
@@ -119,7 +119,7 @@ export function createRepositoryBrowser(
           `Chọn ${isDir ? "thư mục" : "file"} ${file.name}`,
         );
         checkbox.onchange = () => {
-          if (state.busy || !app.canWrite()) return;
+          if (state.busy || !app.canRead()) return;
           if (checkbox.checked) state.selectedPaths.add(file.path);
           else state.selectedPaths.delete(file.path);
           updateControls();
@@ -223,6 +223,7 @@ export function createRepositoryBrowser(
       state.path = path;
       state.contents = snapshot.contents;
       state.selectedPaths.clear();
+      onLocationChange();
       state.emptyRepo = snapshot.emptyRepo;
       state.stale = false;
       if (!state.emptyRepo && $("branch").options.length === 1)
@@ -249,6 +250,7 @@ export function createRepositoryBrowser(
     state.path = "";
     state.contents = [];
     state.selectedPaths.clear();
+    onLocationChange();
     state.queue = [];
     state.stale = false;
     $("search").value = "";
@@ -343,6 +345,7 @@ export function createRepositoryBrowser(
         state.path = path;
         state.contents = snapshot.contents;
         state.selectedPaths.clear();
+        onLocationChange();
         state.emptyRepo = snapshot.emptyRepo;
         state.stale = false;
         $("search").value = "";
@@ -397,7 +400,7 @@ export function createRepositoryBrowser(
     });
   $("search").oninput = renderFiles;
   $("select-all").onchange = () => {
-    if (state.busy || !app.canWrite()) return;
+    if (state.busy || !app.canRead()) return;
     for (const checkbox of document.querySelectorAll(".file-select")) {
       if ($("select-all").checked)
         state.selectedPaths.add(checkbox.dataset.path);
