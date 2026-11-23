@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="Tải lên và xoá file GitHub thật dễ dàng, ngay trên điện thoại."
+    />
+    <meta name="theme-color" content="#f6f7f3" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://api.github.com; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <title>GitPocket — File GitHub, gọn trong tay</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MCA0MCI+PHJlY3Qgd2lkdGg9IjQwIiBoZWlnaHQ9IjQwIiByeD0iMTIiIGZpbGw9IiNkZjY1M2UiLz48ZyBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIuNSI+PHBhdGggZD0iTTE0IDEzdjE0bTEyLTE0djNjMCA1LTEyIDItMTIgOCIvPjxjaXJjbGUgY3g9IjE0IiBjeT0iMTEiIHI9IjMiIGZpbGw9IiNkZjY1M2UiLz48Y2lyY2xlIGN4PSIyNiIgY3k9IjExIiByPSIzIiBmaWxsPSIjZGY2NTNlIi8+PGNpcmNsZSBjeD0iMTQiIGN5PSIyOSIgcj0iMyIgZmlsbD0iI2RmNjUzZSIvPjwvZz48L3N2Zz4K"
+      type="image/svg+xml"
+    />
+    <link rel="stylesheet" href="./assets/css/base.css" />
+    <link rel="stylesheet" href="./assets/css/app.css" />
+    <link rel="stylesheet" href="./assets/css/responsive.css" />
+    <script type="module" src="./src/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="header-inner">
+        <a class="brand" href="#" aria-label="GitPocket trang chủ"
+          ><span class="brand-mark" data-icon="branch"></span>GitPocket<span
+            class="brand-tag"
+            >GITHUB FILE MANAGER</span
+          ></a
+        >
+        <div class="connection">
+          <span id="connection-status" class="status"><i></i>Chưa kết nối</span
+          ><button class="button small" id="connect">
+            Kết nối GitHub <span data-icon="arrow"></span></button
+          ><button class="button small hidden" id="disconnect">
+            Ngắt kết nối
+          </button>
+        </div>
+      </div>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">
+            <span class="mini-line"></span>ÍT THAO TÁC HƠN. DỄ DÙNG HƠN.
+          </p>
+          <h1>
+            File GitHub,<br class="mobile-break" />
+            gọn trong tay<span>.</span>
+          </h1>
+          <p>
+            Tải lên và xoá nhiều file, thư mục. Ngay trên điện thoại của bạn.
+          </p>
+        </div>
+        <div class="intro-label">
+          <span data-icon="phone"></span
+          ><span>Thiết kế cho<br /><strong>màn hình nhỏ</strong></span>
+        </div>
+      </section>
+      <div
+        id="notice"
+        class="notice hidden"
+        role="status"
+        aria-live="polite"
+      ></div>
+      <section class="workspace" aria-label="Không gian làm việc GitHub">
+        <div class="workspace-top">
+          <div class="section-title">
+            <span class="square-icon" data-icon="repo"></span>
+            <div>
+              <h2>Kho lưu trữ của bạn</h2>
+              <p>Mọi thay đổi được lưu trực tiếp lên GitHub</p>
+            </div>
+          </div>
+          <button class="text-button" id="manual-repo" disabled>
+            <span data-icon="link"></span>Mở bằng link
+          </button>
+        </div>
+        <div class="repo-toolbar">
+          <label class="field repo-field"
+            ><span>Repository <small>Kho lưu trữ</small></span
+            ><select id="repository" disabled>
+              <option value="">Kết nối GitHub để chọn kho</option>
+            </select></label
+          ><label class="field branch-field"
+            ><span>Branch <small>Nhánh</small></span
+            ><select id="branch" disabled>
+              <option value="">Chưa chọn nhánh</option>
+            </select></label
+          ><button
+            id="refresh"
+            class="icon-button refresh"
+            aria-label="Làm mới danh sách file"
+            title="Làm mới danh sách file"
+            disabled
+            data-icon="refresh"
+          ></button>
+        </div>
+        <div class="workspace-body">
+          <section class="files-panel" aria-labelledby="files-heading">
+            <div class="files-top">
+              <h3 id="files-heading">
+                Danh sách file <span id="file-count" class="count">0</span>
+              </h3>
+              <label class="search"
+                ><span data-icon="search"></span
+                ><input
+                  id="search"
+                  type="search"
+                  placeholder="Tìm trong thư mục…"
+                  aria-label="Tìm trong thư mục hiện tại"
+                  disabled
+              /></label>
+            </div>
+            <div class="folder-toolbar">
+              <span class="folder-context">Quản lý thư mục</span
+              ><button id="create-folder" class="text-button" disabled>
+                <span data-icon="folder"></span>Tạo thư mục
+              </button>
+            </div>
+            <div class="selection-toolbar" aria-label="Chọn file và thư mục">
+              <label class="select-all-label"
+                ><input
+                  id="select-all"
+                  type="checkbox"
+                  disabled
+                  aria-label="Chọn tất cả mục đang hiển thị"
+                />Chọn tất cả</label
+              >
+              <span id="selection-count" role="status">Chưa chọn mục nào</span>
+              <button id="clear-selection" class="text-button" disabled>
+                Bỏ chọn
+              </button>
+              <button id="delete-selected" class="button batch-delete" disabled>
+                <span data-icon="trash"></span
+                ><span id="delete-selected-label">Xoá đã chọn</span>
+              </button>
+            </div>
+            <nav
+              class="breadcrumbs"
+              id="breadcrumbs"
+              aria-label="Đường dẫn thư mục"
+            >
+              <span data-icon="home"></span><span>Thư mục gốc</span>
+            </nav>
+            <div class="file-columns" aria-hidden="true">
+              <span></span><span>TÊN FILE / THƯ MỤC</span><span>KÍCH THƯỚC</span
+              ><span></span>
+            </div>
+            <div
+              id="delete-progress"
+              class="delete-progress hidden"
+              role="status"
+              aria-live="polite"
+            ></div>
+            <div id="files" class="files" aria-live="polite">
+              <div class="empty-state">
+                <div class="empty-art">
+                  <span data-icon="folder"></span
+                  ><span class="art-plus">+</span>
+                </div>
+                <h3>Bắt đầu với kho GitHub của bạn</h3>
+                <p>
+                  Kết nối tài khoản để xem, tải lên<br />và quản lý file tại
+                  đây.
+                </p>
+                <button id="empty-connect" class="button primary">
+                  Kết nối GitHub <span data-icon="arrow"></span></button
+                ><span class="empty-note"
+                  ><span data-icon="lock"></span>Có tuỳ chọn nhớ kết nối trên
+                  thiết bị</span
+                >
+              </div>
+            </div>
+            <div class="files-footer">
+              <span data-icon="info"></span
+              ><span id="directory-note"
+                >File của bạn được lưu trong kho GitHub.</span
+              >
+            </div>
+          </section>
+          <aside class="upload-panel">
+            <div class="upload-title">
+              <span class="square-icon orange" data-icon="upload"></span>
+              <h3>Tải file &amp; thư mục lên</h3>
+            </div>
+            <p class="panel-description">
+              Gom nhiều file và thư mục, tải lên một lần.
+            </p>
+            <label id="drop-zone" class="drop-zone disabled"
+              ><input id="file-picker" type="file" multiple disabled /><span
+                class="upload-circle"
+                data-icon="upload"
+              ></span
+              ><strong>Thêm nhiều file</strong
+              ><span>hoặc kéo thả file và nhiều thư mục cùng lúc</span
+              ><span class="file-limit"
+                >Nhiều file · Tối đa 25 MB / file</span
+              ></label
+            ><label id="folder-pick-label" class="button folder-pick disabled"
+              ><input
+                id="folder-picker"
+                type="file"
+                webkitdirectory
+                directory
+                multiple
+                disabled
+              /><span data-icon="folder"></span>Thêm thư mục</label
+            >
+            <p id="folder-support" class="folder-support">
+              Thêm file lẻ và thêm thư mục nhiều lần vào cùng danh sách chờ, rồi
+              bấm tải một lần. Giữ nguyên tên thư mục gốc và cấu trúc bên trong.
+              Hộp chọn thư mục cần trình duyệt hỗ trợ.
+            </p>
+            <div class="queue-toolbar">
+              <span id="queue-count">Chưa có file chờ</span
+              ><button id="queue-clear" class="text-button" disabled>
+                Xoá danh sách chờ
+              </button>
+            </div>
+            <div id="queue" class="queue" aria-live="polite"></div>
+            <label class="field"
+              ><span>Thư mục nhận file <small>Tuỳ chọn</small></span
+              ><input
+                id="target-folder"
+                type="text"
+                placeholder="Ví dụ: images/thang-11"
+                disabled
+                autocomplete="off"
+              /><small
+                >Để trống để tải vào thư mục đang mở. Thư mục chọn tải lên vẫn
+                giữ tên gốc.</small
+              ></label
+            ><label class="field"
+              ><span>Lời nhắn lưu thay đổi <small>Tuỳ chọn</small></span
+              ><input
+                id="commit-message"
+                type="text"
+                maxlength="200"
+                placeholder="Ví dụ: Thêm ảnh mới"
+                disabled
+                autocomplete="off" /></label
+            ><button id="upload" class="button primary upload-button" disabled>
+              <span data-icon="upload"></span
+              ><span id="upload-label">Tải file lên GitHub</span>
+            </button>
+            <div id="progress" class="progress hidden" role="status">
+              <progress id="upload-progress" max="1" value="0"></progress
+              ><span id="progress-text"></span>
+            </div>
+            <div class="upload-hint">
+              <span data-icon="check"></span>
+              <p>
+                Chọn đúng kho và nhánh trước khi tải. Bạn sẽ được hỏi trước khi
+                ghi đè file.
+              </p>
+            </div>
+          </aside>
+        </div>
+      </section>
+      <section class="how-it-works" aria-label="Cách sử dụng">
+        <div>
+          <span class="step-number">01</span>
+          <div>
+            <h3>Kết nối một lần</h3>
+            <p>Nhớ kết nối để lần sau mở là dùng.</p>
+          </div>
+        </div>
+        <div>
+          <span class="step-number">02</span>
+          <div>
+            <h3>Chọn đúng nơi</h3>
+            <p>Chọn kho, nhánh và thư mục.</p>
+          </div>
+        </div>
+        <div>
+          <span class="step-number">03</span>
+          <div>
+            <h3>File lên, việc xong</h3>
+            <p>Gom file, thư mục để tải lên hoặc xoá nhiều mục.</p>
+          </div>
+        </div>
+      </section>
+      <footer>
+        <span class="footer-brand"
+          >GitPocket<span> / </span>Nhỏ gọn. Đủ dùng.</span
+        ><button id="help-open" class="text-button">
+          <span data-icon="help"></span>Hướng dẫn kết nối</button
+        ><span class="footer-note">Một công cụ độc lập dành cho GitHub.</span>
+      </footer>
+    </main>
+    <dialog id="connect-dialog">
+      <form id="connect-form">
+        <div class="dialog-top">
+          <span class="square-icon orange" data-icon="key"></span
+          ><button
+            class="icon-button"
+            type="button"
+            data-close="connect-dialog"
+            aria-label="Đóng"
+            data-icon="close"
+          ></button>
+        </div>
+        <p class="eyebrow">BƯỚC ĐẦU TIÊN</p>
+        <h2>Kết nối GitHub của bạn</h2>
+        <p class="dialog-description">
+          Dùng Personal Access Token để quản lý file trong kho bạn cho phép.
+        </p>
+        <label class="field"
+          ><span>Mã truy cập GitHub</span
+          ><input
+            id="token"
+            type="password"
+            required
+            placeholder="github_pat_…"
+            autocomplete="off"
+            spellcheck="false"
+            autocapitalize="none" /></label
+        ><label class="remember-option"
+          ><input id="remember-connection" type="checkbox" checked /><span
+            ><strong>Nhớ kết nối trên thiết bị này</strong
+            ><small
+              >Tự kết nối lại và mở kho, nhánh đã dùng. Mã được lưu trong trình
+              duyệt; chỉ bật trên thiết bị cá nhân.</small
+            ></span
+          ></label
+        ><label class="field"
+          ><span>Link kho lưu trữ <small>Tuỳ chọn</small></span
+          ><input
+            id="initial-repo"
+            type="text"
+            placeholder="https://github.com/ten-ban/ten-kho"
+            autocomplete="off"
+            spellcheck="false"
+            autocapitalize="none"
+          /><small>Có thể chọn kho từ danh sách sau khi kết nối.</small></label
+        >
+        <details class="token-help">
+          <summary>Cách tạo mã truy cập trên điện thoại</summary>
+          <ol>
+            <li>
+              Mở
+              <a
+                href="https://github.com/settings/personal-access-tokens/new"
+                target="_blank"
+                rel="noopener noreferrer"
+                >trang tạo token của GitHub ↗</a
+              >
+              trong trình duyệt.
+            </li>
+            <li>
+              Đặt tên token, chọn hạn dùng và chủ sở hữu kho (Resource owner).
+            </li>
+            <li>
+              Trong <strong>Repository access</strong>, chọn
+              <strong>Only select repositories</strong> và chọn kho cần quản lý.
+            </li>
+            <li>
+              Trong <strong>Repository permissions</strong>, đặt
+              <strong>Contents → Read and write</strong>. Metadata để mặc định.
+            </li>
+            <li>
+              Bấm <strong>Generate token</strong>, sao chép rồi dán vào ô ở
+              trên.
+            </li>
+          </ol>
+          <p>
+            Kho của tổ chức có thể cần quản trị viên duyệt. File trong
+            <code>.github/workflows</code> cần thêm quyền Workflows.
+          </p>
+        </details>
+        <div class="privacy-note">
+          <span data-icon="lock"></span>
+          <p>
+            Mã chỉ được gửi đến api.github.com. Khi bật “Nhớ kết nối”, mã được
+            lưu trên trình duyệt này đến khi bạn bấm “Ngắt & quên mã” hoặc xoá
+            dữ liệu trình duyệt. Người dùng chung trình duyệt có thể dùng kết
+            nối đã lưu. Không gửi mã qua chat.
+          </p>
+        </div>
+        <p id="connect-error" class="form-error" role="alert"></p>
+        <button
+          id="connect-submit"
+          class="button primary full-width"
+          type="submit"
+        >
+          Kết nối <span data-icon="arrow"></span>
+        </button>
+      </form>
+    </dialog>
+    <dialog id="repo-dialog">
+      <form id="repo-form">
+        <div class="dialog-top">
+          <h2>Mở kho lưu trữ</h2>
+          <button
+            class="icon-button"
+            type="button"
+            data-close="repo-dialog"
+            aria-label="Đóng"
+            data-icon="close"
+          ></button>
+        </div>
+        <label class="field"
+          ><span>Link hoặc tên kho GitHub</span
+          ><input
+            id="repo-url"
+            required
+            placeholder="ten-ban/ten-kho"
+            autocomplete="off"
+            spellcheck="false"
+            autocapitalize="none"
+        /></label>
+        <p id="repo-error" class="form-error" role="alert"></p>
+        <button class="button primary full-width" type="submit">
+          Mở kho lưu trữ
+        </button>
+      </form>
+    </dialog>
+    <dialog id="folder-dialog">
+      <form id="folder-form">
+        <div class="dialog-top">
+          <h2>Tạo thư mục mới</h2>
+          <button
+            class="icon-button"
+            type="button"
+            data-close="folder-dialog"
+            aria-label="Đóng"
+            data-icon="close"
+          ></button>
+        </div>
+        <p class="dialog-description">
+          Thư mục sẽ được tạo trong <strong id="folder-location"></strong>.
+        </p>
+        <label class="field"
+          ><span>Tên hoặc đường dẫn thư mục</span
+          ><input
+            id="folder-name"
+            type="text"
+            required
+            placeholder="Ví dụ: tai-lieu/thang-11"
+            autocomplete="off"
+            spellcheck="false"
+            autocapitalize="none"
+          /><small>Có thể dùng dấu / để tạo nhiều cấp thư mục.</small></label
+        >
+        <p class="folder-explanation">
+          GitHub không lưu thư mục rỗng. Trang sẽ thêm file
+          <code>.gitkeep</code> để giữ thư mục.
+        </p>
+        <p id="folder-error" class="form-error" role="alert"></p>
+        <button
+          id="folder-submit"
+          class="button primary full-width"
+          type="submit"
+        >
+          Tạo thư mục
+        </button>
+      </form>
+    </dialog>
+    <dialog id="confirm-dialog">
+      <div class="dialog-top">
+        <span
+          id="confirm-icon"
+          class="square-icon orange"
+          data-icon="info"
+        ></span
+        ><button
+          class="icon-button"
+          type="button"
+          id="confirm-close"
+          aria-label="Đóng"
+          data-icon="close"
+        ></button>
+      </div>
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-description" class="dialog-description"></p>
+      <ul id="confirm-items" class="confirm-items"></ul>
+      <p id="confirm-note" class="confirm-note"></p>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" class="button">Huỷ</button
+        ><button id="confirm-yes" class="button primary">Xác nhận</button>
+      </div>
+    </dialog>
+    <noscript
+      ><p class="notice">
+        Hãy bật JavaScript trong trình duyệt để sử dụng GitPocket.
+      </p></noscript
+    >
+  </body>
+</html>
