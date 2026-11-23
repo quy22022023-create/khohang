@@ -1,0 +1,10 @@
+export const API_ORIGIN = "https://api.github.com";
+export const MAX_FILE_SIZE = 25 * 1024 * 1024;
+export const MAX_PATH_LENGTH = 4096;
+export const MAX_DROP_ENTRIES = 5000;
+export const MAX_DROP_DEPTH = 64;
+export const STORAGE_KEY = "gitpocket.connection.v1";
+export const READ_TIMEOUT_MS = 30_000;
+export const WRITE_TIMEOUT_MS = 60_000;
+export const MAX_BATCH_DELETE_FILES = 5000;
+export const MAX_QUEUE_FILES = 5000;
