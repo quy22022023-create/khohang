@@ -40,6 +40,10 @@ export function createAppContext() {
     );
   }
 
+  function canRead() {
+    return !!(state.client && state.repo && state.branch && !state.stale);
+  }
+
   function assertWritable() {
     if (canWrite()) return;
     throw new Error(
@@ -58,11 +62,11 @@ export function createAppContext() {
       state.repo.disabled ||
       state.repo.permissions?.push === false
     )
-      return "Kho chỉ xem: không thể tải lên, tạo thư mục hoặc xoá file.";
+      return "Kho chỉ xem: có thể chọn file/thư mục để tải xuống ZIP.";
     if (state.emptyRepo) return "Kho mới: lần tải đầu sẽ tạo nhánh mặc định.";
     if (state.contents.length >= 1000)
       return "GitHub chỉ trả tối đa 1.000 mục/thư mục.";
-    return "Chọn nhiều mục để xoá · Xoá thư mục gồm toàn bộ file và thư mục con.";
+    return "Chọn nhiều mục để tải xuống ZIP hoặc xoá · Thư mục gồm toàn bộ nội dung bên trong.";
   }
 
   function updateControls() {
@@ -126,14 +130,14 @@ export function createAppContext() {
     let visibleSelected = 0;
     for (const checkbox of checks) {
       checkbox.checked = state.selectedPaths.has(checkbox.dataset.path);
-      checkbox.disabled = state.busy || !writable;
+      checkbox.disabled = state.busy || !canRead();
       checkbox
         .closest(".file-row")
         .classList.toggle("selected", checkbox.checked);
       if (checkbox.checked) visibleSelected++;
     }
     const selected = state.selectedPaths.size;
-    $("select-all").disabled = state.busy || !writable || !checks.length;
+    $("select-all").disabled = state.busy || !canRead() || !checks.length;
     $("select-all").checked =
       checks.length > 0 && visibleSelected === checks.length;
     $("select-all").indeterminate =
@@ -142,6 +146,10 @@ export function createAppContext() {
       ? `Đã chọn ${selected} mục${selected > visibleSelected ? ` · ${selected - visibleSelected} mục đang ẩn` : ""}`
       : "Chưa chọn mục nào";
     $("delete-selected").disabled = state.busy || !writable || !selected;
+    $("download-selected").disabled = state.busy || !canRead() || !selected;
+    $("download-selected-label").textContent = selected
+      ? `Tải xuống ZIP (${selected})`
+      : "Tải xuống ZIP";
     $("delete-selected-label").textContent = selected
       ? `Xoá đã chọn (${selected})`
       : "Xoá đã chọn";
@@ -198,6 +206,7 @@ export function createAppContext() {
     notice,
     clearNotice,
     canWrite,
+    canRead,
     assertWritable,
     updateControls,
     handleError,
