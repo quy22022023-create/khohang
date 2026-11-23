@@ -8,7 +8,7 @@
     />
     <meta
       name="description"
-      content="Tải lên và xoá file GitHub thật dễ dàng, ngay trên điện thoại."
+      content="Tải lên, tải xuống ZIP và xoá nhiều file/thư mục GitHub, ngay trên điện thoại."
     />
     <meta name="theme-color" content="#f6f7f3" />
     <meta
@@ -57,7 +57,8 @@
             gọn trong tay<span>.</span>
           </h1>
           <p>
-            Tải lên và xoá nhiều file, thư mục. Ngay trên điện thoại của bạn.
+            Tải lên, tải xuống và xoá nhiều file, thư mục. Ngay trên điện thoại
+            của bạn.
           </p>
         </div>
         <div class="intro-label">
@@ -139,10 +140,37 @@
               <button id="clear-selection" class="text-button" disabled>
                 Bỏ chọn
               </button>
+              <button
+                id="download-selected"
+                class="button batch-download"
+                disabled
+              >
+                <span data-icon="download"></span
+                ><span id="download-selected-label">Tải xuống ZIP</span>
+              </button>
               <button id="delete-selected" class="button batch-delete" disabled>
                 <span data-icon="trash"></span
                 ><span id="delete-selected-label">Xoá đã chọn</span>
               </button>
+            </div>
+            <div
+              id="download-progress"
+              class="download-progress hidden"
+              role="status"
+              aria-live="polite"
+            >
+              <div class="download-status">
+                <span id="download-progress-text"></span
+                ><button id="download-cancel" class="text-button hidden">
+                  Huỷ tải xuống</button
+                ><a id="download-save" class="button hidden">Lưu ZIP</a>
+              </div>
+              <progress
+                id="download-bar"
+                max="1"
+                value="0"
+                aria-label="Tiến độ tải xuống"
+              ></progress>
             </div>
             <nav
               class="breadcrumbs"
@@ -284,8 +312,8 @@
         <div>
           <span class="step-number">03</span>
           <div>
-            <h3>File lên, việc xong</h3>
-            <p>Gom file, thư mục để tải lên hoặc xoá nhiều mục.</p>
+            <h3>Gom file, gọn việc</h3>
+            <p>Tải lên, tải xuống ZIP hoặc xoá nhiều mục.</p>
           </div>
         </div>
       </section>
@@ -374,7 +402,8 @@
           </ol>
           <p>
             Kho của tổ chức có thể cần quản trị viên duyệt. File trong
-            <code>.github/workflows</code> cần thêm quyền Workflows.
+            <code>.github/workflows</code> cần thêm quyền Workflows. Nếu chỉ tải
+            xuống, có thể dùng quyền Contents → Read-only.
           </p>
         </details>
         <div class="privacy-note">
