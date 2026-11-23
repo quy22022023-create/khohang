@@ -8,3 +8,6 @@ export const READ_TIMEOUT_MS = 30_000;
 export const WRITE_TIMEOUT_MS = 60_000;
 export const MAX_BATCH_DELETE_FILES = 5000;
 export const MAX_QUEUE_FILES = 5000;
+export const MAX_DOWNLOAD_ENTRIES = 5000;
+export const MAX_DOWNLOAD_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
